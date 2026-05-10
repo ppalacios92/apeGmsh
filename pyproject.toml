@@ -49,6 +49,19 @@ apeGmsh = ["py.typed"]
 # main checkout, so without this, pytest would silently test the wrong
 # source tree.
 pythonpath = ["src"]
+# importlib import mode keeps test package names independent of any
+# top-level Python module on the path. Required because
+# ``tests/opensees/`` collides with the ``opensees.pyd`` extension
+# shipped by the OpenSees binary install — without importlib mode,
+# pytest would try to import the test package as ``opensees.<module>``
+# and fail. importlib mode is also the modern pytest recommendation.
+addopts = ["--import-mode=importlib"]
+markers = [
+    "live: requires openseespy",
+    "subprocess: requires OPENSEES binary",
+    "h5: HDF5 tests",
+    "slow: > 1 second",
+]
 
 [tool.pyright]
 pythonVersion = "3.10"
@@ -74,11 +87,38 @@ reportPrivateImportUsage = false
 # ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
 ignore_missing_imports = true
+# The rest of ``src/apeGmsh/`` (mesh, solvers, viewers, results, ...) is not
+# yet strict-clean; followed imports out of the strictly-checked
+# ``apeGmsh.opensees.*`` package would otherwise surface their pre-existing
+# errors. "silent" still resolves types from those modules so opensees code
+# is checked correctly — only the imported modules' own errors are hidden.
+follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 module = "apeGmshViewer.*"
 follow_imports = "skip"
 ignore_errors = true
+
+# ─────────────────────────────────────────────────────────────────────
+# The new ``apeGmsh.opensees`` package is held to the strict bar per
+# charter P12. Older modules in apeGmsh.* keep the looser global
+# settings; this override scopes strict typing to the new code.
+# ─────────────────────────────────────────────────────────────────────
+[[tool.mypy.overrides]]
+module = "apeGmsh.opensees.*"
+# Per-module strict-mode flags. Mypy's per-module overrides accept a subset
+# of strict's flags; warn_redundant_casts / strict_equality / extra_checks
+# are global-only and live elsewhere if needed.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_subclassing_any = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
 
 # ─────────────────────────────────────────────────────────────────────
 # ruff: the curriculum notebooks under ``examples/EOS Examples/`` use
