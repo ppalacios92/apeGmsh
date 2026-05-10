@@ -150,3 +150,40 @@ def test_apesees_analyze_raises_when_chain_incomplete() -> None:
     # No analysis chain registered — should fail.
     with pytest.raises(BridgeError, match="analysis chain is incomplete"):
         ops.analyze(steps=1)
+
+
+@pytest.mark.live
+def test_force_beam_with_hinge_radau_drives_openseespy() -> None:
+    """Concentrated-plasticity beam-column driven through openseespy.
+
+    Exercises the HingeRadau integration rule (i-end plastic hinge,
+    j-end plastic hinge, elastic interior) — a capability the previous
+    ``-section secTag n_ip`` form could not express."""
+    from apeGmsh.opensees.section.fiber import FiberPoint
+
+    fem = make_two_node_beam()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+
+    # Plastic-hinge section (steel) at each end; elastic section in
+    # the interior. In practice these would be fiber sections capturing
+    # the inelastic constitutive response; for a quick smoke test the
+    # interior gets a 1-D elastic section.
+    steel = ops.uniaxialMaterial.ElasticMaterial(E=200e9)
+    plastic_sec = ops.section.Fiber(
+        fibers=(FiberPoint(material=steel, y=0.0, z=0.0, area=0.01),),
+        GJ=1e9,
+    )
+    elastic_sec = ops.section.Elastic(E=200e9, A=0.01, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+
+    hinge = ops.beamIntegration.HingeRadau(
+        section_i=plastic_sec, lp_i=0.1,
+        section_j=plastic_sec, lp_j=0.1,
+        section_interior=elastic_sec,
+    )
+    ops.element.forceBeamColumn(pg="Cols", transf=transf, integration=hinge)
+    ops.fix(pg="Base", dofs=(1, 1, 1, 1, 1, 1))
+
+    # ops.run() (no analyze) -- just drives the deck through live.
+    ops.run(wipe=True)

@@ -42,8 +42,9 @@ def test_minimal_force_beam_recording_sequence() -> None:
         fibers=(FiberPoint(material=steel, y=0.0, z=0.0, area=0.01),),
     )
     transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    integ = ops.beamIntegration.Lobatto(section=sec, n_ip=5)
     ops.element.forceBeamColumn(
-        pg="Cols", section=sec, transf=transf, n_ip=5,
+        pg="Cols", transf=transf, integration=integ,
     )
 
     ops.fix(pg="Base", dofs=(1, 1, 1, 1, 1, 1))
@@ -68,8 +69,12 @@ def test_minimal_force_beam_recording_sequence() -> None:
     idx_section_close = names.index("section_close")
     idx_transf = names.index("geomTransf")
     assert idx_section_close < idx_transf
-    # Transform before element.
+    # beamIntegration after section (it composes a section by tag) and
+    # before the element (which references the integration tag).
+    idx_integ = names.index("beamIntegration")
     idx_element = names.index("element")
+    assert idx_section_close < idx_integ < idx_element
+    # Transform before element.
     assert idx_transf < idx_element
     # Element before fix (fixes / masses come after element fan-out).
     idx_fix = names.index("fix")

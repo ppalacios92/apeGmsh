@@ -38,6 +38,7 @@ from ._internal.build import (
 from ._internal.ns import (
     _AlgorithmNS,
     _AnalysisNS,
+    _BeamIntegrationNS,
     _ConstraintsNS,
     _ElementNS,
     _GeomTransfNS,
@@ -56,6 +57,7 @@ from ._internal.tag_allocator import TagAllocator
 from ._internal.tag_resolution import set_tag_resolver
 from ._internal.types import (
     Analysis,
+    BeamIntegration,
     ConstraintHandler,
     ConvergenceTest,
     Element,
@@ -99,6 +101,7 @@ _KIND_BY_FAMILY: tuple[tuple[type[Primitive], str], ...] = (
     (NDMaterial,       "nDMaterial"),
     (Section,          "section"),
     (GeomTransf,       "geomTransf"),
+    (BeamIntegration,  "beamIntegration"),
     (TimeSeries,       "timeSeries"),
     (Pattern,          "pattern"),
     (Element,          "element"),
@@ -366,6 +369,7 @@ class apeSees:
         self.nDMaterial       = _NDMaterialNS(self)
         self.section          = _SectionNS(self)
         self.geomTransf       = _GeomTransfNS(self)
+        self.beamIntegration  = _BeamIntegrationNS(self)
         self.timeSeries       = _TimeSeriesNS(self)
         self.pattern          = _PatternNS(self)
         self.element          = _ElementNS(self)

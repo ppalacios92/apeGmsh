@@ -136,6 +136,13 @@ class PyEmitter:
     def layer(self, kind: str, *args: int | float) -> None:
         self._lines.append(_ops_call("layer", kind, *args))
 
+    # -- Beam integration rules ---------------------------------------------
+
+    def beamIntegration(
+        self, rule_type: str, tag: int, *args: int | float | str,
+    ) -> None:
+        self._lines.append(_ops_call("beamIntegration", rule_type, tag, *args))
+
     # -- Topology ------------------------------------------------------------
 
     def element(

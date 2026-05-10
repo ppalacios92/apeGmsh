@@ -29,8 +29,9 @@ def _build_minimal_force_beam() -> apeSees:
         fibers=(FiberPoint(material=steel, y=0.0, z=0.0, area=0.01),),
     )
     transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    integ = ops.beamIntegration.Lobatto(section=sec, n_ip=5)
     ops.element.forceBeamColumn(
-        pg="Cols", section=sec, transf=transf, n_ip=5,
+        pg="Cols", transf=transf, integration=integ,
     )
     ops.fix(pg="Base", dofs=(1, 1, 1, 1, 1, 1))
     ts = ops.timeSeries.Linear()
