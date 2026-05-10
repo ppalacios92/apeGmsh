@@ -210,6 +210,14 @@ class BuiltModel:
         # 1. Model directive.
         emitter.model(ndm=self.ndm, ndf=self.ndf)
 
+        # 1a. Nodes — emit every node from the FEM snapshot. The element
+        # fan-out, fix, mass, load, and sp commands all reference node
+        # tags that must exist in the OpenSees domain. Emitting all
+        # nodes here is the simplest correct path; downstream consumers
+        # can always strip unused nodes if that's desired.
+        for nid, xyz in zip(self.fem.nodes.ids, self.fem.nodes.coords):
+            emitter.node(int(nid), float(xyz[0]), float(xyz[1]), float(xyz[2]))
+
         # 2. Topo-sort all registered primitives (and their dependencies).
         ordered = topological_order(self.primitives)
 

@@ -86,6 +86,10 @@ class _NodesStub:
         self._pgs = {k: list(v) for k, v in node_pgs.items()}
 
     @property
+    def ids(self) -> ndarray:
+        return self._ids
+
+    @property
     def coords(self) -> ndarray:
         return self._coords
 
