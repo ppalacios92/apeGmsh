@@ -64,7 +64,7 @@ def _fresh_imports():
     unpacked at the top of each TestCase's setUp."""
     _purge_apegmsh_modules()
     from apeGmsh.mesh._record_set import SurfaceConstraintSet as ConstraintSet
-    from apeGmsh.solvers.Constraints import InterpolationRecord
+    from apeGmsh.mesh.records import InterpolationRecord
     from apeGmsh.solvers._opensees_constraints import (
         _make_tie_tag_allocator,
         _pick_retained_nodes,

@@ -8,15 +8,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from apeGmsh.solvers._consistent_quadrature import (
+from apeGmsh.core.loads.defs import LineLoadDef, SurfaceLoadDef
+from apeGmsh.mesh._consistent_quadrature import (
     integrate_edge,
     integrate_face,
 )
-from apeGmsh.solvers.Loads import (
-    LineLoadDef,
-    LoadResolver,
-    SurfaceLoadDef,
-)
+from apeGmsh.mesh._load_resolver import LoadResolver
 
 
 # ---------------------------------------------------------------------

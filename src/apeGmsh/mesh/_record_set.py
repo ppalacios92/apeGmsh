@@ -25,19 +25,19 @@ from typing import TYPE_CHECKING, Generic, Iterator, TypeVar
 import numpy as np
 
 # Re-exported so callers that historically imported ConstraintKind/LoadKind
-# from this module keep working; canonical home is apeGmsh.solvers._kinds.
-from apeGmsh.solvers._kinds import ConstraintKind, LoadKind  # noqa: F401
+# from this module keep working; canonical home is apeGmsh.mesh.records.
+from .records._kinds import ConstraintKind, LoadKind  # noqa: F401
 
 _R = TypeVar('_R')
 
 if TYPE_CHECKING:
     import pandas as pd
-    from apeGmsh.solvers.Constraints import (  # noqa: F401
+    from apeGmsh.mesh.records._constraints import (  # noqa: F401
         ConstraintRecord, NodePairRecord, NodeGroupRecord,
         NodeToSurfaceRecord, InterpolationRecord, SurfaceCouplingRecord,
     )
-    from apeGmsh.solvers.Loads import NodalLoadRecord, ElementLoadRecord, SPRecord  # noqa: F401
-    from apeGmsh.solvers.Masses import MassRecord  # noqa: F401
+    from apeGmsh.mesh.records._loads import NodalLoadRecord, ElementLoadRecord, SPRecord  # noqa: F401
+    from apeGmsh.mesh.records._masses import MassRecord  # noqa: F401
 
 
 # =====================================================================
@@ -218,7 +218,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
         ``NodeToSurfaceRecord.phantom_coords``), iterate the set
         directly or use :meth:`node_to_surfaces`.
         """
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
         )
 
@@ -238,7 +238,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
         Use this when you need fields that the flattened
         :meth:`pairs` iterator can't expose (e.g. ``phantom_coords``).
         """
-        from apeGmsh.solvers.Constraints import NodeToSurfaceRecord
+        from apeGmsh.mesh.records._constraints import NodeToSurfaceRecord
         for rec in self._records:
             if isinstance(rec, NodeToSurfaceRecord):
                 yield rec
@@ -274,7 +274,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
             ``(master_node, [slave_node, ...])`` — slave list has at
             least one element.
         """
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
         )
 
@@ -334,7 +334,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
                     )
                     next_eid += 1
         """
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             NodePairRecord, NodeToSurfaceRecord,
         )
 
@@ -370,7 +370,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
         (int, list[int])
             ``(master_node, [slave_node, ...])``
         """
-        from apeGmsh.solvers.Constraints import NodeGroupRecord
+        from apeGmsh.mesh.records._constraints import NodeGroupRecord
 
         for rec in self._records:
             if (isinstance(rec, NodeGroupRecord)
@@ -397,7 +397,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
             for pair in fem.nodes.constraints.equal_dofs():
                 ops.equalDOF(pair.master_node, pair.slave_node, *pair.dofs)
         """
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             NodePairRecord, NodeToSurfaceRecord,
         )
 
@@ -430,7 +430,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
             Empty NodeResult if no phantom nodes exist.
         """
         from .FEMData import NodeResult
-        from apeGmsh.solvers.Constraints import NodeToSurfaceRecord
+        from apeGmsh.mesh.records._constraints import NodeToSurfaceRecord
 
         ids_list: list[int] = []
         coords_list: list = []
@@ -457,7 +457,7 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
         Columns: ``kind``, ``count``, ``n_node_pairs``.
         """
         import pandas as pd
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
         )
 
@@ -785,7 +785,7 @@ class SurfaceConstraintSet(_RecordSetBase["ConstraintRecord"]):
         slave records inside ``tied_contact`` / ``mortar`` (expanded
         automatically).
         """
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             InterpolationRecord, SurfaceCouplingRecord,
         )
 
@@ -801,7 +801,7 @@ class SurfaceConstraintSet(_RecordSetBase["ConstraintRecord"]):
         Returns the top-level coupling records (``mortar``,
         ``tied_contact``) without expanding their slave lists.
         """
-        from apeGmsh.solvers.Constraints import SurfaceCouplingRecord
+        from apeGmsh.mesh.records._constraints import SurfaceCouplingRecord
 
         for rec in self._records:
             if isinstance(rec, SurfaceCouplingRecord):
@@ -813,7 +813,7 @@ class SurfaceConstraintSet(_RecordSetBase["ConstraintRecord"]):
         Columns: ``kind``, ``count``, ``n_interpolations``.
         """
         import pandas as pd
-        from apeGmsh.solvers.Constraints import (
+        from apeGmsh.mesh.records._constraints import (
             InterpolationRecord, SurfaceCouplingRecord,
         )
 

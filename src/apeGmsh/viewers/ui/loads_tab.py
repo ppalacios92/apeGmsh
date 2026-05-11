@@ -220,7 +220,7 @@ class LoadsTabPanel:
 
     def _format_def_detail(self, d) -> str:
         """One-line summary of a LoadDef for the Detail column."""
-        from apeGmsh.solvers.Loads import (
+        from apeGmsh.core.loads.defs import (
             PointLoadDef, LineLoadDef, SurfaceLoadDef,
             GravityLoadDef, BodyLoadDef,
         )

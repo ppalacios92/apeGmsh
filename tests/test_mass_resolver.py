@@ -1,5 +1,5 @@
 """
-Unit tests for :class:`apeGmsh.solvers.Masses.MassResolver`.
+Unit tests for :class:`apeGmsh.mesh._mass_resolver.MassResolver`.
 """
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import unittest
 
 import numpy as np
 
-from apeGmsh.solvers.Masses import (
+from apeGmsh.core.masses.defs import (
     LineMassDef,
-    MassRecord,
-    MassResolver,
     PointMassDef,
     SurfaceMassDef,
     VolumeMassDef,
 )
+from apeGmsh.mesh._mass_resolver import MassResolver
+from apeGmsh.mesh.records import MassRecord
 
 
 def _resolver(coords_by_tag, ndf=6):

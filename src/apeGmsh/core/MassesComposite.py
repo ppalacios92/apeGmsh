@@ -27,16 +27,16 @@ import numpy as np
 if TYPE_CHECKING:
     from apeGmsh._core import apeGmsh as _ApeGmshSession
 
-from apeGmsh.mesh._record_set import MassSet
-from apeGmsh.solvers.Masses import (
-    MassDef,
-    MassRecord,
-    MassResolver,
-    PointMassDef,
+from apeGmsh.core.masses.defs import (
     LineMassDef,
+    MassDef,
+    PointMassDef,
     SurfaceMassDef,
     VolumeMassDef,
 )
+from apeGmsh.mesh._mass_resolver import MassResolver
+from apeGmsh.mesh._record_set import MassSet
+from apeGmsh.mesh.records._masses import MassRecord
 
 
 # (MassDefType, reduction) -> method name on MassesComposite

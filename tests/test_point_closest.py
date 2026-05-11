@@ -13,10 +13,8 @@ import warnings
 import numpy as np
 
 from apeGmsh.core.LoadsComposite import LoadsComposite
-from apeGmsh.solvers.Loads import (
-    LoadResolver,
-    PointClosestLoadDef,
-)
+from apeGmsh.core.loads.defs import PointClosestLoadDef
+from apeGmsh.mesh._load_resolver import LoadResolver
 
 
 def _resolver(coords_by_tag):

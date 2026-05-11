@@ -1,5 +1,5 @@
 """
-Unit tests for :class:`apeGmsh.solvers.Loads.LoadResolver`.
+Unit tests for :class:`apeGmsh.mesh._load_resolver.LoadResolver`.
 
 The resolver is pure numpy math (no Gmsh).  Tests use hand-built
 synthetic meshes: a single beam edge, a single square face, a unit
@@ -11,16 +11,15 @@ import unittest
 
 import numpy as np
 
-from apeGmsh.solvers.Loads import (
+from apeGmsh.core.loads.defs import (
     BodyLoadDef,
-    ElementLoadRecord,
     GravityLoadDef,
     LineLoadDef,
-    LoadResolver,
-    NodalLoadRecord,
     PointLoadDef,
     SurfaceLoadDef,
 )
+from apeGmsh.mesh._load_resolver import LoadResolver
+from apeGmsh.mesh.records import ElementLoadRecord, NodalLoadRecord
 
 
 # ---------------------------------------------------------------------

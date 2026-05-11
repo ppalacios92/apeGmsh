@@ -26,20 +26,20 @@ import numpy as np
 if TYPE_CHECKING:
     from apeGmsh._core import apeGmsh as _ApeGmshSession
 
-from apeGmsh.mesh._record_set import NodalLoadSet as LoadSet
-from apeGmsh.solvers.Loads import (
-    LoadDef,
-    LoadRecord,
-    LoadResolver,
-    PointLoadDef,
-    PointClosestLoadDef,
-    LineLoadDef,
-    SurfaceLoadDef,
-    GravityLoadDef,
+from apeGmsh.core.loads.defs import (
     BodyLoadDef,
     FaceLoadDef,
     FaceSPDef,
+    GravityLoadDef,
+    LineLoadDef,
+    LoadDef,
+    PointClosestLoadDef,
+    PointLoadDef,
+    SurfaceLoadDef,
 )
+from apeGmsh.mesh._load_resolver import LoadResolver
+from apeGmsh.mesh._record_set import NodalLoadSet as LoadSet
+from apeGmsh.mesh.records._loads import LoadRecord
 
 
 # (LoadDefType, reduction, target_form) -> method name on LoadsComposite

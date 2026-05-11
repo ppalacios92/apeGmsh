@@ -150,7 +150,7 @@ class MassTabPanel:
             self._lbl_min.setText("—")
 
     def _format_def_detail(self, d) -> str:
-        from apeGmsh.solvers.Masses import (
+        from apeGmsh.core.masses.defs import (
             PointMassDef, LineMassDef, SurfaceMassDef, VolumeMassDef,
         )
         if isinstance(d, PointMassDef):
