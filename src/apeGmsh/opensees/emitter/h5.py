@@ -147,6 +147,49 @@ def _set_attr(target: Any, key: str, value: Any) -> None:
     )
 
 
+def _write_param_array(
+    target: Any, key: str, params: tuple[float | str | int, ...],
+) -> None:
+    """Write a positional ``*args`` tuple as one or two attributes.
+
+    OpenSees parameter lists are positional: ``Steel02 1 fy E b R0 cR1
+    cR2`` is all numeric, but ``forceBeamColumn 1 i j tt it -mass m
+    -iter mx tol`` interleaves numerics and flag-string tokens. To
+    stay HDF5-native (no JSON blobs), we split into two parallel
+    arrays:
+
+    * ``{key}`` — float64 array, ``NaN`` in slots that hold a string.
+    * ``{key}_str`` — UTF-8 vlen string array, empty string in slots
+      that hold a numeric value. Written ONLY if at least one slot is
+      a string (pure-numeric param lists skip ``{key}_str`` entirely).
+
+    Slot ``i`` of the original ``*args`` is reconstructible by reading
+    whichever of the two arrays has a non-sentinel value.
+    """
+    import h5py
+    import numpy as np
+
+    if not params:
+        target.attrs.create(key, np.array([], dtype=np.float64))
+        return
+    has_str = any(isinstance(v, str) for v in params)
+    nums = np.empty(len(params), dtype=np.float64)
+    strs: list[str] = []
+    for i, v in enumerate(params):
+        if isinstance(v, str):
+            nums[i] = float("nan")
+            strs.append(v)
+        else:
+            nums[i] = float(v)
+            strs.append("")
+    target.attrs.create(key, nums)
+    if has_str:
+        target.attrs.create(
+            f"{key}_str", strs,
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Buffered intermediate representations
 # ---------------------------------------------------------------------------
@@ -641,8 +684,11 @@ class H5Emitter:
         with h5py.File(path, "w") as f:
             self._write_meta(f)
             self._write_bcs(f)
-            # Subsequent steps fill in /materials, /sections,
-            # /transforms, /beam_integration, /elements, /time_series,
+            self._write_materials(f)
+            self._write_sections(f)
+            self._write_transforms(f)
+            self._write_beam_integration(f)
+            # Subsequent steps fill in /elements, /time_series,
             # /patterns, /recorders, /analysis.
 
     # -- Per-group writers (split out so each step adds one) -------------
@@ -705,6 +751,262 @@ class H5Emitter:
             padded = list(rec.values) + [0.0] * (ndf - len(rec.values))
             rows[i] = ("node", str(rec.tag), tuple(padded))
         bcs_group.create_dataset("mass", data=rows)
+
+    # -- Materials -------------------------------------------------------
+
+    def _write_materials(self, f: Any) -> None:
+        if not self._uniaxial and not self._nd:
+            return
+        materials = f.create_group("materials")
+        if self._uniaxial:
+            uni = materials.create_group("uniaxial")
+            for rec in self._uniaxial:
+                self._write_material_record(uni, rec)
+        if self._nd:
+            nd = materials.create_group("nd")
+            for rec in self._nd:
+                self._write_material_record(nd, rec)
+
+    def _write_material_record(
+        self, parent: Any, rec: _MaterialRecord,
+    ) -> None:
+        g = parent.create_group(material_name(rec))
+        _set_attr(g, "type", rec.type_token)
+        _set_attr(g, "tag", rec.tag)
+        _write_param_array(g, "params", rec.params)
+
+    # -- Sections --------------------------------------------------------
+
+    def _write_sections(self, f: Any) -> None:
+        if not self._sections_simple and not self._sections_complex:
+            return
+        sections = f.create_group("sections")
+        for rec_simple in self._sections_simple:
+            self._write_section_simple(sections, rec_simple)
+        for rec_complex in self._sections_complex:
+            self._write_section_complex(sections, rec_complex)
+
+    def _write_section_simple(
+        self, parent: Any, rec: _SectionSimpleRecord,
+    ) -> None:
+        g = parent.create_group(section_name_simple(rec))
+        _set_attr(g, "type", rec.type_token)
+        _set_attr(g, "tag", rec.tag)
+        _write_param_array(g, "params", rec.params)
+
+    def _write_section_complex(
+        self, parent: Any, rec: _SectionComplexRecord,
+    ) -> None:
+        g = parent.create_group(section_name_complex(rec))
+        _set_attr(g, "type", rec.type_token)
+        _set_attr(g, "tag", rec.tag)
+        _write_param_array(g, "params", rec.params)
+        if rec.patches:
+            self._write_patches(g, rec.patches)
+        if rec.fibers:
+            self._write_fibers(g, rec.fibers)
+        if rec.layers:
+            self._write_layers(g, rec.layers)
+
+    def _write_patches(
+        self, sec_group: Any, patches: list[_PatchRecord],
+    ) -> None:
+        """Write the ``patches`` compound dataset.
+
+        Patch arg layout (per OpenSees Tcl manual):
+
+        * ``rect``: ``matTag numSubdivY numSubdivZ yI zI yJ zJ`` → 4 coords
+        * ``quad``: ``matTag numSubdivIJ numSubdivJK yI zI yJ zJ yK zK yL zL`` → 8 coords
+        * ``circ``: ``matTag numSubdivCirc numSubdivRad yC zC intRad extRad startAng endAng`` → 6 coords (padded to 8)
+
+        Unknown kinds: emit row with all-NaN coords and a
+        ``__deviation__`` sibling attr noting the kind.
+        """
+        import h5py
+        import numpy as np
+
+        dt = np.dtype(
+            [
+                ("kind", h5py.string_dtype(encoding="utf-8")),
+                ("material_ref", h5py.string_dtype(encoding="utf-8")),
+                ("ny", np.int64),
+                ("nz", np.int64),
+                ("coords", np.float64, (8,)),
+            ]
+        )
+        rows = np.empty(len(patches), dtype=dt)
+        unknown_kinds: list[str] = []
+        for i, p in enumerate(patches):
+            mat_tag, ny, nz, coords = self._decode_patch(p, unknown_kinds)
+            rows[i] = (
+                p.kind, self._material_ref(mat_tag),
+                ny, nz, coords,
+            )
+        sec_group.create_dataset("patches", data=rows)
+        if unknown_kinds:
+            _set_attr(
+                sec_group, "__deviation_patches__",
+                f"unknown patch kinds with truncated coords: "
+                f"{','.join(sorted(set(unknown_kinds)))}",
+            )
+
+    def _decode_patch(
+        self, p: _PatchRecord, unknown_kinds: list[str],
+    ) -> tuple[int, int, int, tuple[float, ...]]:
+        """Return ``(mat_tag, ny, nz, coords_padded_to_8)`` for one patch."""
+        args = list(p.args)
+        # First three args after kind are: matTag, n1, n2 — for all
+        # standard kinds (rect / quad / circ).
+        if len(args) < 3:
+            unknown_kinds.append(p.kind)
+            return (0, 0, 0, (float("nan"),) * 8)
+        mat_tag = int(args[0])
+        ny = int(args[1])
+        nz = int(args[2])
+        coord_args = [float(x) for x in args[3:]]
+        if p.kind not in ("rect", "quad", "circ"):
+            unknown_kinds.append(p.kind)
+        # Pad with NaN to 8.
+        padded = coord_args + [float("nan")] * (8 - len(coord_args))
+        return (mat_tag, ny, nz, tuple(padded[:8]))
+
+    def _write_fibers(
+        self, sec_group: Any, fibers: list[_FiberRecord],
+    ) -> None:
+        import h5py
+        import numpy as np
+
+        dt = np.dtype(
+            [
+                ("y", np.float64),
+                ("z", np.float64),
+                ("area", np.float64),
+                ("material_ref", h5py.string_dtype(encoding="utf-8")),
+            ]
+        )
+        rows = np.empty(len(fibers), dtype=dt)
+        for i, fiber in enumerate(fibers):
+            rows[i] = (
+                fiber.y, fiber.z, fiber.area,
+                self._material_ref(fiber.mat_tag),
+            )
+        sec_group.create_dataset("fibers", data=rows)
+
+    def _write_layers(
+        self, sec_group: Any, layers: list[_LayerRecord],
+    ) -> None:
+        """Write the ``layers`` compound dataset.
+
+        Layer arg layout (per OpenSees Tcl manual):
+
+        * ``straight``: ``matTag numBars area yStart zStart yEnd zEnd`` → 4 line floats
+        * ``circ``: ``matTag numBars area yC zC radius startAng endAng`` → 6 line floats
+
+        ``line`` is sized to 6 (schema 1.1 widening from the v1.0 [4]
+        spec). Straight layers pad the trailing 2 with NaN.
+        """
+        import h5py
+        import numpy as np
+
+        dt = np.dtype(
+            [
+                ("kind", h5py.string_dtype(encoding="utf-8")),
+                ("material_ref", h5py.string_dtype(encoding="utf-8")),
+                ("n_bars", np.int64),
+                ("area", np.float64),
+                ("line", np.float64, (6,)),
+            ]
+        )
+        rows = np.empty(len(layers), dtype=dt)
+        unknown_kinds: list[str] = []
+        for i, lyr in enumerate(layers):
+            mat_tag, n_bars, area, line = self._decode_layer(
+                lyr, unknown_kinds,
+            )
+            rows[i] = (
+                lyr.kind, self._material_ref(mat_tag),
+                n_bars, area, line,
+            )
+        sec_group.create_dataset("layers", data=rows)
+        if unknown_kinds:
+            _set_attr(
+                sec_group, "__deviation_layers__",
+                f"unknown layer kinds: {','.join(sorted(set(unknown_kinds)))}",
+            )
+
+    def _decode_layer(
+        self, lyr: _LayerRecord, unknown_kinds: list[str],
+    ) -> tuple[int, int, float, tuple[float, ...]]:
+        args = list(lyr.args)
+        if len(args) < 3:
+            unknown_kinds.append(lyr.kind)
+            return (0, 0, 0.0, (float("nan"),) * 6)
+        mat_tag = int(args[0])
+        n_bars = int(args[1])
+        area = float(args[2])
+        line_args = [float(x) for x in args[3:]]
+        if lyr.kind not in ("straight", "circ"):
+            unknown_kinds.append(lyr.kind)
+        padded = line_args + [float("nan")] * (6 - len(line_args))
+        return (mat_tag, n_bars, area, tuple(padded[:6]))
+
+    def _material_ref(self, mat_tag: int) -> str:
+        """Resolve a material tag to its ``/materials/...`` HDF5 path.
+
+        Uniaxial tags shadow nd tags in the OpenSees domain (separate
+        namespaces), so we check uniaxial first, then nd. Returns the
+        empty string if the tag is unknown — viewers should treat this
+        as a missing reference and degrade.
+        """
+        for rec in self._uniaxial:
+            if rec.tag == mat_tag:
+                return f"/materials/uniaxial/{material_name(rec)}"
+        for rec in self._nd:
+            if rec.tag == mat_tag:
+                return f"/materials/nd/{material_name(rec)}"
+        return ""
+
+    # -- Transforms ------------------------------------------------------
+
+    def _write_transforms(self, f: Any) -> None:
+        """Write one ``/transforms/{type}_{tag}/`` group per geomTransf call.
+
+        See module docstring for the schema deviation rationale: the
+        H5 emitter sees one call per emitted ``geomTransf`` line — for
+        csys-driven transforms the bridge fans these out across distinct
+        per-element vecxz, but the streaming Protocol does not surface
+        the spec boundary that would let us aggregate them into the
+        schema's per-spec grouping.
+        """
+        if not self._transforms:
+            return
+        import numpy as np
+
+        transforms = f.create_group("transforms")
+        for rec in self._transforms:
+            g = transforms.create_group(transform_name(rec))
+            _set_attr(g, "type", rec.type_token)
+            _set_attr(g, "tag", rec.tag)
+            # Each emitted geomTransf line corresponds to a single
+            # vecxz; per_element_vecxz is therefore (1, 3).
+            vec_arr = np.asarray([list(rec.vec)], dtype=np.float64)
+            g.create_dataset("per_element_vecxz", data=vec_arr)
+            tag_arr = np.asarray([rec.tag], dtype=np.int64)
+            g.create_dataset("per_element_emitted_tag", data=tag_arr)
+            _set_attr(g, "__deviation__", "per-emitted-call grouping")
+
+    # -- Beam integration -----------------------------------------------
+
+    def _write_beam_integration(self, f: Any) -> None:
+        """Write ``/beam_integration/{type}_{tag}/`` groups (schema 1.1)."""
+        if not self._beam_integrations:
+            return
+        bi = f.create_group("beam_integration")
+        for rec in self._beam_integrations:
+            g = bi.create_group(beam_integration_name(rec))
+            _set_attr(g, "type", rec.type_token)
+            _set_attr(g, "tag", rec.tag)
+            _write_param_array(g, "params", rec.args)
 
     # =====================================================================
     # Helpers used by the writer (and by tests inspecting buffer state)

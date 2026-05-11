@@ -273,3 +273,112 @@ def test_h5emitter_no_bcs_no_group(tmp_path) -> None:  # type: ignore[no-untyped
     e.write(str(out))
     with h5py.File(out, "r") as f:
         assert "bcs" not in f
+
+
+def test_h5emitter_write_uniaxial_material(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    import numpy as np
+    e = H5Emitter()
+    e.model(ndm=3, ndf=6)
+    e.uniaxialMaterial("Steel02", 1, 420.0e6, 200.0e9, 0.01)
+    out = tmp_path / "mat.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g = f["materials/uniaxial/Steel02_1"]
+        assert g.attrs["type"] == "Steel02"
+        assert int(g.attrs["tag"]) == 1
+        np.testing.assert_array_equal(
+            g.attrs["params"], np.array([420.0e6, 200.0e9, 0.01]),
+        )
+
+
+def test_h5emitter_write_nd_material(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    e = H5Emitter()
+    e.nDMaterial("ElasticIsotropic", 5, 30.0e9, 0.2, 2400.0)
+    out = tmp_path / "ndmat.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g = f["materials/nd/ElasticIsotropic_5"]
+        assert g.attrs["type"] == "ElasticIsotropic"
+
+
+def test_h5emitter_write_simple_section(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    e = H5Emitter()
+    e.section(
+        "ElasticMembranePlateSection", 2, 30.0e9, 0.2, 0.20, 2400.0,
+    )
+    out = tmp_path / "sec.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g = f["sections/ElasticMembranePlateSection_2"]
+        assert g.attrs["type"] == "ElasticMembranePlateSection"
+
+
+def test_h5emitter_write_fiber_section_with_patches_fibers_layers(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    e = H5Emitter()
+    e.uniaxialMaterial("Concrete02", 1, -30.0e6, -0.002, -25.0e6, -0.006, 0.1, 2.5e6, 200.0e6)
+    e.uniaxialMaterial("Steel02", 2, 420.0e6, 200.0e9, 0.01, 20.0, 0.925, 0.15)
+    e.section_open("Fiber", 1, "-GJ", 1.0e9)
+    e.patch("rect", 1, 8, 8, -0.2, -0.2, 0.2, 0.2)
+    e.fiber(0.1, 0.0, 0.001, 2)
+    e.layer("straight", 2, 4, 0.001, -0.18, 0.0, 0.18, 0.0)
+    e.section_close()
+    out = tmp_path / "fiber.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g = f["sections/Fiber_1"]
+        # patches
+        patches = g["patches"][:]
+        assert len(patches) == 1
+        assert _s(patches[0]["kind"]) == "rect"
+        assert _s(patches[0]["material_ref"]) == "/materials/uniaxial/Concrete02_1"
+        assert int(patches[0]["ny"]) == 8
+        assert int(patches[0]["nz"]) == 8
+        # fibers
+        fibers = g["fibers"][:]
+        assert len(fibers) == 1
+        assert _s(fibers[0]["material_ref"]) == "/materials/uniaxial/Steel02_2"
+        assert float(fibers[0]["area"]) == 0.001
+        # layers
+        layers = g["layers"][:]
+        assert len(layers) == 1
+        assert _s(layers[0]["kind"]) == "straight"
+        assert int(layers[0]["n_bars"]) == 4
+
+
+def test_h5emitter_write_geomtransf_per_call_groups(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    import numpy as np
+    e = H5Emitter()
+    e.geomTransf("Linear", 1, 0.0, 0.0, 1.0)
+    e.geomTransf("PDelta", 2, 1.0, 0.0, 0.0)
+    out = tmp_path / "tr.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g1 = f["transforms/Linear_1"]
+        np.testing.assert_array_equal(
+            g1["per_element_vecxz"][:], np.array([[0.0, 0.0, 1.0]]),
+        )
+        np.testing.assert_array_equal(g1["per_element_emitted_tag"][:], [1])
+        g2 = f["transforms/PDelta_2"]
+        np.testing.assert_array_equal(
+            g2["per_element_vecxz"][:], np.array([[1.0, 0.0, 0.0]]),
+        )
+
+
+def test_h5emitter_write_beam_integration_group(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import h5py
+    import numpy as np
+    e = H5Emitter()
+    e.beamIntegration("Lobatto", 1, 5, 5)
+    out = tmp_path / "bi.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        g = f["beam_integration/Lobatto_1"]
+        assert g.attrs["type"] == "Lobatto"
+        np.testing.assert_array_equal(
+            g.attrs["params"], np.array([5.0, 5.0]),
+        )
