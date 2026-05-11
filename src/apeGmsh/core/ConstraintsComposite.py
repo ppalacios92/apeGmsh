@@ -32,25 +32,25 @@ import numpy as np
 if TYPE_CHECKING:
     from apeGmsh._core import apeGmsh as _ApeGmshSession
 
-from apeGmsh.mesh._record_set import NodeConstraintSet as ConstraintSet
-from apeGmsh.solvers.Constraints import (
+from apeGmsh.core.constraints.defs import (
     ConstraintDef,
-    ConstraintRecord,
-    ConstraintResolver,
-    EqualDOFDef,
-    RigidLinkDef,
-    PenaltyDef,
-    RigidDiaphragmDef,
-    RigidBodyDef,
-    KinematicCouplingDef,
-    TieDef,
     DistributingCouplingDef,
     EmbeddedDef,
+    EqualDOFDef,
+    KinematicCouplingDef,
+    MortarDef,
     NodeToSurfaceDef,
     NodeToSurfaceSpringDef,
+    PenaltyDef,
+    RigidBodyDef,
+    RigidDiaphragmDef,
+    RigidLinkDef,
+    TieDef,
     TiedContactDef,
-    MortarDef,
 )
+from apeGmsh.mesh._constraint_resolver import ConstraintResolver
+from apeGmsh.mesh._record_set import NodeConstraintSet as ConstraintSet
+from apeGmsh.mesh.records._constraints import ConstraintRecord
 
 _DISPATCH: dict[type, str] = {
     EqualDOFDef:             "_resolve_node_pair",

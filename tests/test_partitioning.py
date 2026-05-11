@@ -334,7 +334,7 @@ class TestPhantomNodeNumbering:
         self._build_column_with_two_constraints(g)
         fem = g.mesh.queries.get_fem_data(dim=3)
 
-        from apeGmsh.solvers.Constraints import NodeToSurfaceRecord
+        from apeGmsh.mesh.records import NodeToSurfaceRecord
         total_slaves = 0
         total_phantoms = 0
         for rec in fem.nodes.constraints:

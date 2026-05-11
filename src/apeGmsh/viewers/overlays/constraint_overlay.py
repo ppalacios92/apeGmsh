@@ -52,7 +52,7 @@ def build_node_pair_actors(
     Single pass over ``pairs()`` — records grouped by kind first,
     then geometry built per kind.
     """
-    from apeGmsh.solvers.Constraints import (
+    from apeGmsh.mesh.records._constraints import (
         NodePairRecord, NodeToSurfaceRecord,
     )
 

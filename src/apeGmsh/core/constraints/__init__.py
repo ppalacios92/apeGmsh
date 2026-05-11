@@ -1,12 +1,15 @@
-"""Deprecation shim for the constraint defs relocation (Phase 8.1).
+"""apeGmsh.core.constraints — Model-level constraint definitions.
 
-Canonical home is :mod:`apeGmsh.core.constraints.defs`.
+Hosts the user-facing :class:`ConstraintDef` subclasses that describe
+*intent* at the geometry/PG/part level before meshing.  The post-mesh
+**resolved** records live in :mod:`apeGmsh.mesh.records._constraints`;
+the machinery that translates defs into records lives in
+:mod:`apeGmsh.mesh._constraint_resolver`.
 """
+
 from __future__ import annotations
 
-import warnings
-
-from apeGmsh.core.constraints.defs import (
+from .defs import (
     ConstraintDef,
     DistributingCouplingDef,
     EmbeddedDef,
@@ -23,12 +26,6 @@ from apeGmsh.core.constraints.defs import (
     TiedContactDef,
 )
 
-warnings.warn(
-    "apeGmsh.solvers._constraint_defs is deprecated; import constraint "
-    "def types from apeGmsh.core.constraints.defs instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 __all__ = [
     "ConstraintDef",

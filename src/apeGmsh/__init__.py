@@ -55,7 +55,7 @@ from apeGmsh.mesh.Mesh import (
 )
 from apeGmsh.mesh.MshLoader import MshLoader
 from apeGmsh.results.Results import Results
-import apeGmsh.solvers.Constraints as Constraints
+import apeGmsh.mesh.records as Constraints
 from apeGmsh.mesh._numberer import Numberer, NumberedMesh
 from apeGmsh.mesh._mesh_partitioning import RenumberResult, PartitionInfo
 from apeGmsh.viewers.mesh_viewer import MeshViewer

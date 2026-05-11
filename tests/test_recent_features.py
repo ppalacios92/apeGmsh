@@ -20,14 +20,16 @@ import unittest
 
 import numpy as np
 
-from apeGmsh.solvers.Constraints import (
-    ConstraintResolver,
+from apeGmsh.core.constraints.defs import (
     MortarDef,
+    NodeToSurfaceSpringDef,
+    TiedContactDef,
+)
+from apeGmsh.mesh._constraint_resolver import ConstraintResolver
+from apeGmsh.mesh.records import (
     NodePairRecord,
     NodeToSurfaceRecord,
-    NodeToSurfaceSpringDef,
     SurfaceCouplingRecord,
-    TiedContactDef,
 )
 from apeGmsh.core.loads.defs import FaceLoadDef, FaceSPDef
 from apeGmsh.mesh._load_resolver import LoadResolver

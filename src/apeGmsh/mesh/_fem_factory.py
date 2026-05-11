@@ -30,7 +30,7 @@ _log = logging.getLogger(__name__)
 
 def _split_constraints(records: list) -> tuple[list, list]:
     """Split resolved constraint records into node-level and surface-level."""
-    from apeGmsh.solvers.Constraints import (
+    from apeGmsh.mesh.records._constraints import (
         NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
         InterpolationRecord, SurfaceCouplingRecord,
     )
@@ -96,7 +96,7 @@ def _collect_constraint_nodes(
     mass_records: list,
 ) -> set[int]:
     """Collect every mesh node ID referenced by resolved BCs."""
-    from apeGmsh.solvers.Constraints import (
+    from apeGmsh.mesh.records._constraints import (
         NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
         InterpolationRecord, SurfaceCouplingRecord,
     )

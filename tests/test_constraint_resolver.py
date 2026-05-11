@@ -1,5 +1,6 @@
 """
-Unit tests for :class:`apeGmsh.solvers.Constraints.ConstraintResolver`.
+Unit tests for
+:class:`apeGmsh.mesh._constraint_resolver.ConstraintResolver`.
 
 The resolver is deliberately decoupled from Gmsh — it operates on raw
 numpy arrays of node tags and coordinates.  These tests exercise it
@@ -12,21 +13,23 @@ import unittest
 
 import numpy as np
 
-from apeGmsh.solvers.Constraints import (
-    ConstraintResolver,
+from apeGmsh.core.constraints.defs import (
     DistributingCouplingDef,
     EmbeddedDef,
     EqualDOFDef,
-    InterpolationRecord,
     KinematicCouplingDef,
-    NodeGroupRecord,
-    NodePairRecord,
     NodeToSurfaceDef,
-    NodeToSurfaceRecord,
     PenaltyDef,
     RigidBodyDef,
     RigidDiaphragmDef,
     RigidLinkDef,
+)
+from apeGmsh.mesh._constraint_resolver import ConstraintResolver
+from apeGmsh.mesh.records import (
+    InterpolationRecord,
+    NodeGroupRecord,
+    NodePairRecord,
+    NodeToSurfaceRecord,
 )
 
 

@@ -56,7 +56,7 @@ def _def_kind_key(d) -> str:
     use ``"rigid_beam"`` or ``"rigid_rod"`` depending on ``link_type``.
     We use the resolved form so the tree matches the callback filter.
     """
-    from apeGmsh.solvers.Constraints import RigidLinkDef
+    from apeGmsh.core.constraints.defs import RigidLinkDef
     if isinstance(d, RigidLinkDef):
         return f"rigid_{d.link_type}"
     return d.kind
