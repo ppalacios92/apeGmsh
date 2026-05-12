@@ -208,6 +208,12 @@ class ResultsViewer:
         assert fem is not None    # validated in __init__
         scene = build_fem_scene(fem)
         self._scene = scene
+        # PickEngine actor inventory — set on the scene before any
+        # diagram attaches so GaussPointDiagram (and future fiber/etc.)
+        # can register their actor in their own attach() instead of
+        # the picker having to walk every active diagram on every click.
+        from .core.results_pick_engine import PickEngine as _PickEngine
+        scene.pick_engine = _PickEngine()
 
         # ── Window (creates QApplication) ───────────────────────────
         title = self._title or self._default_title()

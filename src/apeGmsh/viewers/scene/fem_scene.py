@@ -135,6 +135,11 @@ class FEMSceneData:
         viewer adds it to the plotter.
     node_tree
         scipy ``cKDTree`` over the node coordinates — built lazily.
+    pick_engine
+        :class:`PickEngine` actor inventory for 3-D diagram picking
+        (gauss markers, etc.). Set by :class:`ResultsViewer` at open;
+        ``None`` in headless / test contexts where no picker is wired.
+        Diagrams check for ``None`` before calling ``register_actor``.
     """
 
     grid: pv.UnstructuredGrid
@@ -146,6 +151,7 @@ class FEMSceneData:
     skipped_types: list[int] = field(default_factory=list)
     actor: Any = None
     node_tree: Any = None      # scipy.spatial.cKDTree, lazy
+    pick_engine: Any = None    # PickEngine (apeGmsh.viewers.core.results_pick_engine)
 
     def ensure_node_tree(self):
         if self.node_tree is None:
