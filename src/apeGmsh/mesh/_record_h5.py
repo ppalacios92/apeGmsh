@@ -1,0 +1,244 @@
+"""Symmetric compound-dtype helpers for the broker's record-set H5 writers.
+
+Master plan
+([architecture/phase-8-untangle.md §3](../opensees/architecture/phase-8-untangle.md))
+specifies that every record-set group in ``model.h5`` shares the same
+outer 4-field compound:
+
+* ``target_kind``  — vlen utf-8, one of ``"node"`` / ``"element"`` / ``"pg"``
+* ``target``       — vlen utf-8, tag (str) or PG name
+* ``payload_kind`` — vlen utf-8, record subtype (e.g. ``"rigid_beam"``)
+* ``payload``      — compound, per-kind nested dtype
+
+:func:`make_record_dtype` returns the outer compound for any payload
+dtype.  Per-record-type payload dtype factories live alongside:
+:func:`node_pair_payload_dtype`, :func:`node_group_payload_dtype`,
+:func:`interpolation_payload_dtype`, :func:`surface_coupling_payload_dtype`,
+:func:`node_to_surface_payload_dtype`, :func:`nodal_load_payload_dtype`,
+:func:`element_load_payload_dtype`, :func:`sp_payload_dtype`,
+:func:`mass_payload_dtype`.
+
+The actual broker-side writer that builds rows of these dtypes lives in
+:mod:`apeGmsh.mesh._femdata_h5_io` (Phase 8.5).
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+if TYPE_CHECKING:
+    pass
+
+
+__all__ = [
+    "element_load_payload_dtype",
+    "interpolation_payload_dtype",
+    "make_record_dtype",
+    "mass_payload_dtype",
+    "node_group_payload_dtype",
+    "node_pair_payload_dtype",
+    "node_to_surface_payload_dtype",
+    "nodal_load_payload_dtype",
+    "sp_payload_dtype",
+    "surface_coupling_payload_dtype",
+]
+
+
+def _utf8() -> Any:
+    """Return the h5py variable-length UTF-8 string dtype."""
+    import h5py
+    return h5py.string_dtype(encoding="utf-8")
+
+
+def _vlen(scalar_dtype: Any) -> Any:
+    """Return an h5py variable-length array dtype for the given scalar."""
+    import h5py
+    return h5py.vlen_dtype(np.dtype(scalar_dtype))
+
+
+def make_record_dtype(payload_dtype: np.dtype) -> np.dtype:
+    """Return the 4-field outer compound for a record-set dataset.
+
+    Every record-set dataset on disk has rows of this dtype.  The
+    ``payload`` field's nested compound type is what differs from
+    kind to kind; the outer three string fields are universal so a
+    viewer can dispatch on ``payload_kind`` with one reader.
+    """
+    return np.dtype([
+        ("target_kind", _utf8()),
+        ("target", _utf8()),
+        ("payload_kind", _utf8()),
+        ("payload", payload_dtype),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Constraint payload dtypes
+# ---------------------------------------------------------------------------
+
+
+def node_pair_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`NodePairRecord`.
+
+    Used by kinds ``equal_dof``, ``rigid_beam``, ``rigid_beam_stiff``,
+    ``rigid_rod``, ``penalty``.  ``offset`` is filled with NaN when
+    the record carries no offset (e.g. ``equal_dof``);
+    ``penalty_stiffness`` is NaN when not a ``penalty`` record.
+    """
+    return np.dtype([
+        ("master_node", np.int64),
+        ("slave_node", np.int64),
+        ("dofs", _vlen(np.int64)),
+        ("offset", np.float64, (3,)),
+        ("penalty_stiffness", np.float64),
+    ])
+
+
+def node_group_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`NodeGroupRecord`.
+
+    Used by kinds ``rigid_diaphragm``, ``rigid_body``,
+    ``kinematic_coupling``.  ``offsets`` is stored as a flat
+    ``vlen-float64`` of length ``3 * n_slaves`` (reshape on read);
+    ``plane_normal`` is NaN-filled when absent.
+    """
+    return np.dtype([
+        ("master_node", np.int64),
+        ("slave_nodes", _vlen(np.int64)),
+        ("dofs", _vlen(np.int64)),
+        ("offsets", _vlen(np.float64)),
+        ("plane_normal", np.float64, (3,)),
+    ])
+
+
+def interpolation_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`InterpolationRecord`.
+
+    Used by kinds ``tie``, ``distributing``, ``embedded``.
+    ``projected_point`` and ``parametric_coords`` are NaN-filled when
+    absent.
+    """
+    return np.dtype([
+        ("slave_node", np.int64),
+        ("master_nodes", _vlen(np.int64)),
+        ("weights", _vlen(np.float64)),
+        ("dofs", _vlen(np.int64)),
+        ("projected_point", np.float64, (3,)),
+        ("parametric_coords", np.float64, (2,)),
+    ])
+
+
+def surface_coupling_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`SurfaceCouplingRecord`.
+
+    Used by kinds ``tied_contact``, ``mortar``.  The dense
+    ``mortar_operator`` matrix is stored as a flat
+    ``vlen-float64`` whose row-major shape is recorded in
+    ``mortar_operator_shape`` (``(rows, cols)``); ``(0, 0)`` and an
+    empty flat array signal "no mortar operator".  The
+    per-slave-node ``slave_records`` list is NOT stored in the
+    compound — it is reconstructible from the broker's resolver
+    side (kept on the resolved FEMData snapshot) if a downstream
+    consumer needs it.
+    """
+    return np.dtype([
+        ("master_nodes", _vlen(np.int64)),
+        ("slave_nodes", _vlen(np.int64)),
+        ("dofs", _vlen(np.int64)),
+        ("mortar_operator_shape", np.int64, (2,)),
+        ("mortar_operator", _vlen(np.float64)),
+    ])
+
+
+def node_to_surface_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`NodeToSurfaceRecord`.
+
+    Used by kinds ``node_to_surface`` and ``node_to_surface_spring``.
+
+    Stores the high-level fields directly (``master_node``,
+    ``slave_nodes``, ``phantom_nodes``, ``phantom_coords``, ``dofs``).
+    The nested ``rigid_link_records`` and ``equal_dof_records`` lists
+    of :class:`NodePairRecord` are NOT stored — they are derivable
+    from the high-level fields by the same expansion the resolver
+    runs (one rigid_beam link per phantom + one equal_dof from each
+    phantom to its slave for translational DOFs).
+    """
+    return np.dtype([
+        ("master_node", np.int64),
+        ("slave_nodes", _vlen(np.int64)),
+        ("phantom_nodes", _vlen(np.int64)),
+        ("phantom_coords", _vlen(np.float64)),
+        ("dofs", _vlen(np.int64)),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Load payload dtypes
+# ---------------------------------------------------------------------------
+
+
+def nodal_load_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`NodalLoadRecord`.
+
+    ``force_xyz`` / ``moment_xyz`` are stored as ``(3,)`` float64
+    arrays; absent components are NaN-filled.  The pattern name lives
+    in the outer ``target_kind`` / ``target`` layer — every record
+    set is one pattern per dataset
+    (``/loads/nodal/{pattern}/``).
+    """
+    return np.dtype([
+        ("node_id", np.int64),
+        ("force_xyz", np.float64, (3,)),
+        ("moment_xyz", np.float64, (3,)),
+    ])
+
+
+def element_load_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`ElementLoadRecord`.
+
+    The ``params: dict`` field is arbitrary (different keys per
+    ``load_type`` — ``beamUniform`` carries wx/wy/wz,
+    ``surfacePressure`` carries pressure, …).  No fixed typed
+    compound captures the union, so we serialise it to a JSON string
+    in ``params_json``.  Documented compromise; consumers parse the
+    JSON or interpret per ``load_type``.
+    """
+    return np.dtype([
+        ("element_id", np.int64),
+        ("load_type", _utf8()),
+        ("params_json", _utf8()),
+    ])
+
+
+def sp_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`SPRecord` (single-point constraint).
+
+    ``is_homogeneous`` is stored as int64 (0 / 1) since HDF5
+    compound types don't have a native boolean.
+    """
+    return np.dtype([
+        ("node_id", np.int64),
+        ("dof", np.int64),
+        ("value", np.float64),
+        ("is_homogeneous", np.int64),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Mass payload dtype
+# ---------------------------------------------------------------------------
+
+
+def mass_payload_dtype() -> np.dtype:
+    """Payload dtype for :class:`MassRecord`.
+
+    Always six components: ``(mx, my, mz, Ixx, Iyy, Izz)``.  The
+    OpenSees bridge slices to ``ndf`` when emitting ``mass``
+    commands; the broker zone stores the full 6-vector so a
+    consumer can pick whichever components it needs.
+    """
+    return np.dtype([
+        ("node_id", np.int64),
+        ("mass", np.float64, (6,)),
+    ])
