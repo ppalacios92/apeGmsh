@@ -1995,6 +1995,24 @@ class ResultsViewer:
                 continue
             if panel is None:
                 continue
+            # Migrate the panel's legacy director subs onto the
+            # dispatcher's UI lane if it advertises attach_dispatcher.
+            # Duck-typed: panels that haven't been migrated (no method)
+            # keep their legacy wiring; migrated ones swap to coalesced
+            # dispatcher subs so a rapid scrubber drag collapses to one
+            # redraw per Qt tick.
+            if self._dispatcher is not None and hasattr(
+                panel, "attach_dispatcher",
+            ):
+                try:
+                    panel.attach_dispatcher(self._dispatcher)
+                except Exception as exc:
+                    from ._failures import report
+                    report(
+                        f"ResultsViewer._sync_side_panels.attach_dispatcher"
+                        f"({type(d).__name__})",
+                        exc,
+                    )
             key = ("diagram", id(d))
             self._plot_pane.add_tab(
                 key, d.display_label(), panel.widget, closable=False,
