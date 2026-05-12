@@ -214,24 +214,26 @@ FIXTURE_BUILDERS: dict[str, Callable[[], H5Emitter]] = {
 #: populated, schema groups present, counts). Used as a contract test;
 #: the viewer team treats this as their integration spec.
 #:
-#: Group paths reflect the Phase 8.4 zone reshuffle: `/meta` and
-#: `/elements` are root-level; everything else the bridge writes lives
-#: under `/opensees/`.
+#: Group paths reflect Phase 8.4 (``/opensees/`` namespace) plus Phase
+#: 8.5: bridge no longer writes ``/elements`` (that's broker
+#: territory).  Standalone ``H5Emitter`` output, which these fixtures
+#: exercise, therefore has no ``/elements`` group.  Real ``apeSees.h5``
+#: calls layer the broker neutral zone on top.
 FIXTURE_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "minimal": {
         "should_validate": True,
         "expected_groups": [
             "meta", "opensees/materials/uniaxial", "opensees/sections",
             "opensees/transforms", "opensees/beam_integration",
-            "elements", "opensees/time_series", "opensees/patterns",
+            "opensees/time_series", "opensees/patterns",
             "opensees/bcs",
         ],
         "expected_absent_groups": [
-            "opensees/analysis", "opensees/recorders",
+            "opensees/analysis", "opensees/recorders", "elements",
         ],
         "material_count_uniaxial": 2,
         "section_count": 1,
-        "element_type_count": 1,
+        "element_type_count": 0,
         "pattern_count": 1,
     },
     "frame_3d": {
@@ -239,49 +241,53 @@ FIXTURE_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "expected_groups": [
             "meta", "opensees/materials/uniaxial", "opensees/sections",
             "opensees/transforms", "opensees/beam_integration",
-            "elements", "opensees/time_series", "opensees/patterns",
+            "opensees/time_series", "opensees/patterns",
             "opensees/bcs", "opensees/recorders",
         ],
+        "expected_absent_groups": ["elements"],
         "material_count_uniaxial": 2,
         "section_count": 2,
-        "element_type_count": 1,
+        "element_type_count": 0,
         "pattern_count": 2,
         "recorder_count": 1,
     },
     "arch_csys": {
         "should_validate": True,
         "expected_groups": [
-            "meta", "opensees/transforms", "elements",
+            "meta", "opensees/transforms",
             "opensees/beam_integration",
         ],
+        "expected_absent_groups": ["elements"],
         "transform_count": 6,
-        "element_type_count": 1,
+        "element_type_count": 0,
     },
     "dome_spherical": {
         "should_validate": True,
         "expected_groups": [
-            "meta", "opensees/transforms", "elements",
+            "meta", "opensees/transforms",
             "opensees/beam_integration",
         ],
+        "expected_absent_groups": ["elements"],
         "transform_count": 8,
-        "element_type_count": 1,
+        "element_type_count": 0,
     },
     "tank_cylindrical": {
         "should_validate": True,
         "expected_groups": [
-            "meta", "opensees/transforms", "elements",
+            "meta", "opensees/transforms",
             "opensees/beam_integration",
         ],
+        "expected_absent_groups": ["elements"],
         "transform_count": 3,
-        "element_type_count": 1,
+        "element_type_count": 0,
     },
     "incomplete": {
         "should_validate": True,
-        "expected_groups": ["meta", "elements"],
-        # No bridge content beyond /meta + /elements → /opensees is
-        # never created.  One absent assertion covers every relocated
-        # group at once.
-        "expected_absent_groups": ["opensees"],
+        "expected_groups": ["meta"],
+        # No bridge content beyond /meta → no /opensees, no /elements.
+        # The bridge fixture only calls `.element(...)` to buffer state;
+        # that no longer triggers a write.
+        "expected_absent_groups": ["opensees", "elements"],
     },
     "wrong_major": {
         "should_open": False,

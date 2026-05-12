@@ -116,6 +116,9 @@ def test_reader_validate_detects_dangling_material_ref(tmp_path: Any) -> None:
 
 
 def test_reader_accessors_return_attrs(tmp_path: Any) -> None:
+    """Bridge-only file: ``/materials`` / ``/transforms`` populated;
+    ``/elements`` is broker territory post-Phase-8.5 and therefore
+    empty in standalone H5Emitter output."""
     e = H5Emitter()
     e.model(ndm=3, ndf=6)
     e.uniaxialMaterial("Steel02", 1, 420.0e6, 200.0e9, 0.01)
@@ -131,5 +134,5 @@ def test_reader_accessors_return_attrs(tmp_path: Any) -> None:
         assert mats["uniaxial"]["Steel02_1"]["type"] == "Steel02"
         tx = m.transforms()
         assert "PDelta_1" in tx
-        els = m.elements()
-        assert "forceBeamColumn" in els
+        # `/elements` is broker-owned; bridge no longer writes it.
+        assert m.elements() == {}

@@ -94,7 +94,13 @@ __all__ = ["H5Emitter", "SCHEMA_VERSION"]
 #:     transforms, beam_integration, time_series, patterns, bcs,
 #:     recorders, analysis) moved under ``/opensees/``.  ``/meta`` and
 #:     ``/elements`` stay at root.
-SCHEMA_VERSION: str = "2.0.0"
+#:   * 2.1.0 — Phase 8.5: broker-side neutral zone added (``/nodes``,
+#:     ``/elements/{type}``, ``/physical_groups``, ``/labels``,
+#:     ``/constraints/{kind}``, ``/loads/{kind}/{pattern}``,
+#:     ``/masses``).  ``/elements`` writing handed from bridge to
+#:     broker; the bridge no longer emits this group.  Additive — old
+#:     v2.0.0 readers still work, they just don't see the new groups.
+SCHEMA_VERSION: str = "2.1.0"
 
 
 # Map known time-series type tokens to "is path-bearing": for a Path
@@ -716,6 +722,11 @@ class H5Emitter:
     def write(self, path: str) -> None:
         """Materialize the buffered model to an HDF5 file at ``path``.
 
+        Standalone path — no broker integration.  Writes only ``/meta``
+        and ``/opensees/...``; the neutral zone (``/nodes``,
+        ``/elements/{type}``, …) requires a :class:`FEMData` and is
+        emitted by :meth:`apeGmsh.opensees.apeSees.h5` instead.
+
         h5py is imported here (not at module load) so users who never
         call ``ops.h5()`` do not pay the import cost.
         """
@@ -723,16 +734,27 @@ class H5Emitter:
 
         with h5py.File(path, "w") as f:
             self._write_meta(f)
-            self._write_bcs(f)
-            self._write_materials(f)
-            self._write_sections(f)
-            self._write_transforms(f)
-            self._write_beam_integration(f)
-            self._write_elements(f)
-            self._write_time_series(f)
-            self._write_patterns(f)
-            self._write_recorders(f)
-            self._write_analysis(f)
+            self.write_opensees_into(f)
+
+    def write_opensees_into(self, f: Any) -> None:
+        """Write the bridge's ``/opensees/...`` groups into an open file.
+
+        The composition entry point used by
+        :meth:`apeGmsh.opensees.apeSees.h5` to layer ``/opensees/``
+        content on top of a file the broker has already populated with
+        ``/meta`` and the neutral zone.  This method does NOT write
+        ``/meta`` and does NOT write ``/elements/{type}`` — both are
+        broker-owned post-Phase-8.5.
+        """
+        self._write_bcs(f)
+        self._write_materials(f)
+        self._write_sections(f)
+        self._write_transforms(f)
+        self._write_beam_integration(f)
+        self._write_time_series(f)
+        self._write_patterns(f)
+        self._write_recorders(f)
+        self._write_analysis(f)
 
     # -- Per-group writers (split out so each step adds one) -------------
 
@@ -1064,121 +1086,13 @@ class H5Emitter:
             _set_attr(g, "tag", rec.tag)
             _write_param_array(g, "params", rec.args)
 
-    # -- Elements --------------------------------------------------------
-
-    def _write_elements(self, f: Any) -> None:
-        """Write ``/elements/{type_token}/`` groups.
-
-        Schema deviation (documented in module docstring): the schema
-        groups elements by physical group, but the streaming Protocol
-        does not surface ``spec.pg``. We therefore group by element
-        type token. Within a group, ``ids`` is a 1-D int dataset and
-        ``connectivity`` is a 2-D int dataset whose width equals the
-        connectivity arity of that element type.
-        """
-        if not self._elements:
-            return
-        import numpy as np
-
-        # Bin by type token; preserve per-type insertion order.
-        bins: dict[str, list[_ElementRecord]] = {}
-        for rec in self._elements:
-            bins.setdefault(rec.type_token, []).append(rec)
-
-        elements = f.create_group("elements")
-        for type_token, recs in bins.items():
-            g = elements.create_group(element_group_name(type_token))
-            _set_attr(g, "type", type_token)
-            _set_attr(g, "__deviation__", "grouped by element type token")
-
-            ids = np.asarray([r.tag for r in recs], dtype=np.int64)
-            g.create_dataset("ids", data=ids)
-
-            # Connectivity widths inside one type SHOULD be uniform; if
-            # not, pad with -1 to the max width and annotate. (Heterogeneous
-            # connectivity within a single OpenSees element type is not
-            # something OpenSees actually allows, so this is defensive.)
-            conn_lens = {len(r.connectivity) for r in recs}
-            if len(conn_lens) == 1:
-                width = conn_lens.pop()
-                if width == 0:
-                    # No connectivity context was set — emit empty.
-                    g.create_dataset(
-                        "connectivity",
-                        data=np.empty((len(recs), 0), dtype=np.int64),
-                    )
-                else:
-                    arr = np.asarray(
-                        [list(r.connectivity) for r in recs], dtype=np.int64,
-                    )
-                    g.create_dataset("connectivity", data=arr)
-            else:
-                width = max(conn_lens)
-                padded = np.full((len(recs), width), -1, dtype=np.int64)
-                for i, r in enumerate(recs):
-                    padded[i, : len(r.connectivity)] = r.connectivity
-                g.create_dataset("connectivity", data=padded)
-                _set_attr(
-                    g, "__deviation_connectivity__",
-                    "heterogeneous widths padded with -1",
-                )
-
-            # Cross-references: the H5 emitter cannot reliably decode
-            # the element's full positional arg list (each element type
-            # has its own shape). We surface the raw args as parallel
-            # numeric/string arrays so a vocabulary-aware reader can
-            # recover refs (transf_ref, section_ref, integration_ref,
-            # material_ref) by indexing into the element type's known
-            # signature.
-            self._write_element_argstack(g, recs)
-
-    def _write_element_argstack(
-        self, g: Any, recs: list[_ElementRecord],
-    ) -> None:
-        """Write the element ``args`` array of arrays, one row per element.
-
-        The first two args of every element are its node tags (``i``,
-        ``j``, ...); these duplicate ``connectivity`` and are dropped
-        before the array is written. The remaining tail is what carries
-        the element's parameter / cross-reference payload.
-        """
-        import h5py
-        import numpy as np
-
-        # Determine connectivity arity (constant per group when reachable).
-        arity = max(len(r.connectivity) for r in recs)
-        if arity == 0:
-            # No connectivity context — keep all args.
-            arity = 0
-
-        max_tail = max(len(r.args) - arity for r in recs)
-        if max_tail <= 0:
-            return
-
-        arg_nums = np.full((len(recs), max_tail), float("nan"), dtype=np.float64)
-        arg_strs: list[list[str]] = []
-        any_str = False
-        for i, r in enumerate(recs):
-            tail = r.args[arity:]
-            row_strs: list[str] = []
-            for j, v in enumerate(tail):
-                if isinstance(v, str):
-                    row_strs.append(v)
-                    any_str = True
-                else:
-                    arg_nums[i, j] = float(v)
-                    row_strs.append("")
-            # Pad row_strs to max_tail.
-            row_strs.extend([""] * (max_tail - len(row_strs)))
-            arg_strs.append(row_strs)
-
-        g.create_dataset("args", data=arg_nums)
-        if any_str:
-            g.create_dataset(
-                "args_str",
-                data=np.asarray(arg_strs, dtype=object),
-                dtype=h5py.string_dtype(encoding="utf-8"),
-            )
+    # Note: ``/elements/{type}`` and its companion ``args`` / ``args_str``
+    # datasets are no longer written by the bridge.  Phase 8.5 moved
+    # ``/elements`` ownership to the broker (see
+    # :mod:`apeGmsh.mesh._femdata_h5_io`); OpenSees-specific element
+    # metadata (positional args, cross-references) is the subject of
+    # Phase 8.5 commit 5, which routes those into
+    # ``/opensees/element_meta/{type}``.
 
     # -- Time series -----------------------------------------------------
 
