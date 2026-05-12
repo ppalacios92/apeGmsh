@@ -99,9 +99,18 @@ class PickReadoutHUD:
         self._chain_point: Optional[Callable] = overlay.on_point_result
         overlay.on_point_result = self._on_point_result
 
-        # Track the time scrubber.
-        director.subscribe_step(self._on_step_changed)
-        director.subscribe_stage(self._on_stage_changed)
+        # Track the time scrubber. ``attach_dispatcher`` (called by
+        # ResultsViewer after the dispatcher exists) swaps these for a
+        # UI-lane coalesced subscription that collapses rapid-scrub
+        # storms — each step change re-reads HDF5 at the last pick, so
+        # without coalesce, dragging the scrubber issues one read per
+        # tick of the slider.
+        self._unsub_step: Optional[Callable[[], None]] = (
+            director.subscribe_step(self._on_step_changed)
+        )
+        self._unsub_stage: Optional[Callable[[], None]] = (
+            director.subscribe_stage(self._on_stage_changed)
+        )
 
         # Reposition on viewport resize via event filter.
         from ._viewport_hud import _ResizeFilter
@@ -124,6 +133,56 @@ class PickReadoutHUD:
         """Move the HUD into the viewport's top-left corner."""
         self._widget.move(self._MARGIN, self._MARGIN)
         self._widget.raise_()
+
+    def attach_dispatcher(self, dispatcher: Any) -> None:
+        """Migrate the step + stage subscriptions onto the dispatcher.
+
+        Called by :class:`ResultsViewer` once the :class:`Dispatcher`
+        is constructed (after this HUD's ``__init__``). Replaces the
+        raw ``director.subscribe_step`` / ``director.subscribe_stage``
+        wiring with UI-lane coalesced ``dispatcher.subscribe`` calls so
+        rapid time-scrubber drags collapse to one HDF5 re-read per Qt
+        tick instead of one per slider tick.
+
+        Same pattern as :class:`OutlineTree` /
+        :class:`DiagramSettingsTab`: drops legacy, re-subscribes,
+        idempotent, None-safe for headless contexts.
+        """
+        if dispatcher is None:
+            return
+        from ..diagrams._dispatch import (
+            Lane,
+            STAGE_CHANGED,
+            STEP_CHANGED,
+        )
+        if self._unsub_step is not None:
+            try:
+                self._unsub_step()
+            except Exception:
+                pass
+            self._unsub_step = None
+        if self._unsub_stage is not None:
+            try:
+                self._unsub_stage()
+            except Exception:
+                pass
+            self._unsub_stage = None
+        # STEP / STAGE handlers ignore their payloads (step_index /
+        # stage_id) — they call ``_refresh_values_for_last_pick`` which
+        # re-reads from the Director's current state. Coalesce key_fn
+        # defaults to None → one callback per Qt tick per kind.
+        self._unsub_step = dispatcher.subscribe(
+            STEP_CHANGED,
+            lambda _kind, _payload: self._on_step_changed(0),
+            lane=Lane.UI,
+            coalesce=True,
+        )
+        self._unsub_stage = dispatcher.subscribe(
+            STAGE_CHANGED,
+            lambda _kind, _payload: self._on_stage_changed(None),
+            lane=Lane.UI,
+            coalesce=True,
+        )
 
     # ------------------------------------------------------------------
     # Probe + step callbacks
