@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     CustomRuleLayout,
     MPCOElementKey,
     ResponseLayout,

@@ -18,7 +18,7 @@ import pytest
 
 from apeGmsh.results import Results
 from apeGmsh.results.capture._domain import DomainCapture
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     IntRule,
     flatten,
     lookup,

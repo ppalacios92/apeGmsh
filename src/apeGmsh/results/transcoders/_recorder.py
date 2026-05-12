@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     RESPONSE_CATALOG,
     CustomRuleLayout,
     IntRule,
@@ -423,7 +423,7 @@ class RecorderTranscoder:
         if not is_custom_rule_catalogued(class_name, "section_force"):
             raise ValueError(
                 f"Class {class_name!r} is not in CUSTOM_RULE_CATALOG; "
-                f"add an entry in apeGmsh.solvers._element_response if "
+                f"add an entry in apeGmsh.opensees._response_catalog if "
                 f"this beam-column class should be supported."
             )
 
@@ -637,7 +637,7 @@ class RecorderTranscoder:
             raise ValueError(
                 f"({class_name!r}, {catalog_token!r}) is not in "
                 f"NODAL_FORCE_CATALOG; add an entry in "
-                f"apeGmsh.solvers._element_response if this class "
+                f"apeGmsh.opensees._response_catalog if this class "
                 f"+ frame should be supported."
             )
         layout = lookup_nodal_force(class_name, catalog_token)

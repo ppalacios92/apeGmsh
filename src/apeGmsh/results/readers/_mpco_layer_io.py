@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     LayeredShellLayout,
     MPCOElementKey,
     gauss_routing_for_canonical,
@@ -512,7 +512,7 @@ def _surface_gp_count(elem_key: MPCOElementKey) -> int:
     ASDShellT3 → 3, etc.). The layer bucket reuses the same surface
     rule so the count is the same.
     """
-    from ...solvers._element_response import RESPONSE_CATALOG
+    from ...opensees._response_catalog import RESPONSE_CATALOG
     # We try ``"stress"`` token; every layered shell has a gauss-level
     # stress entry. Fall back to ``"strain"`` for completeness.
     for token in ("stress", "strain"):

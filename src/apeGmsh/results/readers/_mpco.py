@@ -3,7 +3,7 @@
 Phase 3 covered nodal results (DISPLACEMENT, ROTATION, VELOCITY,
 ACCELERATION, REACTION_FORCE, …) translated to canonical apeGmsh
 names. Phase 11a wires Gauss-level reads through the shared response
-catalog in :mod:`apeGmsh.solvers._element_response`; fibers, layers,
+catalog in :mod:`apeGmsh.opensees._response_catalog`; fibers, layers,
 line stations, and per-element-node forces remain stubbed (empty
 slabs) until their catalog entries land.
 """

@@ -14,7 +14,7 @@ import pytest
 from apeGmsh.results import Results
 from apeGmsh.results.readers import _mpco_layer_io as _mlayer
 from apeGmsh.results.readers._protocol import ResultLevel
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ASDShellQ4,
     IntRule,
 )

@@ -105,7 +105,7 @@ def _gauss_record_ops_keyword(rec: ResolvedRecorderRecord) -> Optional[str]:
     one keyword is OK (membrane_force + bending_moment both go under
     ``stresses``).
     """
-    from ._element_response import gauss_keyword_for_canonical
+    from apeGmsh.opensees._response_catalog import gauss_keyword_for_canonical
     keywords: set[str] = set()
     for comp in rec.components:
         keyword = gauss_keyword_for_canonical(comp)
@@ -128,7 +128,7 @@ def _per_material_strain_skip_reason(
     """Detect gauss-strain records the .out path can't capture.
 
     Tri31 (and any future class listed in
-    :data:`apeGmsh.solvers._element_response.PER_MATERIAL_STRAIN_CLASSES`)
+    :data:`apeGmsh.opensees._response_catalog.PER_MATERIAL_STRAIN_CLASSES`)
     has no element-level ``setResponse('strains')`` branch — an
     ``ops.recorder('Element', ..., 'strains')`` against such elements
     writes only the time column, no strain values. The per-material
@@ -146,7 +146,7 @@ def _per_material_strain_skip_reason(
     class_name = rec.element_class_name
     if class_name is None:
         return None
-    from ._element_response import PER_MATERIAL_STRAIN_CLASSES
+    from apeGmsh.opensees._response_catalog import PER_MATERIAL_STRAIN_CLASSES
     if class_name not in PER_MATERIAL_STRAIN_CLASSES:
         return None
     try:
@@ -180,7 +180,7 @@ def _nodal_record_ops_keyword(rec: ResolvedRecorderRecord) -> Optional[str]:
 
     Raises ``ValueError`` if the record mixes the two frames.
     """
-    from ._element_response import gauss_keyword_for_canonical
+    from apeGmsh.opensees._response_catalog import gauss_keyword_for_canonical
     keywords: set[str] = set()
     for comp in rec.components:
         keyword = gauss_keyword_for_canonical(comp, topology="nodal_forces")
@@ -708,7 +708,7 @@ _MPCO_ELEMENT_PREFIX_TOKENS: dict[str, str] = {
     # ``basicForce`` (not ``force`` — that token writes the global
     # element resisting force vector); per-spring deformations live
     # under ``deformation``. Read-side parity in
-    # :data:`apeGmsh.solvers._element_response._SPRING_PREFIX_TO_KEYWORD`.
+    # :data:`apeGmsh.opensees._response_catalog._SPRING_PREFIX_TO_KEYWORD`.
     "spring_force": "basicForce",
     "spring_deformation": "deformation",
 }

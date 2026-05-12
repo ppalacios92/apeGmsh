@@ -1,6 +1,6 @@
 """Phase 11c Step 1 — fiber / layer / section_deformation catalogs.
 
-Pure unit tests on ``apeGmsh.solvers._element_response``. No OpenSees,
+Pure unit tests on ``apeGmsh.opensees._response_catalog``. No OpenSees,
 no h5py, no MPCO files. Verifies:
 
 - Vocabulary additions (``LINE_STATION_DEFORMATIONS`` token set,
@@ -27,7 +27,7 @@ from apeGmsh.results._vocabulary import (
     is_canonical,
     is_shorthand,
 )
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     CUSTOM_RULE_CATALOG,
     ELE_TAG_ASDShellQ4,
     ELE_TAG_ASDShellT3,
@@ -478,7 +478,7 @@ class TestUnknownTopologyRaises:
 
 class TestMpcoGaussAliases:
     def test_stresses_alias_includes_modern_keyword(self) -> None:
-        from apeGmsh.solvers._element_response import (
+        from apeGmsh.opensees._response_catalog import (
             mpco_gauss_group_aliases,
         )
         assert mpco_gauss_group_aliases("stresses") == (
@@ -486,7 +486,7 @@ class TestMpcoGaussAliases:
         )
 
     def test_strains_alias_includes_modern_keyword(self) -> None:
-        from apeGmsh.solvers._element_response import (
+        from apeGmsh.opensees._response_catalog import (
             mpco_gauss_group_aliases,
         )
         assert mpco_gauss_group_aliases("strains") == (
@@ -494,7 +494,7 @@ class TestMpcoGaussAliases:
         )
 
     def test_no_alias_for_other_keywords(self) -> None:
-        from apeGmsh.solvers._element_response import (
+        from apeGmsh.opensees._response_catalog import (
             mpco_gauss_group_aliases,
         )
         # ``axialForce`` / ``section.force`` / etc. have no alternate
@@ -504,7 +504,7 @@ class TestMpcoGaussAliases:
 
     def test_primary_keyword_listed_first(self) -> None:
         # Caller relies on this order (first-hit wins in discovery).
-        from apeGmsh.solvers._element_response import (
+        from apeGmsh.opensees._response_catalog import (
             mpco_gauss_group_aliases,
         )
         assert mpco_gauss_group_aliases("stresses")[0] == "stresses"

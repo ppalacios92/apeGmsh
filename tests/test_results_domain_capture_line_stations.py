@@ -24,7 +24,7 @@ from apeGmsh.results.capture._domain import (
     _infer_section_codes,
     _normalise_integration_points,
 )
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ForceBeamColumn3d,
 )
 from apeGmsh.solvers._recorder_specs import (

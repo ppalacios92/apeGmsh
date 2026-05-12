@@ -18,7 +18,7 @@ Scope
 - **Gauss records** (Phase 11a): continuum stress/strain at GPs,
   for catalogued element classes. Per-element class is queried
   via ``ops.eleType(eid)``; the response catalog
-  (``apeGmsh.solvers._element_response``) maps it to a
+  (``apeGmsh.opensees._response_catalog``) maps it to a
   ``ResponseLayout``; per-step flat arrays from
   ``ops.eleResponse`` are unflattened and persisted via
   ``NativeWriter.write_gauss_group``.
@@ -92,7 +92,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     CUSTOM_RULE_CATALOG,
     FIBER_CATALOG,
     INFERRED_SECTION_CODES_TABLE,
@@ -133,7 +133,7 @@ from .._shell_geometry import shell_quaternion
 # Re-exports under their original underscore-prefixed names so the
 # Step 2b tests (which import the private names) keep working
 # without churn. Public consumers (e.g. the .out transcoder) should
-# import these from ``apeGmsh.solvers._element_response`` directly.
+# import these from ``apeGmsh.opensees._response_catalog`` directly.
 _INFERRED_SECTION_CODES = INFERRED_SECTION_CODES_TABLE
 _class_dimension = class_dimension
 _infer_section_codes = infer_section_codes
@@ -773,7 +773,7 @@ class _GaussClassGroup:
     # delegation (``ops.eleResponse(eid, "material", "<gp>", "strain")``)
     # because this element class lacks a working element-level branch
     # for the requested token. See
-    # :func:`apeGmsh.solvers._element_response.needs_per_material_strain`.
+    # :func:`apeGmsh.opensees._response_catalog.needs_per_material_strain`.
     via_per_material: bool = False
 
 
@@ -784,7 +784,7 @@ class _GaussCapturer:
     ``"gauss"``. Element classes are discovered from the live ops
     domain on the first ``step()`` call (``ops.eleType(eid)``);
     elements whose ``(class, int_rule, token)`` tuple is not
-    catalogued in :mod:`apeGmsh.solvers._element_response` are skipped
+    catalogued in :mod:`apeGmsh.opensees._response_catalog` are skipped
     with a tracked reason.
     """
 
@@ -943,7 +943,7 @@ class _GaussCapturer:
 # via MPCO instead.
 
 # Section-code inference + parent-coordinate normalisation moved
-# to :mod:`apeGmsh.solvers._element_response` (Step 2c). The Phase
+# to :mod:`apeGmsh.opensees._response_catalog` (Step 2c). The Phase
 # 11b Step 2b underscore-prefixed names above re-export the public
 # helpers, so existing imports continue to work.
 

@@ -1,6 +1,6 @@
 """Phase 11a Step A — element response catalog + unflatten core.
 
-Pure unit tests on ``apeGmsh.solvers._element_response``. No OpenSees,
+Pure unit tests on ``apeGmsh.opensees._response_catalog``. No OpenSees,
 no h5py, no MPCO files — synthetic numpy data only.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import math
 import numpy as np
 import pytest
 
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ASDShellQ4,
     ELE_TAG_ASDShellT3,
     ELE_TAG_BbarBrick,
@@ -118,7 +118,7 @@ class TestLookup:
         assert "NotAClass" in msg
         assert "999" in msg
         assert "RESPONSE_CATALOG" in msg
-        assert "_element_response.py" in msg
+        assert "_response_catalog.py" in msg
 
     def test_lookup_error_is_keyerror(self) -> None:
         """Subclassing KeyError lets callers ``except KeyError`` for skip-on-miss."""

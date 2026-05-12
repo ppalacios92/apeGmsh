@@ -18,7 +18,7 @@ from apeGmsh.results.readers._mpco_multi import (
     MPCOMultiPartitionReader, discover_partition_files,
 )
 from apeGmsh.results.readers._protocol import ResultLevel
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_FourNodeTetrahedron, IntRule,
 )
 

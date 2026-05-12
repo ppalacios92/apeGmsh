@@ -21,7 +21,7 @@ from apeGmsh.results.transcoders._recorder import (
     _identify_layout,
     _record_catalog_token,
 )
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     IntRule,
     flatten,
     lookup,

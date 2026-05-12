@@ -830,7 +830,7 @@ class DiagramSettingsTab:
             # Heuristic: if the component is a tensor (xx/yy/...) it's
             # a gauss reading; vector axes (x/y/z) are nodal. The
             # catalog already mixes both, so we route by suffix.
-            from ...solvers._element_response import split_canonical_component
+            from ...opensees._response_catalog import split_canonical_component
             parts = split_canonical_component(component)
             is_tensor = parts is not None and parts[1] in {
                 "xx", "yy", "zz", "xy", "yz", "xz",

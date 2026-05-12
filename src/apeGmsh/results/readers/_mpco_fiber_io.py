@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     FiberSectionLayout,
     MPCOElementKey,
     gauss_routing_for_canonical,
@@ -104,7 +104,7 @@ def discover_fiber_buckets(
         or ``None`` if the canonical has no fibers-topology routing.
         ``buckets`` keeps only entries with ``int_rule == Custom``,
         ``header_idx == 0``, and a ``(class_name, token)`` in
-        :data:`apeGmsh.solvers._element_response.FIBER_CATALOG`.
+        :data:`apeGmsh.opensees._response_catalog.FIBER_CATALOG`.
     """
     mapping = canonical_to_fiber_token(canonical_component)
     if mapping is None:

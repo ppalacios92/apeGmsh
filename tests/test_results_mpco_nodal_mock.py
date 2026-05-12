@@ -18,7 +18,7 @@ import pytest
 
 from apeGmsh.results import Results
 from apeGmsh.results.readers import _mpco_nodal_io as _mn
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ElasticBeam2d,
     ELE_TAG_ElasticBeam3d,
     ELE_TAG_ElasticTimoshenkoBeam2d,
@@ -474,7 +474,7 @@ class TestMetaValidation:
         return None  # unused — caller re-opens to read
 
     def test_num_columns_mismatch_raises(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import lookup_nodal_force
+        from apeGmsh.opensees._response_catalog import lookup_nodal_force
         layout = lookup_nodal_force("ElasticBeam3d", "global_force")
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:
@@ -491,7 +491,7 @@ class TestMetaValidation:
                 )
 
     def test_non_sentinel_gauss_id_raises(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import lookup_nodal_force
+        from apeGmsh.opensees._response_catalog import lookup_nodal_force
         layout = lookup_nodal_force("ElasticBeam3d", "global_force")
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:
@@ -508,7 +508,7 @@ class TestMetaValidation:
                 )
 
     def test_multi_block_meta_raises(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import lookup_nodal_force
+        from apeGmsh.opensees._response_catalog import lookup_nodal_force
         layout = lookup_nodal_force("ElasticBeam3d", "global_force")
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:

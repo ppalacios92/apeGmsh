@@ -13,7 +13,7 @@ per GP is **material-dependent**:
   or ``PLE+`` / ``PLE-`` (plastic strain) in
   ``META/COMPONENTS``.
 
-The :data:`apeGmsh.solvers._element_response.RESPONSE_CATALOG`
+The :data:`apeGmsh.opensees._response_catalog.RESPONSE_CATALOG`
 declares fixed component layouts per ``(class, int_rule, token)``,
 which doesn't fit material-state's META-driven shape. This module
 takes the alternate path used by fiber/layer reads: re-use the
@@ -41,7 +41,7 @@ import numpy as np
 from numpy import ndarray
 
 from .._vocabulary import MPCO_MATERIAL_SYMBOL_TO_CANONICAL_SUFFIX
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     RESPONSE_CATALOG,
     MPCOElementKey,
     ResponseLayout,

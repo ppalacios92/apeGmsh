@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     ZEROLENGTH_CATALOG,
     ZeroLengthLayout,
     MPCOElementKey,
@@ -178,7 +178,7 @@ def discover_spring_buckets(
         # header_idx may differ (different spring counts) — we accept all.
         if not is_zerolength_catalogued(elem_key.class_name, catalog_token):
             continue
-        from ...solvers._element_response import lookup_zerolength  # noqa: PLC0415
+        from ...opensees._response_catalog import lookup_zerolength  # noqa: PLC0415
         layout = lookup_zerolength(elem_key.class_name, catalog_token)
         out.append(_SpringBucket(
             bracket_key=bracket_key,

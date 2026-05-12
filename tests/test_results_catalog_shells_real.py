@@ -32,7 +32,7 @@ openseespy = pytest.importorskip(
 )
 ops = openseespy
 
-from apeGmsh.solvers._element_response import IntRule, lookup
+from apeGmsh.opensees._response_catalog import IntRule, lookup
 
 
 # =====================================================================

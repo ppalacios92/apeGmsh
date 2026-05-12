@@ -16,7 +16,7 @@ import pytest
 
 from apeGmsh.results import Results
 from apeGmsh.results.readers import _mpco_line_io as _mline
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_DispBeamColumn3d,
     ELE_TAG_ForceBeamColumn2d,
     ELE_TAG_ForceBeamColumn3d,
@@ -169,7 +169,7 @@ def _build_flat(
     # Replace the synthetic layout's component_layout with the
     # caller's actual section component_layout so the flatten reuses
     # the apeGmsh canonical names.
-    from apeGmsh.solvers._element_response import ResponseLayout
+    from apeGmsh.opensees._response_catalog import ResponseLayout
     real_layout = ResponseLayout(
         n_gauss_points=n_ip,
         natural_coords=layout.natural_coords,
@@ -552,7 +552,7 @@ class TestParseSectionCodesFromMeta:
 
 class TestReadGpXFromConnectivity:
     def test_round_trip(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import parse_mpco_element_key
+        from apeGmsh.opensees._response_catalog import parse_mpco_element_key
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:
             grp = f.create_group("model_elements")
@@ -569,7 +569,7 @@ class TestReadGpXFromConnectivity:
         np.testing.assert_array_equal(gp_x, [-1.0, 0.0, +1.0])
 
     def test_missing_connectivity_raises(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import parse_mpco_element_key
+        from apeGmsh.opensees._response_catalog import parse_mpco_element_key
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:
             f.create_group("model_elements")
@@ -581,7 +581,7 @@ class TestReadGpXFromConnectivity:
                 )
 
     def test_missing_gp_x_attribute_raises(self, tmp_path: Path) -> None:
-        from apeGmsh.solvers._element_response import parse_mpco_element_key
+        from apeGmsh.opensees._response_catalog import parse_mpco_element_key
         path = tmp_path / "h.h5"
         with h5py.File(path, "w") as f:
             grp = f.create_group("model_elements")

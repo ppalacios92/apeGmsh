@@ -130,7 +130,7 @@ def parse_element_file(
         Time column.
     flat : ndarray (T, E, flat_size_per_element)
         Element-major flat data, ready to feed into
-        :func:`apeGmsh.solvers._element_response.unflatten`.
+        :func:`apeGmsh.opensees._response_catalog.unflatten`.
     """
     if logical.kind != "Element":
         raise ValueError(

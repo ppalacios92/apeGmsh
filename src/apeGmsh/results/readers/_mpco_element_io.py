@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ...solvers._element_response import (
+from ...opensees._response_catalog import (
     CatalogLookupError,
     MPCOElementKey,
     ResponseLayout,
@@ -107,7 +107,7 @@ def discover_gauss_buckets(
     builds used the bare keyword. Some builds emit BOTH groups but
     only populate one; the other is left as an empty placeholder.
     We walk the full alias list from
-    :func:`apeGmsh.solvers._element_response.mpco_gauss_group_aliases`
+    :func:`apeGmsh.opensees._response_catalog.mpco_gauss_group_aliases`
     and accumulate buckets across every group that exists, skipping
     duplicates so the same bucket key is never returned twice.
     Buckets that don't shape-match the catalog are filtered per-bucket.

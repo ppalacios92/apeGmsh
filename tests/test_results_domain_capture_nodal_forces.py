@@ -19,7 +19,7 @@ import pytest
 
 from apeGmsh.results import Results
 from apeGmsh.results.capture._domain import DomainCapture, _NodalForcesCapturer
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ElasticBeam2d,
     ELE_TAG_ElasticBeam3d,
     ELE_TAG_ElasticTimoshenkoBeam3d,

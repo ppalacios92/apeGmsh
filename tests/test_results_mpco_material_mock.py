@@ -15,7 +15,7 @@ import pytest
 from apeGmsh.results import Results
 from apeGmsh.results.readers import _mpco_material_io as _mmat
 from apeGmsh.results.readers._protocol import ResultLevel
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     ELE_TAG_FourNodeTetrahedron, IntRule,
 )
 

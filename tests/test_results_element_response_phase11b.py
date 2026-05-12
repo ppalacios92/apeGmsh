@@ -1,6 +1,6 @@
 """Phase 11b Step 1 — custom-rule + nodal-force catalogs and topology-aware routing.
 
-Pure unit tests on ``apeGmsh.solvers._element_response``. No OpenSees,
+Pure unit tests on ``apeGmsh.opensees._response_catalog``. No OpenSees,
 no h5py, no MPCO files — synthetic numpy data only. Verifies the
 catalog skeleton plus the per-element resolver that lifts a
 ``CustomRuleLayout`` to a concrete ``ResponseLayout`` from a
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from apeGmsh.solvers._element_response import (
+from apeGmsh.opensees._response_catalog import (
     CUSTOM_RULE_CATALOG,
     NODAL_FORCE_CATALOG,
     SECTION_RESPONSE_TO_CANONICAL,

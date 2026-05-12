@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Iterable, Optional
 
-from ...solvers._element_response import split_canonical_component
+from ...opensees._response_catalog import split_canonical_component
 
 if TYPE_CHECKING:
     from ._director import ResultsDirector
