@@ -788,7 +788,7 @@ class Recorders:
         ) or {}
         if not elem_assignments:
             return None
-        from ._element_specs import _ELEM_REGISTRY
+        from ..opensees._element_capabilities import _ELEM_REGISTRY
         names: set[str] = set()
         for pg_name in pgs:
             asgn = elem_assignments.get(pg_name)
