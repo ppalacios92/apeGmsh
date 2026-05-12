@@ -66,6 +66,7 @@ src/apeGmsh/cuts/
 ├── _defs.py                 ← SectionCutDef frozen dataclass + to_spec()
 ├── _optional_stko.py        ← lazy STKO_to_python import with clean error
 ├── _planes.py               ← plane builders (horizontal / vertical / 3-point / SVD-fit / from-PG)
+├── _polygons.py             ← convex hull + bounding_polygon_from_physical_surface
 ├── _tag_map.py              ← FemToOpsTagMap reading model.h5
 └── _sweeps.py               ← SectionSweepDef (sequence of SectionCutDef, one filter, many planes)
 ```
@@ -126,6 +127,7 @@ cut_def = SectionCutDef.from_plane_and_pg(
 | 3 | `FemToOpsTagMap` from `model.h5` | **done** |
 | 4 | `SectionCutDef.from_plane_and_pg` / `.from_planar_pg` builders | **done** |
 | 5 | `SectionSweepDef` + `from_pg_pattern` | **done** |
+| v2.1 | `bounding_polygon_from_physical_surface` + `with_bounding=True` flag | **done** |
 
 v2 and beyond (viewer overlay, bounding-polygon derivation, `model.h5`
 persistence, drift specs, sweep templates) are described in the
