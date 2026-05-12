@@ -291,6 +291,12 @@ class ResultsViewer:
         # ── Plotter — substrate mesh ────────────────────────────────
         plotter = win.plotter
         self._plotter = plotter
+        # OpacityController — per-actor SetOpacity + depth-peel
+        # auto-toggle. Constructed now (after the plotter exists) and
+        # stashed on the scene so callers that already hold a scene
+        # ref can route through it.
+        from .core.opacity_controller import OpacityController as _OpacityCtrl
+        scene.opacity_controller = _OpacityCtrl(plotter)
 
         prefs = _PREF.current
         # Substrate colors come from the active palette so the FEM mesh
@@ -785,6 +791,9 @@ class ResultsViewer:
         scene.pick_engine.dispatcher = dispatcher
         # Same for ElementVisibility so hide/show fires ELEMENT_VISIBILITY_CHANGED.
         scene.element_visibility.dispatcher = dispatcher
+        # And OpacityController for OPACITY_CHANGED.
+        if scene.opacity_controller is not None:
+            scene.opacity_controller.dispatcher = dispatcher
 
         # ── Observer wiring — every callback fires a dispatcher event.
         # Director's existing observers are preserved (the time scrubber
