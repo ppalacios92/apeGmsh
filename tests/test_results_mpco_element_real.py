@@ -67,7 +67,7 @@ def test_tet_stress_full_cycle(tmp_path: Path) -> None:
 
     fem = _Fem()
 
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

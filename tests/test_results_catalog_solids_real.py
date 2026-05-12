@@ -287,7 +287,7 @@ def test_real_capture_for_class(
 
     # Now drive DomainCapture against the same (already-loaded) state.
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

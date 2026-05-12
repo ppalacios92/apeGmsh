@@ -77,7 +77,7 @@ def test_tet_stress_full_cycle_through_transcoder(tmp_path: Path) -> None:
     node_ids = np.array([1, 2, 3, 4], dtype=np.int64)
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

@@ -127,7 +127,7 @@ def test_force_beam_3d_lobatto5_aggregated_three_way_agreement(
         connectivity={1: (1, 2)},
     )
 
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

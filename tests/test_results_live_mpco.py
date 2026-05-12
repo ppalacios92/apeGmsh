@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

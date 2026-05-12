@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from apeGmsh.results.capture._domain import DomainCapture
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

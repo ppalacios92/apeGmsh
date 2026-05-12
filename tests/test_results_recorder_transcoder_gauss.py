@@ -26,7 +26,7 @@ from apeGmsh.opensees._response_catalog import (
     flatten,
     lookup,
 )
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

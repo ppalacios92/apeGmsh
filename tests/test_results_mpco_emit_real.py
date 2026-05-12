@@ -117,7 +117,7 @@ def test_openseespy_full_cycle(tmp_path: Path) -> None:
     fem = _Fem()
 
     # ── Build a hand-rolled recorder spec & emit the MPCO command ────
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )
@@ -204,7 +204,7 @@ def test_tcl_subprocess_full_cycle(tmp_path: Path) -> None:
 
     fem = _Fem()
 
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

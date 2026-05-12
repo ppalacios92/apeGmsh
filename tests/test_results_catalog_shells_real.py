@@ -251,7 +251,7 @@ def test_shell_capture_for_class(
     )
 
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )
@@ -373,7 +373,7 @@ def test_layered_shell_uses_same_catalog_entry(tmp_path: Path) -> None:
     assert flat.size == 32
 
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

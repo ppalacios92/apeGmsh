@@ -85,7 +85,7 @@ def test_elastic_beam_3d_global_and_local(tmp_path: Path) -> None:
 
     from apeGmsh.results import Results
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

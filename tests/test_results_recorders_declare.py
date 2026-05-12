@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from apeGmsh.solvers.Recorders import Recorders
+from apeGmsh.results.spec.declaration import Recorders
 
 
 # =====================================================================

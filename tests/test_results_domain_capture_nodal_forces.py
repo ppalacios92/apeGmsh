@@ -24,7 +24,7 @@ from apeGmsh.opensees._response_catalog import (
     ELE_TAG_ElasticBeam3d,
     ELE_TAG_ElasticTimoshenkoBeam3d,
 )
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

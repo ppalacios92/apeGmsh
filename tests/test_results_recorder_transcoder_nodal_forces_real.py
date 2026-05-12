@@ -82,7 +82,7 @@ def test_elastic_beam_3d_global_and_local_three_way_agreement(
     node_ids = np.array([1, 2], dtype=np.int64)
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

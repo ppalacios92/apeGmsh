@@ -150,7 +150,7 @@ def test_force_beam_fiber_capture(tmp_path: Path) -> None:
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )
@@ -235,7 +235,7 @@ def test_disp_beam_fiber_capture(tmp_path: Path) -> None:
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )
@@ -294,7 +294,7 @@ def test_geometry_matches_section_definition(tmp_path: Path) -> None:
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

@@ -109,7 +109,7 @@ def test_layered_shell_capture_round_trip(tmp_path: Path) -> None:
     fem = _MinimalFem(node_ids=node_ids, coords=coords)
 
     # Build LayerSectionMetadata by hand (no apeGmsh session here).
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         LayerSectionDef, LayerSectionMetadata,
         ResolvedRecorderRecord, ResolvedRecorderSpec,
     )

@@ -23,8 +23,8 @@ from apeGmsh.results.transcoders._recorder import (
     RecorderTranscoder,
     _resolve_element_lengths,
 )
-from apeGmsh.solvers._recorder_emit import line_station_gpx_path
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._emit import line_station_gpx_path
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

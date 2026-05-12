@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from apeGmsh.results.transcoders._txt import parse_node_file
-from apeGmsh.solvers._recorder_emit import LogicalRecorder
+from apeGmsh.results.spec._emit import LogicalRecorder
 
 
 def _write_out(path: Path, time: list[float], rows: list[list[float]]) -> None:

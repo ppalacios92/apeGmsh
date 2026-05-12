@@ -9,7 +9,7 @@ import pytest
 
 from apeGmsh.results import Results
 from apeGmsh.results.transcoders import RecorderTranscoder
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )

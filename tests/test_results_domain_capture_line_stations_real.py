@@ -93,7 +93,7 @@ def test_force_beam_3d_lobatto5_aggregated(tmp_path: Path) -> None:
 
     from apeGmsh.results import Results
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )
@@ -196,7 +196,7 @@ def test_force_beam_3d_disp_beam_skipped(tmp_path: Path) -> None:
 
     from apeGmsh.results import Results
     from apeGmsh.results.capture._domain import DomainCapture
-    from apeGmsh.solvers._recorder_specs import (
+    from apeGmsh.results.spec._resolved import (
         ResolvedRecorderRecord,
         ResolvedRecorderSpec,
     )

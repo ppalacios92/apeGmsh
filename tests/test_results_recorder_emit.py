@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import pytest
 
-from apeGmsh.solvers._recorder_specs import (
+from apeGmsh.results.spec._resolved import (
     ResolvedRecorderRecord,
     ResolvedRecorderSpec,
 )
@@ -230,7 +230,7 @@ def test_line_stations_emits_section_force_and_gpx_pair() -> None:
 
 
 def test_line_stations_gpx_path_helper() -> None:
-    from apeGmsh.solvers._recorder_emit import line_station_gpx_path
+    from apeGmsh.results.spec._emit import line_station_gpx_path
     assert (
         line_station_gpx_path("r_line_stations.out")
         == "r_line_stations_gpx.out"

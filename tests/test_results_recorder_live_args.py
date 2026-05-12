@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from apeGmsh.solvers._recorder_emit import (
+from apeGmsh.results.spec._emit import (
     emit_logical,
     emit_mpco_python,
     format_python,
     mpco_ops_args,
     to_ops_args,
 )
-from apeGmsh.solvers._recorder_specs import ResolvedRecorderRecord
+from apeGmsh.results.spec._resolved import ResolvedRecorderRecord
 
 
 # =====================================================================

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from apeGmsh.solvers._element_specs import _ELEM_REGISTRY
+from apeGmsh.opensees._element_capabilities import _ELEM_REGISTRY
 
 
 # =====================================================================
