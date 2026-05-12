@@ -171,10 +171,14 @@ class ColorManager:
         hidden: set["DimTag"] | None = None,
         hover: "DimTag | None" = None,
     ) -> None:
-        """Batch recolor all entities in one pass per dimension.
+        """Batch recolor every entity in one pass per dimension.
 
-        Uses numpy fancy indexing — single ``cell_data`` assignment
-        per dimension instead of per-entity.
+        Walks the registry once per dim, computes each entity's idle
+        color (per-entity ``_idle_fn`` — covers Element-Type and
+        Physical-Group modes where colors vary by entity), scatters
+        into the dim's ``colors`` buffer, then overlays hidden / pick
+        / hover. Exactly one ``cell_data["colors"] = colors`` rebind
+        per dim — vs one per entity in the legacy per-entity path.
         """
         reg = self._registry
         hidden = hidden or set()
@@ -187,11 +191,25 @@ class ColorManager:
             if colors is None:
                 continue
 
-            # Fill all with idle color for this dim
-            idle = self._idle_fn((dim, 0))
-            colors[:] = idle
+            # Per-entity idle scatter — preserves correctness for
+            # idle_fns whose output depends on the entity, not just dim.
+            for dt in reg.all_entities():
+                if dt[0] != dim:
+                    continue
+                cells = reg.cells_for_entity(dt)
+                if not cells:
+                    continue
+                colors[cells] = self._idle_fn(dt)
 
-            # Overlay pick color on picked entities
+            # Overlay hidden first (lowest priority below pick/hover).
+            for dt in hidden:
+                if dt[0] != dim:
+                    continue
+                cells = reg.cells_for_entity(dt)
+                if cells:
+                    colors[cells] = self._hidden_rgb
+
+            # Overlay pick color on picked entities (above hidden).
             for dt in picks:
                 if dt[0] != dim:
                     continue
@@ -199,13 +217,20 @@ class ColorManager:
                 if cells:
                     colors[cells] = self._pick_rgb
 
-            # Overlay hover color
-            if hover is not None and hover[0] == dim and hover not in picks:
+            # Overlay hover color (above pick? matches set_entity_state
+            # priority: hidden > picked > hovered > idle, so hover is
+            # NOT applied if the entity is picked or hidden).
+            if (
+                hover is not None
+                and hover[0] == dim
+                and hover not in picks
+                and hover not in hidden
+            ):
                 cells = reg.cells_for_entity(hover)
                 if cells:
                     colors[cells] = self._hover_rgb
 
-            # Single VTK update per dimension
+            # Single VTK update per dimension.
             mesh.cell_data["colors"] = colors
 
     def set_pick_color(self, rgb: np.ndarray) -> None:

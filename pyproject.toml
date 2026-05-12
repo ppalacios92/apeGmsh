@@ -62,6 +62,7 @@ markers = [
     "subprocess: requires OPENSEES binary",
     "h5: HDF5 tests",
     "slow: > 1 second",
+    "bench: opt-in performance benchmarks (run with `pytest -m bench`)",
 ]
 
 [tool.pyright]

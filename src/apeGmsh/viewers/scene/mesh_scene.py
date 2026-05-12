@@ -367,6 +367,11 @@ def build_mesh_scene(
     brep_dominant_type: dict[DimTag, str] = {}
     batch_cell_to_elem: dict[int, np.ndarray] = {}
 
+    # Per-dim accumulator of node tags from gmsh.getNodes calls in the
+    # per-entity centroid pass. Reused by the node-cloud build below
+    # to avoid a second gmsh boundary-traversal over every entity.
+    dim_node_tag_acc: dict[int, list[np.ndarray]] = {}
+
     # ── build batched actors per dim ────────────────────────────────
     t_actors = time.perf_counter()
     n_actors = 0
@@ -411,6 +416,12 @@ def build_mesh_scene(
                 if len(ntags) > 0:
                     pts = np.asarray(ncoords, dtype=np.float64).reshape(-1, 3)
                     centroids_dim[dt] = pts.mean(axis=0)
+                    # Stash for the per-dim node-cloud build below so
+                    # we don't issue a second gmsh.getNodes pass over
+                    # every entity (saves a full boundary traversal).
+                    dim_node_tag_acc.setdefault(dim, []).append(
+                        np.asarray(ntags, dtype=np.int64)
+                    )
             except Exception:
                 pass
 
@@ -507,25 +518,32 @@ def build_mesh_scene(
     filt_tags = node_tags
     filt_coords = node_coords
 
-    # Map node tag -> set of dims that own it (via gmsh entity nodes).
+    # Map node tag -> set of dims that own it. Reuses ntags accumulated
+    # in the per-entity centroid pass above — no second gmsh round-trip
+    # over every entity. Falls back to gmsh.getEntities when a dim has
+    # no cached ntags (centroid pass skipped on exception).
     dim_node_indices: dict[int, np.ndarray] = {}
     if len(node_tags) > 0 and len(tag_to_idx) > 0:
         max_t = len(tag_to_idx) - 1
         for d in sorted(set(dims)):
-            tag_set: set[int] = set()
-            for _, ent_tag in gmsh.model.getEntities(dim=d):
-                try:
-                    ntags, _, _ = gmsh.model.mesh.getNodes(
-                        dim=d, tag=ent_tag, includeBoundary=True,
-                    )
-                except Exception:
+            cached = dim_node_tag_acc.get(d)
+            if cached:
+                arr = np.unique(np.concatenate(cached))
+            else:
+                tag_set: set[int] = set()
+                for _, ent_tag in gmsh.model.getEntities(dim=d):
+                    try:
+                        ntags, _, _ = gmsh.model.mesh.getNodes(
+                            dim=d, tag=ent_tag, includeBoundary=True,
+                        )
+                    except Exception:
+                        continue
+                    if len(ntags) == 0:
+                        continue
+                    tag_set.update(int(t) for t in ntags)
+                if not tag_set:
                     continue
-                if len(ntags) == 0:
-                    continue
-                tag_set.update(int(t) for t in ntags)
-            if not tag_set:
-                continue
-            arr = np.fromiter(tag_set, dtype=np.int64, count=len(tag_set))
+                arr = np.fromiter(tag_set, dtype=np.int64, count=len(tag_set))
             in_range = (arr >= 0) & (arr <= max_t)
             arr = arr[in_range]
             idx = tag_to_idx[arr]

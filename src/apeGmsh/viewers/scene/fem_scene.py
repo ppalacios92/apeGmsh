@@ -197,6 +197,15 @@ def build_fem_scene(
     n_nodes = raw_node_ids.shape[0]
     node_id_to_idx = {int(nid): i for i, nid in enumerate(raw_node_ids)}
 
+    # Dense node-id -> index lookup. Group-invariant: built once and
+    # reused for every element group's connectivity mapping below.
+    if n_nodes > 0:
+        _max_id = int(raw_node_ids.max())
+        id_to_idx_dense = np.full(_max_id + 2, -1, dtype=np.int64)
+        id_to_idx_dense[raw_node_ids] = np.arange(n_nodes, dtype=np.int64)
+    else:
+        id_to_idx_dense = None
+
     # ── Elements ────────────────────────────────────────────────
     cells_flat: list[int] = []
     cell_types: list[int] = []
@@ -229,15 +238,8 @@ def build_fem_scene(
             continue
         corner = conn[:, :n_corner]
 
-        # Map node IDs -> indices via dense lookup. Build a temporary
-        # max-id+1 array; faster than per-element dict lookup.
-        if n_nodes > 0:
-            max_id = int(raw_node_ids.max())
-            id_to_idx_dense = np.full(max_id + 2, -1, dtype=np.int64)
-            id_to_idx_dense[raw_node_ids] = np.arange(n_nodes, dtype=np.int64)
-            mapped = id_to_idx_dense[corner]
-        else:
-            mapped = corner
+        # Map node IDs -> indices via dense lookup (built once above).
+        mapped = id_to_idx_dense[corner] if id_to_idx_dense is not None else corner
 
         # VTK cell layout: [npe, idx_0, idx_1, ..., idx_{npe-1}, npe, ...]
         npe_col = np.full((mapped.shape[0], 1), n_corner, dtype=np.int64)

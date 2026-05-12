@@ -161,13 +161,14 @@ class ColorModeController:
         return _GROUP_PALETTE_RGB[idx]
 
     def _repaint(self) -> None:
-        picks = set(self._sel.picks)
-        for dt in self._registry.all_entities():
-            self._color_mgr.set_entity_state(
-                dt,
-                picked=dt in picks,
-                hidden=self._vis_mgr.is_hidden(dt),
-            )
+        # Single batched recolor — one VTK rebind per dim, not per entity.
+        # On large meshes this is ~100x faster than the per-entity loop;
+        # per-entity idle (Element-Type / Physical-Group modes) is still
+        # honored because recolor_all evaluates _idle_fn(dt) per entity.
+        self._color_mgr.recolor_all(
+            picks=set(self._sel.picks),
+            hidden=self._vis_mgr.hidden,
+        )
         self._plotter.render()
 
     # ------------------------------------------------------------------

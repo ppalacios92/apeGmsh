@@ -137,11 +137,56 @@ def _project_points_to_display(
 ) -> "ndarray":
     """Project ``(N, 3)`` world points to ``(N, 2)`` display pixels.
 
-    Per-point ``WorldToDisplay`` is a few thousand calls per drag-
-    release — fine on typical viewer-scale meshes (≤ ~50k nodes).
-    Hot-path callers can swap this for a cached camera-projection-
-    matrix multiply if profiling shows it matters.
+    Vectorized via the camera's composite projection matrix — ~40x
+    faster than per-point ``WorldToDisplay`` at 100k pts, with sub-
+    pixel agreement (validated in ``test_core_perf.py``). This matters
+    for GP / fiber selection where N can be 10⁶ at solid scale.
+
+    Falls back to the per-point ``WorldToDisplay`` loop if the renderer
+    doesn't expose the camera-matrix API (test stubs, or any unusual
+    renderer wrapper).
     """
+    n = points.shape[0]
+    if n == 0:
+        return np.empty((0, 2), dtype=np.float64)
+
+    try:
+        cam = renderer.GetActiveCamera()
+        aspect = renderer.GetTiledAspectRatio()
+        M = cam.GetCompositeProjectionTransformMatrix(aspect, 0.0, 1.0)
+        size = renderer.GetSize()
+        vp = renderer.GetViewport()
+    except AttributeError:
+        return _project_points_to_display_loop(points, renderer)
+
+    # vtkMatrix4x4 -> 4x4 numpy
+    arr = np.empty((4, 4), dtype=np.float64)
+    for i in range(4):
+        for j in range(4):
+            arr[i, j] = M.GetElement(i, j)
+
+    homog = np.empty((n, 4), dtype=np.float64)
+    homog[:, :3] = points
+    homog[:, 3] = 1.0
+    clip = homog @ arr.T  # (n, 4)
+    w = clip[:, 3:4]
+    ndc = clip[:, :3] / np.where(w == 0.0, 1.0, w)
+    # NDC ([-1,1]) -> display pixels.
+    win_w, win_h = size[0], size[1]
+    vp_x0 = vp[0] * win_w
+    vp_y0 = vp[1] * win_h
+    vp_w = (vp[2] - vp[0]) * win_w
+    vp_h = (vp[3] - vp[1]) * win_h
+    out = np.empty((n, 2), dtype=np.float64)
+    out[:, 0] = vp_x0 + (ndc[:, 0] * 0.5 + 0.5) * vp_w
+    out[:, 1] = vp_y0 + (ndc[:, 1] * 0.5 + 0.5) * vp_h
+    return out
+
+
+def _project_points_to_display_loop(
+    points: "ndarray", renderer: Any,
+) -> "ndarray":
+    """Per-point ``WorldToDisplay`` fallback. Kept for stub renderers."""
     out = np.empty((points.shape[0], 2), dtype=np.float64)
     for i in range(points.shape[0]):
         renderer.SetWorldPoint(

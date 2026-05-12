@@ -407,16 +407,14 @@ class PickEngine:
                     corner_counts.append(1)
 
         if entities:
-            # Project all corners via VTK WorldToDisplay
+            # Project all corners via the camera projection matrix in
+            # one matmul — ~40x faster than per-point WorldToDisplay at
+            # 100k pts, sub-pixel parity (validated in test_core_perf).
+            from .results_pick import _project_points_to_display
             pts_all = np.vstack(all_corners)
-            screen_x = np.empty(len(pts_all))
-            screen_y = np.empty(len(pts_all))
-            for i, p in enumerate(pts_all):
-                renderer.SetWorldPoint(p[0], p[1], p[2], 1.0)
-                renderer.WorldToDisplay()
-                dp = renderer.GetDisplayPoint()
-                screen_x[i] = dp[0]
-                screen_y[i] = dp[1]
+            xy = _project_points_to_display(pts_all, renderer)
+            screen_x = xy[:, 0]
+            screen_y = xy[:, 1]
 
             # Check each entity's points against the box
             offset = 0
