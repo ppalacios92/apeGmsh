@@ -2,7 +2,6 @@
 import math
 
 import numpy as np
-import pytest
 
 from apeGmsh.opensees import Cartesian, Cylindrical, Spherical
 from apeGmsh.opensees._csys import resolve_vecxz
@@ -194,133 +193,11 @@ class TestCylindricalRule:
         assert _close(v, (0, 0, 1))
 
 
-# ---------------------------------------------------------------------------
-# add_geom_transf API guards
-# ---------------------------------------------------------------------------
-
-class TestAddGeomTransfApi:
-    def test_vecxz_and_csys_mutually_exclusive(self, g):
-        g.opensees.set_model(ndm=3, ndf=6)
-        with pytest.raises(ValueError, match="not both"):
-            g.opensees.elements.add_geom_transf(
-                "T", "Linear",
-                vecxz=[0, 0, 1],
-                csys=Cartesian(),
-            )
-
-    def test_roll_deg_without_csys_raises(self, g):
-        g.opensees.set_model(ndm=3, ndf=6)
-        with pytest.raises(ValueError, match="roll_deg"):
-            g.opensees.elements.add_geom_transf(
-                "T", "Linear", vecxz=[0, 0, 1], roll_deg=30,
-            )
-
-    def test_csys_stored_on_geom_transf(self, g):
-        g.opensees.set_model(ndm=3, ndf=6)
-        cs = Cartesian()
-        g.opensees.elements.add_geom_transf("T", "Linear", csys=cs)
-        stored = g.opensees._geom_transfs["T"]
-        assert stored["csys"] is cs
-        assert stored["vecxz"] is None
-        assert stored["roll_deg"] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# End-to-end: build + export with csys
-# ---------------------------------------------------------------------------
-
-class TestBuildWithCsys:
-    """
-    Build a tiny 3-D frame with one horizontal beam and one column,
-    declared under a csys-based transf.  Verify the build produces
-    one geomTransf per distinct vecxz and that elements point at the
-    right tags.
-    """
-
-    def _build_two_segment_model(self, g):
-        g.opensees.set_model(ndm=3, ndf=6)
-        # Geometry: horizontal beam (0,0,0)-(1,0,0); column (1,0,0)-(1,0,1).
-        m = g.model
-        p0 = m.geometry.add_point(0.0, 0.0, 0.0, lc=2.0)
-        p1 = m.geometry.add_point(1.0, 0.0, 0.0, lc=2.0)
-        p2 = m.geometry.add_point(1.0, 0.0, 1.0, lc=2.0)
-        l_beam = m.geometry.add_line(p0, p1)
-        l_col  = m.geometry.add_line(p1, p2)
-        m.sync()
-        g.physical.add(1, [l_beam, l_col], name="Beams")
-        g.mesh.generation.generate(dim=1)
-
-        g.opensees.elements.add_geom_transf(
-            "Frame", "Linear", csys=Cartesian(),
-        )
-        g.opensees.elements.assign(
-            "Beams", "elasticBeamColumn",
-            geom_transf="Frame",
-            A=1.0, E=1.0, G=1.0, Jx=1.0, Iy=1.0, Iz=1.0,
-        )
-        g.opensees.build()
-
-    def test_two_segments_yield_two_distinct_vecxz(self, g):
-        self._build_two_segment_model(g)
-        ops = g.opensees
-        emit = ops._geom_transfs_emit
-        # Should have exactly 2 emitted transfs, both sourced from "Frame"
-        assert len(emit) == 2
-        sources = {v["source"] for v in emit.values()}
-        assert sources == {"Frame"}
-        vecxz_vals = sorted(tuple(v["vecxz"]) for v in emit.values())
-        # Horizontal beam → (0,0,1); column → (-1,0,0)
-        assert (0.0, 0.0, 1.0) in vecxz_vals
-        assert (-1.0, 0.0, 0.0) in vecxz_vals
-
-    def test_element_transf_tags_match_orientation(self, g):
-        self._build_two_segment_model(g)
-        ops = g.opensees
-        # Tag → vecxz lookup
-        tag_to_vecxz = {
-            ops._transf_tags[name]: tuple(t["vecxz"])
-            for name, t in ops._geom_transfs_emit.items()
-        }
-        # Element rows: each beam segment gets the right vecxz
-        for ops_id, row in ops._elements_df.iterrows():
-            n0, n1 = row.nodes
-            p0 = ops._nodes_df.loc[n0]
-            p1 = ops._nodes_df.loc[n1]
-            edge = np.array([p1.x - p0.x, p1.y - p0.y, p1.z - p0.z])
-            tangent = edge / np.linalg.norm(edge)
-            v = tag_to_vecxz[row.transf_tag]
-            if abs(tangent[2]) > 0.99:   # vertical
-                assert v in {(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)}
-            else:                          # horizontal
-                assert v == (0.0, 0.0, 1.0)
-
-    def test_export_tcl_emits_two_geom_transf_lines(self, g, tmp_path):
-        self._build_two_segment_model(g)
-        path = tmp_path / "m.tcl"
-        g.opensees.export.tcl(path)
-        text = path.read_text(encoding="utf-8")
-        transf_lines = [
-            ln for ln in text.splitlines()
-            if ln.startswith("geomTransf")
-        ]
-        assert len(transf_lines) == 2
-
-    def test_csys_in_2d_raises(self, g):
-        g.opensees.set_model(ndm=2, ndf=3)
-        m = g.model
-        p0 = m.geometry.add_point(0, 0, 0, lc=2.0)
-        p1 = m.geometry.add_point(1, 0, 0, lc=2.0)
-        l = m.geometry.add_line(p0, p1)
-        m.sync()
-        g.physical.add(1, [l], name="Beam")
-        g.mesh.generation.generate(dim=1)
-
-        g.opensees.elements.add_geom_transf(
-            "T", "Linear", csys=Cartesian(),
-        )
-        g.opensees.elements.assign(
-            "Beam", "elasticBeamColumn",
-            geom_transf="T", A=1.0, E=1.0, Iz=1.0,
-        )
-        with pytest.raises(ValueError, match="ndm=3"):
-            g.opensees.build()
+# The legacy ``TestAddGeomTransfApi`` and ``TestBuildWithCsys`` classes
+# that used to live here exercised the deprecated
+# ``g.opensees.elements.add_geom_transf(csys=…)`` flow on the legacy
+# ``apeGmsh.solvers.OpenSees`` bridge.  Equivalent coverage on the
+# new typed ``Linear`` / ``PDelta`` / ``Corotational`` primitives
+# (which accept ``csys=`` directly at construction) lives in
+# :mod:`tests.opensees.unit.primitives.test_geom_transf` and
+# :mod:`tests.opensees.contract.test_geom_transf_contract`.
