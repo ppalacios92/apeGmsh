@@ -8,22 +8,33 @@ This package is being retired in stages by the Phase-8 untangle:
 * Phase 8.2 moved the coordinate-system helpers
   (``Cartesian`` / ``Cylindrical`` / ``Spherical`` / ``resolve_vecxz``)
   into ``apeGmsh.opensees``.
-* Phase 8 PR γ (this revision) deleted the legacy ``OpenSees``
-  bridge class and the ``_opensees_*`` cluster.  ``g.opensees`` is
-  no longer a session attribute; construct decks explicitly via
+* Phase 8.3a moved the OpenSees element response catalog
+  (``_element_response.py``) into
+  :mod:`apeGmsh.opensees._response_catalog`.
+* Phase 8 PR γ deleted the legacy ``OpenSees`` bridge class and the
+  ``_opensees_*`` cluster.  ``g.opensees`` is no longer a session
+  attribute; construct decks explicitly via
   ``apeGmsh.opensees.apeSees(fem)``.
-* Phase 8.3b will move the recorder cluster
-  (``Recorders.py``, ``_recorder_emit.py``, ``_recorder_specs.py``,
-  ``_element_specs.py``) and rewire the results layer onto the
-  typed ``apeGmsh.opensees.recorder`` primitives.
+* Phase 8.3b moved the recorder cluster:
 
-Until 8.3b finishes, this package keeps the old import paths alive
-for legacy attribute access.  The per-module shim files
-(``Numberer.py``, ``Constraints.py``, ``Loads.py``, ``Masses.py``,
-``_kinds.py``, ``_opensees_csys.py``, ``_element_response.py``)
-warn on import; the package-level ``__getattr__`` below catches the
-``from apeGmsh.solvers import X`` shape so that path also emits a
-one-shot :class:`DeprecationWarning`.
+  - ``Recorders.py`` → :mod:`apeGmsh.results.spec.declaration`
+    (re-exported as ``apeGmsh.results.spec.Recorders``)
+  - ``_recorder_specs.py`` → :mod:`apeGmsh.results.spec._resolved`
+    (``ResolvedRecorderSpec`` / ``ResolvedRecorderRecord``
+    re-exported under ``apeGmsh.results.spec``)
+  - ``_recorder_emit.py`` → :mod:`apeGmsh.results.spec._emit`
+  - ``_element_specs.py`` → :mod:`apeGmsh.opensees._element_capabilities`
+
+After Phase 8.3b this package is purely a deprecation envelope.  The
+per-module shim files (``Numberer.py``, ``Constraints.py``, ``Loads.py``,
+``Masses.py``, ``_kinds.py``, ``_opensees_csys.py``, ``_element_response.py``,
+``Recorders.py``, ``_recorder_specs.py``, ``_recorder_emit.py``,
+``_element_specs.py``) warn on import; the package-level ``__getattr__``
+below catches the ``from apeGmsh.solvers import X`` shape so that path
+also emits a one-shot :class:`DeprecationWarning`.
+
+Phase 8.8 will delete this package after one release cycle of
+deprecation.
 """
 
 from __future__ import annotations
@@ -37,14 +48,19 @@ from typing import Any
 #
 # Phase 8.1 — broker-side records & resolvers (mesh/ + core/).
 # Phase 8.2 — bridge-side coordinate-system helpers (opensees/).
+# Phase 8.3b — recorder cluster (results/spec/ + opensees/).
 _RELOCATED: dict[str, tuple[str, str]] = {
     # Phase 8.1
-    "Numberer":     ("apeGmsh.mesh._numberer", "Numberer"),
-    "NumberedMesh": ("apeGmsh.mesh._numberer", "NumberedMesh"),
+    "Numberer":              ("apeGmsh.mesh._numberer", "Numberer"),
+    "NumberedMesh":          ("apeGmsh.mesh._numberer", "NumberedMesh"),
     # Phase 8.2
-    "Cartesian":    ("apeGmsh.opensees", "Cartesian"),
-    "Cylindrical":  ("apeGmsh.opensees", "Cylindrical"),
-    "Spherical":    ("apeGmsh.opensees", "Spherical"),
+    "Cartesian":             ("apeGmsh.opensees", "Cartesian"),
+    "Cylindrical":           ("apeGmsh.opensees", "Cylindrical"),
+    "Spherical":             ("apeGmsh.opensees", "Spherical"),
+    # Phase 8.3b
+    "Recorders":             ("apeGmsh.results.spec", "Recorders"),
+    "ResolvedRecorderSpec":  ("apeGmsh.results.spec", "ResolvedRecorderSpec"),
+    "ResolvedRecorderRecord":("apeGmsh.results.spec", "ResolvedRecorderRecord"),
 }
 
 
@@ -78,4 +94,7 @@ __all__ = [
     "Cartesian",
     "Cylindrical",
     "Spherical",
+    "Recorders",
+    "ResolvedRecorderSpec",
+    "ResolvedRecorderRecord",
 ]
