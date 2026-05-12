@@ -52,6 +52,7 @@ from ..element.beam_column import (
 from ..pattern.pattern import Plain, _LoadRecord, _SPRecord
 from ..recorder import Element as ElementRecorder
 from ..recorder import Node as NodeRecorder
+from ..recorder import RecorderDeclaration, RecorderRecord
 from ..transform import Corotational, Linear, PDelta
 from .tag_allocator import TagAllocator
 from .tag_resolution import (
@@ -656,7 +657,15 @@ def emit_recorder_spec(
     ``pg`` form into an in-memory replica with the equivalent explicit
     list, then drive the replica's ``_emit``. Other recorder kinds
     (MPCO) have no PG resolution and pass through unchanged.
+
+    Phase 9 adds :class:`RecorderDeclaration` dispatch — each record
+    is resolved against the FEM, canonical components are translated
+    to OpenSees recorder tokens, and one ``emitter.recorder(...)`` call
+    is issued per (ops_token, target_set) group.
     """
+    if isinstance(spec, RecorderDeclaration):
+        _emit_recorder_declaration(spec, emitter, fem)
+        return
     if isinstance(spec, NodeRecorder) and spec.pg is not None:
         from dataclasses import replace
         node_ids = expand_pg_to_nodes(fem, spec.pg)
@@ -674,3 +683,132 @@ def emit_recorder_spec(
         elem_replaced._emit(emitter, tag)
         return
     spec._emit(emitter, tag)
+
+
+# ---------------------------------------------------------------------------
+# RecorderDeclaration emit fan-out (Phase 9 commit 3)
+# ---------------------------------------------------------------------------
+
+def _emit_recorder_declaration(
+    decl: RecorderDeclaration,
+    emitter: "Emitter",
+    fem: "FEMData",
+) -> None:
+    """Walk a :class:`RecorderDeclaration` and emit one
+    ``emitter.recorder(...)`` call per (ops_token, target_set) group.
+
+    Per Phase 9 commit 3a, only the ``"nodes"`` category is handled
+    end-to-end. Other categories raise :class:`NotImplementedError`
+    pointing at the follow-up commits.
+    """
+    from .._recorder_translate import group_node_components_by_ops_token
+
+    for record in decl.records:
+        if record.category == "nodes":
+            _emit_nodes_record(record, decl, emitter, fem,
+                               group_node_components_by_ops_token)
+        elif record.category in ("elements", "line_stations", "gauss"):
+            raise NotImplementedError(
+                f"RecorderDeclaration record(category={record.category!r}) "
+                "emit-time translation lands in Phase 9 commit 3b. For "
+                "now, declare these via the typed primitives "
+                "(ops.recorder.Element / MPCO) or wait for 3b."
+            )
+        elif record.category in ("fibers", "layers", "modal"):
+            raise NotImplementedError(
+                f"RecorderDeclaration record(category={record.category!r}) "
+                "is not file-emit-able; use DomainCapture instead (Phase 9 "
+                "commit 5 provides the bridge-friendly entry point)."
+            )
+        else:  # pragma: no cover  - guarded by RecorderRecord validation
+            raise ValueError(
+                f"unrecognized category {record.category!r} on "
+                f"RecorderDeclaration record"
+            )
+
+
+def _emit_nodes_record(
+    record: RecorderRecord,
+    decl: RecorderDeclaration,
+    emitter: "Emitter",
+    fem: "FEMData",
+    group: object,  # callable; passed in to keep imports local to caller
+) -> None:
+    """Emit one node-level :class:`RecorderRecord`.
+
+    Resolves selectors (``pg``, ``label``, ``selection``, ``ids``) to
+    a flat node-tag tuple, groups canonical components by their
+    OpenSees recorder token, and emits one ``recorder Node`` call per
+    group.
+
+    Phase 9 commit 3a supports ``pg=`` (single string or tuple) and
+    ``ids=`` only. Additional selectors land in commit 3b.
+
+    File path convention: ``<file_root>/<decl.name>__<record_name>__<token>.out``
+    when ``record.dt`` / ``record.n_steps`` is set; cadence flag emitted
+    when present. ``file_root`` is currently fixed at ``"."``; commit
+    3c adds explicit configuration.
+    """
+    if record.raw:
+        raise NotImplementedError(
+            "RecorderRecord raw= escape hatch fan-out lands in Phase 9 "
+            "commit 3b along with the broader element-level support."
+        )
+
+    # Resolve target node IDs from selectors. Commit 3a supports
+    # pg= (already supported by the legacy bridge) and ids=.
+    node_ids = _resolve_node_targets(record, fem)
+    if not node_ids:
+        return  # nothing to record — silent skip mirrors typed-primitive behavior
+
+    # Group canonical components by ops token (e.g. "disp": (1, 2)).
+    # Caller passes the translator to keep its import scoped to the
+    # _emit_recorder_declaration function.
+    grouped = group(record.components)  # type: ignore[operator]
+    record_name = record.name or "default"
+    file_root = "."  # Phase 9 commit 3c will surface this kwarg.
+
+    for ops_token, dofs in grouped.items():
+        file_path = (
+            f"{file_root}/{decl.name}__{record_name}__{ops_token}.out"
+        )
+        args: list[int | float | str] = ["-file", file_path]
+        if record.dt is not None:
+            args += ["-dT", record.dt]
+        # Default time_format is "dt" for declared records — they're
+        # broader-vocabulary and time-aware consumers (results) expect
+        # the leading time column.
+        args += ["-time"]
+        args += ["-node", *node_ids]
+        args += ["-dof", *dofs]
+        args.append(ops_token)
+        emitter.recorder("Node", *args)
+
+
+def _resolve_node_targets(
+    record: RecorderRecord, fem: "FEMData",
+) -> tuple[int, ...]:
+    """Resolve a node-category :class:`RecorderRecord`'s selectors to
+    a flat tuple of node tags.
+
+    Phase 9 commit 3a supports ``pg=`` and ``ids=``; ``label=`` and
+    ``selection=`` land in commit 3b.
+    """
+    if record.ids is not None:
+        return tuple(int(i) for i in record.ids)
+    if record.pg:
+        out: list[int] = []
+        seen: set[int] = set()
+        for pg_name in record.pg:
+            for tag in expand_pg_to_nodes(fem, pg_name):
+                if tag not in seen:
+                    seen.add(tag)
+                    out.append(tag)
+        return tuple(out)
+    if record.label or record.selection:
+        raise NotImplementedError(
+            "RecorderRecord label= / selection= selectors land in Phase 9 "
+            "commit 3b."
+        )
+    # No selectors → empty (caller handles silent skip).
+    return ()
