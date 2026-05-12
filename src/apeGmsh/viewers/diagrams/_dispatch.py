@@ -47,7 +47,8 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator, Optional
+from enum import Enum
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from .._log import log_action
 
@@ -70,6 +71,39 @@ PICK_CLEARED = "pick_cleared"
 # every geometry observer fire.
 GEOMETRIES_CHANGED = "geometries_changed"
 
+
+class Lane(str, Enum):
+    """Subscriber dispatch lane.
+
+    * ``RENDER`` — synchronous, fires inside ``fire()`` after the pump
+      matrix runs and before ``render()``. No coalescing. Use for cheap
+      side-effects that must be visible at the next render of the same
+      tick (toggling ``SetPickable`` flags, flipping cell ghosts).
+    * ``UI`` — deferred, posted to the Qt event loop via the injected
+      ``defer_fn`` (default ``QTimer.singleShot(0, _flush)``). Optionally
+      coalesces by ``(handler, kind, key_fn(payload))`` with last-wins:
+      a storm of N events that all key to the same value invokes the
+      handler at most once per flush. Use for tree rebuilds / panel
+      refreshes that only need to reflect the latest state.
+    """
+    RENDER = "render"
+    UI = "ui"
+
+
+def _default_defer(fn: Callable[[], None]) -> None:
+    """Default UI-lane scheduler: QTimer.singleShot(0, fn).
+
+    Falls back to immediate execution when Qt isn't available (pure
+    unit tests / library use). Tests that want explicit control over
+    flush timing should inject their own ``defer_fn``.
+    """
+    try:
+        from qtpy.QtCore import QTimer
+        QTimer.singleShot(0, fn)
+    except Exception:
+        fn()
+
+
 class Dispatcher:
     """Event-loop pipeline for ResultsViewer.
 
@@ -91,6 +125,7 @@ class Dispatcher:
         pump_gate: Callable[[], None],
         pump_restack: Callable[[], None],
         render: Callable[[], None],
+        defer_fn: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> None:
         self._director = director
         self._pump_step = pump_step
@@ -98,22 +133,50 @@ class Dispatcher:
         self._pump_gate = pump_gate
         self._pump_restack = pump_restack
         self._render = render
+        self._defer_fn = defer_fn or _default_defer
         self._suppress_depth: int = 0
         self._suppressed_kinds: set[str] = set()
+
+        # Lane subscriber tables.
+        # RENDER: kind -> list[handler]. Synchronous, no coalesce.
+        # UI:     kind -> list[(handler, key_fn or None, coalesce)].
+        self._render_subs: dict[
+            str, list[Callable[[str, Any], None]]
+        ] = {}
+        self._ui_subs: dict[
+            str, list[tuple[Callable[[str, Any], None], Optional[Callable[[Any], Any]], bool]]
+        ] = {}
+        # Coalesced UI queue: ordered list of (handler, kind, payload).
+        # Dedup map (id(handler), kind, key) -> index in _ui_pending so
+        # last-wins replaces the payload in place without re-ordering.
+        self._ui_pending: list[
+            tuple[Callable[[str, Any], None], str, Any]
+        ] = []
+        self._ui_dedup: dict[tuple[int, str, Any], int] = {}
+        self._ui_flush_scheduled: bool = False
 
     # ------------------------------------------------------------------
     # Public surface
     # ------------------------------------------------------------------
 
-    def fire(self, kind: str, *, layer: Any = None) -> None:
+    def fire(self, kind: str, *, layer: Any = None, payload: Any = None) -> None:
         """Run the event matrix entry for ``kind``.
 
         ``layer`` is consulted only by events whose matrix row scopes
         the pump to one diagram (``diagram_attached``,
         ``diagram_modified``). Other events ignore it.
+
+        ``payload`` is forwarded to every lane subscriber (RENDER + UI).
+        It carries event-specific data — e.g., ``geom_id`` for the
+        granular geometry events, ``composition_id`` for COMPOSITION_CHANGED.
+        Subscribers receive ``handler(kind, payload)``.
         """
         if self._suppress_depth > 0:
             self._suppressed_kinds.add(kind)
+            # Still queue UI subscribers so coalesce can collapse a
+            # storm; session_batch drains the queue on exit. Don't
+            # schedule a flush — the batch context owns flushing.
+            self._enqueue_ui(kind, payload)
             log_action(
                 "dispatch", "suppressed",
                 kind=kind, layer=_layer_id(layer), _level="debug",
@@ -166,11 +229,147 @@ class Dispatcher:
                 "dispatch", "unknown_kind", kind=kind, _level="warning",
             )
 
+        # RENDER lane: synchronous, before plotter.render() so any
+        # actor-flag updates land in the same frame.
+        for handler in self._render_subs.get(kind, ()):
+            try:
+                handler(kind, payload)
+            except Exception as exc:
+                log_action(
+                    "dispatch", "render_sub_error",
+                    kind=kind, exc=type(exc).__name__, _level="warning",
+                )
+
+        # UI lane: enqueue (coalesce last-wins), schedule a flush if
+        # there's pending work and one isn't already in flight.
+        self._enqueue_ui(kind, payload)
+        if self._ui_pending and not self._ui_flush_scheduled:
+            self._ui_flush_scheduled = True
+            self._defer_fn(self._flush_ui_lane)
+
         self._render()
 
         dt_ms = (time.perf_counter() - t0) * 1000.0
         log_action(
             "dispatch", kind, layer=_layer_id(layer), duration_ms=round(dt_ms, 2),
+        )
+
+    def subscribe(
+        self,
+        kinds: "str | Iterable[str]",
+        handler: Callable[[str, Any], None],
+        *,
+        lane: Lane = Lane.UI,
+        coalesce: bool = True,
+        key_fn: Optional[Callable[[Any], Any]] = None,
+    ) -> Callable[[], None]:
+        """Subscribe ``handler`` to one or more event kinds on ``lane``.
+
+        Parameters
+        ----------
+        kinds
+            One event kind string, or an iterable of them. Subscribing
+            to multiple kinds with one call returns a single
+            unsubscribe that drops the handler from all of them.
+        handler
+            Called as ``handler(kind, payload)``.
+        lane
+            ``Lane.RENDER`` runs synchronously inside ``fire()``;
+            ``Lane.UI`` posts to the Qt event loop via ``defer_fn``.
+        coalesce
+            UI-lane only. When ``True``, multiple fires with the same
+            ``(kind, key_fn(payload))`` collapse to one handler call
+            with the last payload. Ignored on the RENDER lane.
+        key_fn
+            UI-lane only. Maps payload → coalesce key. ``None`` is
+            equivalent to ``lambda p: None`` (collapse all events of
+            the same kind to one).
+
+        Returns
+        -------
+        Callable[[], None]
+            Unsubscribe callable.
+        """
+        kinds_t: tuple[str, ...] = (
+            (kinds,) if isinstance(kinds, str) else tuple(kinds)
+        )
+        for k in kinds_t:
+            if lane is Lane.RENDER:
+                self._render_subs.setdefault(k, []).append(handler)
+            else:
+                self._ui_subs.setdefault(k, []).append(
+                    (handler, key_fn, bool(coalesce)),
+                )
+
+        def _unsub() -> None:
+            for k in kinds_t:
+                if lane is Lane.RENDER:
+                    lst_r = self._render_subs.get(k)
+                    if lst_r is not None:
+                        lst_r[:] = [h for h in lst_r if h is not handler]
+                else:
+                    lst_u = self._ui_subs.get(k)
+                    if lst_u is not None:
+                        lst_u[:] = [
+                            (h, kf, c) for (h, kf, c) in lst_u
+                            if h is not handler
+                        ]
+        return _unsub
+
+    # ------------------------------------------------------------------
+    # Internal — UI lane plumbing
+    # ------------------------------------------------------------------
+
+    def _enqueue_ui(self, kind: str, payload: Any) -> None:
+        """Push UI subscribers for ``kind`` onto the pending queue.
+
+        When a subscriber opted into coalesce, replace any earlier
+        entry with the same ``(handler, kind, key_fn(payload))`` so the
+        handler ends up called once with the latest payload.
+        """
+        subs = self._ui_subs.get(kind)
+        if not subs:
+            return
+        for handler, key_fn, coalesce in subs:
+            if coalesce:
+                key = key_fn(payload) if key_fn is not None else None
+                dedup_key = (id(handler), kind, key)
+                idx = self._ui_dedup.get(dedup_key)
+                if idx is not None:
+                    self._ui_pending[idx] = (handler, kind, payload)
+                    continue
+                self._ui_dedup[dedup_key] = len(self._ui_pending)
+                self._ui_pending.append((handler, kind, payload))
+            else:
+                self._ui_pending.append((handler, kind, payload))
+
+    def _flush_ui_lane(self) -> None:
+        """Drain the UI queue. Called via ``defer_fn`` (QTimer) or
+        directly by ``session_batch`` on exit."""
+        self._ui_flush_scheduled = False
+        if self._suppress_depth > 0:
+            # The active session_batch owns draining — bail out so we
+            # don't fire UI handlers in the middle of a suppressed run.
+            return
+        queue = self._ui_pending
+        if not queue:
+            return
+        self._ui_pending = []
+        self._ui_dedup = {}
+        n = len(queue)
+        t0 = time.perf_counter()
+        for handler, kind, payload in queue:
+            try:
+                handler(kind, payload)
+            except Exception as exc:
+                log_action(
+                    "dispatch", "ui_sub_error",
+                    kind=kind, exc=type(exc).__name__, _level="warning",
+                )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        log_action(
+            "dispatch", "ui_flush", n=n, duration_ms=round(dt_ms, 2),
+            _level="debug",
         )
 
     @contextmanager
@@ -200,6 +399,12 @@ class Dispatcher:
                 self._pump_step(None)
                 self._pump_deform(None)
                 self._pump_gate()
+                # Drain the UI lane synchronously — fires were queued
+                # during the batch (coalesced last-wins) so we don't
+                # leave stale work behind. RENDER-lane subs aren't
+                # queued; the batch's matrix-equivalent pump above is
+                # the analogue.
+                self._flush_ui_lane()
                 self._render()
             log_action(
                 "dispatch", "batch_end", depth=self._suppress_depth,
