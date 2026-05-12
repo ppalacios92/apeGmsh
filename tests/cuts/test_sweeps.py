@@ -24,9 +24,28 @@ from apeGmsh.cuts import SectionCutDef, SectionSweepDef, plane_horizontal
 # --------------------------------------------------------------------- #
 # Stubs + h5 helper — same shape as test_builders.py
 # --------------------------------------------------------------------- #
+class _StubPhysicalGroupSet:
+    def __init__(self, names_by_dim: dict[int, list[str]] | None = None) -> None:
+        self._names_by_dim = names_by_dim or {}
+
+    def names(self, dim: int = -1) -> list[str]:
+        if dim == -1:
+            out: list[str] = []
+            for d_names in self._names_by_dim.values():
+                out.extend(d_names)
+            return sorted(out)
+        return list(self._names_by_dim.get(dim, []))
+
+
 class _StubNodes:
-    def __init__(self, coords_by_pg: dict[str, np.ndarray]) -> None:
+    def __init__(
+        self,
+        coords_by_pg: dict[str, np.ndarray],
+        *,
+        pg_names_by_dim: dict[int, list[str]] | None = None,
+    ) -> None:
         self._coords_by_pg = coords_by_pg
+        self.physical = _StubPhysicalGroupSet(pg_names_by_dim)
 
     def get_coords(self, *, pg: str) -> np.ndarray:
         return self._coords_by_pg[pg]
@@ -46,8 +65,12 @@ class _StubFEM:
         *,
         node_coords_by_pg: dict[str, np.ndarray] | None = None,
         element_ids_by_pg: dict[str, np.ndarray] | None = None,
+        pg_names_by_dim: dict[int, list[str]] | None = None,
     ) -> None:
-        self.nodes = _StubNodes(node_coords_by_pg or {})
+        self.nodes = _StubNodes(
+            node_coords_by_pg or {},
+            pg_names_by_dim=pg_names_by_dim,
+        )
         self.elements = _StubElements(element_ids_by_pg or {})
 
 
@@ -408,3 +431,158 @@ def test_helper_chain_with_plane_horizontal(tmp_path: Path) -> None:
     )
     assert len(sweep) == 3
     assert sweep[2].plane_point == (0.0, 0.0, 3.0)
+
+
+# --------------------------------------------------------------------- #
+# from_pg_glob
+# --------------------------------------------------------------------- #
+def _glob_fixture(tmp_path: Path) -> tuple[Path, _StubFEM]:
+    """Three diaphragms at z=1000/2000/3000 + a few non-matching PGs."""
+    h5 = tmp_path / "model.h5"
+    _write_minimal_h5(h5, groups={
+        "ASDShellQ4": {
+            "ids":      np.array([20, 21, 22]),
+            "fem_eids": np.array([201, 202, 203]),
+        },
+    })
+    fem = _StubFEM(
+        node_coords_by_pg={
+            "diaphragm-1": np.array([
+                [0.0, 0.0, 1000.0], [1.0, 0.0, 1000.0], [0.0, 1.0, 1000.0],
+            ]),
+            "diaphragm-2": np.array([
+                [0.0, 0.0, 2000.0], [1.0, 0.0, 2000.0], [0.0, 1.0, 2000.0],
+            ]),
+            "diaphragm-10": np.array([
+                [0.0, 0.0, 3000.0], [1.0, 0.0, 3000.0], [0.0, 1.0, 3000.0],
+            ]),
+            "wall-x0": np.array([
+                [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+            ]),
+        },
+        element_ids_by_pg={"walls": np.array([201, 202, 203])},
+        pg_names_by_dim={
+            2: ["diaphragm-1", "diaphragm-2", "diaphragm-10", "wall-x0"],
+        },
+    )
+    return h5, fem
+
+
+def test_from_pg_glob_matches_pattern(tmp_path: Path) -> None:
+    h5, fem = _glob_fixture(tmp_path)
+    sweep = SectionSweepDef.from_pg_glob(
+        pattern="diaphragm-*",
+        elements_pg="walls",
+        fem=fem,            # type: ignore[arg-type]
+        model_h5=h5,
+        normal_hint=(0.0, 0.0, 1.0),
+    )
+    # Three diaphragms matched, wall-x0 excluded.
+    assert len(sweep) == 3
+    # Labels show natural-sort order (1, 2, 10 — NOT lex 1, 10, 2).
+    labels = [cut.label for cut in sweep]
+    assert labels == [
+        "plane=diaphragm-1, elements=walls",
+        "plane=diaphragm-2, elements=walls",
+        "plane=diaphragm-10, elements=walls",
+    ]
+    # Elevations follow the labels.
+    np.testing.assert_allclose(
+        sweep.plane_locators("z"),
+        [1000.0, 2000.0, 3000.0],
+    )
+
+
+def test_from_pg_glob_no_match_raises(tmp_path: Path) -> None:
+    h5, fem = _glob_fixture(tmp_path)
+    with pytest.raises(ValueError, match="No physical groups matched"):
+        SectionSweepDef.from_pg_glob(
+            pattern="rooftop-*",
+            elements_pg="walls",
+            fem=fem,            # type: ignore[arg-type]
+            model_h5=h5,
+        )
+
+
+def test_from_pg_glob_dim_filter(tmp_path: Path) -> None:
+    """``dim=-1`` matches across all dimensions."""
+    h5, fem = _glob_fixture(tmp_path)
+    # Same fixture, but try dim=-1 — should also find the dim-2 entries.
+    sweep = SectionSweepDef.from_pg_glob(
+        pattern="diaphragm-*",
+        elements_pg="walls",
+        fem=fem,            # type: ignore[arg-type]
+        model_h5=h5,
+        dim=-1,
+        normal_hint=(0.0, 0.0, 1.0),
+    )
+    assert len(sweep) == 3
+
+
+def test_from_pg_glob_with_bounding(tmp_path: Path) -> None:
+    """``with_bounding=True`` propagates to every cut."""
+    h5 = tmp_path / "model.h5"
+    _write_minimal_h5(h5, groups={
+        "ASDShellQ4": {
+            "ids":      np.array([20, 21]),
+            "fem_eids": np.array([201, 202]),
+        },
+    })
+    fem = _StubFEM(
+        node_coords_by_pg={
+            "level-1": np.array([
+                [0.0, 0.0, 100.0], [10.0, 0.0, 100.0],
+                [10.0, 10.0, 100.0], [0.0, 10.0, 100.0],
+                [5.0, 5.0, 100.0],   # interior — should be dropped
+            ]),
+            "level-2": np.array([
+                [0.0, 0.0, 200.0], [10.0, 0.0, 200.0],
+                [10.0, 10.0, 200.0], [0.0, 10.0, 200.0],
+            ]),
+        },
+        element_ids_by_pg={"walls": np.array([201, 202])},
+        pg_names_by_dim={2: ["level-1", "level-2"]},
+    )
+
+    sweep = SectionSweepDef.from_pg_glob(
+        pattern="level-*",
+        elements_pg="walls",
+        fem=fem,            # type: ignore[arg-type]
+        model_h5=h5,
+        with_bounding=True,
+    )
+    assert len(sweep) == 2
+    for cut in sweep:
+        assert cut.bounding_polygon is not None
+        assert len(cut.bounding_polygon) == 4
+        # Square's 4 corners survived; interior (5,5,z) dropped.
+
+
+def test_from_pg_pattern_with_bounding_passes_through(tmp_path: Path) -> None:
+    """``from_pg_pattern`` should propagate ``with_bounding=True`` to
+    every cut — same shape as the glob version but with an explicit
+    list."""
+    h5 = tmp_path / "model.h5"
+    _write_minimal_h5(h5, groups={
+        "ASDShellQ4": {
+            "ids":      np.array([20]),
+            "fem_eids": np.array([201]),
+        },
+    })
+    fem = _StubFEM(
+        node_coords_by_pg={
+            "level-1": np.array([
+                [0.0, 0.0, 100.0], [1.0, 0.0, 100.0], [0.0, 1.0, 100.0],
+            ]),
+        },
+        element_ids_by_pg={"walls": np.array([201])},
+    )
+    sweep = SectionSweepDef.from_pg_pattern(
+        plane_pgs=["level-1"],
+        elements_pg="walls",
+        fem=fem,            # type: ignore[arg-type]
+        model_h5=h5,
+        with_bounding=True,
+    )
+    assert sweep[0].bounding_polygon is not None
+    assert len(sweep[0].bounding_polygon) == 3
