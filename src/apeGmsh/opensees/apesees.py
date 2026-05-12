@@ -78,6 +78,8 @@ from .emitter.base import Emitter
 from .node import Node, _NodeAccessor, _iter_tags
 
 if TYPE_CHECKING:
+    import h5py
+
     # FEMData is the only mesh symbol the bridge depends on (P3, P9).
     # Imported under TYPE_CHECKING so that constructing apeSees does
     # not transitively import gmsh during static analysis.
@@ -546,10 +548,21 @@ class apeSees:
     def h5(self, path: str, *, model_name: str | None = None) -> None:
         """Emit a model-definition HDF5 archive at ``path``.
 
-        Drives an :class:`~apeGmsh.opensees.emitter.h5.H5Emitter`
-        through the full :class:`BuiltModel` and materializes the
-        result to disk. The file conforms to ``architecture/h5-schema.md``
-        and is consumable by the apeGmsh viewer.
+        Phase 8.5 composes the file in two layers:
+
+        1. The **broker** (``self._fem``) writes ``/meta`` + the
+           neutral zone (``/nodes``, ``/elements/{type}``,
+           ``/physical_groups``, ``/labels``, ``/constraints/{kind}``,
+           ``/loads/{kind}/{pattern}``, ``/masses``).  Broker writers
+           live in :mod:`apeGmsh.mesh._femdata_h5_io`.
+        2. The **bridge** (an :class:`H5Emitter` driven through the
+           :class:`BuiltModel`) appends ``/opensees/...`` enrichment.
+
+        If ``self._fem`` does not expose a real :class:`FEMData`
+        surface (e.g. integration tests using a hand-rolled stub),
+        the broker step is skipped: the file ends up with the
+        bridge's own ``/meta`` plus ``/opensees/...``, but no neutral
+        zone.  Real callers always get the full file shape.
 
         Parameters
         ----------
@@ -559,7 +572,10 @@ class apeSees:
             Optional human-readable name written to ``/meta/model_name``.
             Defaults to the path's stem.
         """
-        from .emitter.h5 import H5Emitter
+        import h5py
+
+        from ..mesh._femdata_h5_io import NEUTRAL_SCHEMA_VERSION
+        from .emitter.h5 import SCHEMA_VERSION, H5Emitter
 
         snapshot_id = ""
         try:
@@ -577,7 +593,22 @@ class apeSees:
             snapshot_id=snapshot_id,
         )
         bm.emit(emitter)
-        emitter.write(path)
+
+        with h5py.File(path, "w") as f:
+            broker_used = _try_write_broker_zone(
+                self._fem, f,
+                schema_version=NEUTRAL_SCHEMA_VERSION,
+                model_name=model_name or _path_stem(path),
+                ndf=int(self._ndf or 0),
+            )
+            if not broker_used:
+                # Stub FEM or otherwise missing broker surface — fall
+                # back to bridge-only /meta with the bridge's own
+                # SCHEMA_VERSION (the file still validates; absent
+                # neutral zone is the right "no broker" signal).
+                emitter._write_meta(f)
+                _override_schema_version(f, SCHEMA_VERSION)
+            emitter.write_opensees_into(f)
 
     # -- Registration -----------------------------------------------------
 
@@ -643,6 +674,59 @@ class apeSees:
                 "primitives via ops.<family>.<Type>(...) before calling "
                 "analyze()."
             )
+
+
+# ---------------------------------------------------------------------------
+# H5 composition helpers (Phase 8.5)
+# ---------------------------------------------------------------------------
+
+def _try_write_broker_zone(
+    fem: object,
+    f: "h5py.File",
+    *,
+    schema_version: str,
+    model_name: str,
+    ndf: int,
+) -> bool:
+    """Attempt to write the broker's ``/meta`` + neutral zone.
+
+    Returns ``True`` if the broker writer ran end-to-end, ``False`` if
+    the FEM lacks the surface the writer needs (typically a hand-rolled
+    test stub).  On ``False`` the file is rewound to a fresh state — no
+    half-populated groups linger.
+    """
+    from ..mesh._femdata_h5_io import write_meta, write_neutral_zone
+
+    if not hasattr(fem, "snapshot_id"):
+        return False
+    try:
+        write_meta(
+            fem, f,  # type: ignore[arg-type]
+            schema_version=schema_version,
+            model_name=model_name,
+            ndf=ndf,
+        )
+        write_neutral_zone(fem, f)  # type: ignore[arg-type]
+    except (AttributeError, TypeError):
+        # Stub FEM didn't expose enough surface.  Tear down any
+        # partial groups so the bridge's fallback `/meta` write
+        # doesn't collide.
+        for key in list(f.keys()):
+            del f[key]
+        return False
+    return True
+
+
+def _override_schema_version(f: "h5py.File", schema_version: str) -> None:
+    """Overwrite ``/meta/schema_version`` after the bridge wrote it.
+
+    The bridge stamps :data:`SCHEMA_VERSION` (currently ``"2.1.0"``) so
+    even bridge-only files declare the post-Phase-8.5 schema; this is
+    a no-op when the bridge already wrote that exact version, but
+    guards against future drift between the constants.
+    """
+    if "meta" in f:
+        f["meta"].attrs["schema_version"] = schema_version
 
 
 # ---------------------------------------------------------------------------

@@ -387,7 +387,35 @@ def test_h5emitter_write_beam_integration_group(tmp_path) -> None:  # type: igno
         )
 
 
-def test_h5emitter_write_elements_grouped_by_type(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_h5emitter_standalone_write_omits_elements_group(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Phase 8.5: the bridge no longer owns `/elements/{type}`.
+
+    Standalone H5Emitter output is bridge-only and contains no
+    `/elements` group — that's broker territory now, written through
+    `apeSees.h5(path)` which composes the neutral zone before the
+    bridge layer runs.
+    """
+    import h5py
+    e = H5Emitter()
+    set_element_nodes(e, (1, 2))
+    e.element("forceBeamColumn", 10, 1, 2, 1, 1)
+    out = tmp_path / "ele.h5"
+    e.write(str(out))
+    with h5py.File(out, "r") as f:
+        assert "elements" not in f
+        # The OpenSees-specific args + cross-references land in
+        # the bridge's `/opensees/element_meta/{type}` zone (Phase
+        # 8.5 commit 5).
+        assert "opensees/element_meta/forceBeamColumn" in f
+
+
+def test_h5emitter_writes_element_meta_with_args(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """`/opensees/element_meta/{type}` carries ids + args tail.
+
+    Connectivity is dropped from the args dataset (it's in the
+    broker's `/elements/{gmsh_alias}/connectivity`); the bridge stores
+    only the parameter / cross-reference suffix.
+    """
     import h5py
     import numpy as np
     e = H5Emitter()
@@ -395,19 +423,15 @@ def test_h5emitter_write_elements_grouped_by_type(tmp_path) -> None:  # type: ig
     e.element("forceBeamColumn", 10, 1, 2, 1, 1)
     set_element_nodes(e, (2, 3))
     e.element("forceBeamColumn", 11, 2, 3, 1, 1)
-    set_element_nodes(e, (3, 4, 5, 6))
-    e.element("FourNodeTetrahedron", 12, 3, 4, 5, 6, 99)  # noqa
-    out = tmp_path / "ele.h5"
+    out = tmp_path / "em.h5"
     e.write(str(out))
     with h5py.File(out, "r") as f:
-        g_fbc = f["elements/forceBeamColumn"]
-        np.testing.assert_array_equal(g_fbc["ids"][:], [10, 11])
-        np.testing.assert_array_equal(
-            g_fbc["connectivity"][:], np.array([[1, 2], [2, 3]]),
-        )
-        g_tet = f["elements/FourNodeTetrahedron"]
-        np.testing.assert_array_equal(g_tet["ids"][:], [12])
-        assert g_tet["connectivity"].shape == (1, 4)
+        g = f["opensees/element_meta/forceBeamColumn"]
+        assert g.attrs["type"] == "forceBeamColumn"
+        np.testing.assert_array_equal(g["ids"][:], [10, 11])
+        # After dropping the 2 connectivity ints, the tail is
+        # (transf_tag, integration_tag) = (1, 1).
+        np.testing.assert_array_equal(g["args"][:], [[1.0, 1.0], [1.0, 1.0]])
 
 
 def test_h5emitter_write_time_series(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -546,8 +570,9 @@ def test_h5emitter_round_trip_minimal_column(tmp_path) -> None:  # type: ignore[
         # Transform + beamIntegration
         assert "opensees/transforms/PDelta_1" in f
         assert "opensees/beam_integration/Lobatto_1" in f
-        # Element (stays at root — neutral zone)
-        assert "elements/forceBeamColumn" in f
+        # /elements is broker territory post-Phase-8.5 — standalone
+        # H5Emitter output is bridge-only and does not include it.
+        assert "elements" not in f
         # BCs
         assert "opensees/bcs/fix" in f
         # Time series + pattern

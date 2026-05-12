@@ -49,9 +49,10 @@ def test_apesees_h5_writes_valid_file(tmp_path: Path) -> None:
         assert violations == [], violations
         # Required groups must be present.
         assert "meta" in model.handle
-        # The bridge fanned out into one PG ("Cols"), one element type
-        # ("forceBeamColumn"); the H5 deviation groups by type.
-        assert "elements/forceBeamColumn" in model.handle
+        # Phase 8.5: /elements is broker-owned and only emitted when
+        # apeSees.h5 sees a real FEMData.  This test uses a hand-rolled
+        # FEMStub (no `snapshot_id`, no PhysicalGroupSet), so the
+        # broker zone is skipped — the file is bridge-only.
         # Material + section + transform + beamIntegration round-tripped.
         mats = model.materials()
         assert "uniaxial" in mats

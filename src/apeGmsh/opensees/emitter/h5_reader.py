@@ -211,6 +211,128 @@ class H5Model:
             return None
         return _attrs_as_dict(a)
 
+    def element_meta(self) -> dict[str, dict[str, Any]]:
+        """Return ``{type_token: attrs}`` for ``/opensees/element_meta``.
+
+        Phase 8.5 added this OpenSees-specific element-metadata zone
+        (positional args, cross-references) alongside the broker's
+        neutral ``/elements/{gmsh_alias}`` group.  Companion to
+        :meth:`element_meta_arrays` for the actual datasets.
+        """
+        return self._group_attrs_map("opensees/element_meta")
+
+    def element_meta_arrays(self, type_token: str) -> dict[str, Any]:
+        """Return ``{ids, args, args_str?}`` for one element-meta group.
+
+        Raises ``KeyError`` if the type group is missing.
+        """
+        sub = self._f[f"opensees/element_meta/{type_token}"]
+        out: dict[str, Any] = {"ids": sub["ids"][:]}
+        if "args" in sub:
+            out["args"] = sub["args"][:]
+        if "args_str" in sub:
+            out["args_str"] = sub["args_str"][:]
+        return out
+
+    # -- Neutral-zone reads (Phase 8.5) ---------------------------------
+
+    def nodes(self) -> dict[str, Any]:
+        """Return ``{ids, coords}`` for ``/nodes`` (empty dict if absent).
+
+        ``ids`` is a 1-D int64 array; ``coords`` is ``(N, 3)`` float64.
+        """
+        g = self._f.get("nodes")
+        if g is None:
+            return {}
+        return {
+            "ids": g["ids"][:],
+            "coords": g["coords"][:],
+        }
+
+    def element_arrays(self, type_name: str) -> dict[str, Any]:
+        """Return ``{ids, connectivity}`` for one ``/elements/{type}`` group.
+
+        Companion to :meth:`elements` (which exposes only attrs).
+        Raises ``KeyError`` if the type group is missing.
+        """
+        sub = self._f[f"elements/{type_name}"]
+        out: dict[str, Any] = {"ids": sub["ids"][:]}
+        if "connectivity" in sub:
+            out["connectivity"] = sub["connectivity"][:]
+        return out
+
+    def physical_groups(self) -> dict[str, dict[str, Any]]:
+        """Return root-level ``/physical_groups`` shape.
+
+        Each entry is ``{dim, tag, name, node_ids, node_coords,
+        element_ids?}`` — ``element_ids`` is present only for dim>=1
+        groups.  Empty dict if ``/physical_groups`` is absent.
+        """
+        return self._read_named_index("physical_groups")
+
+    def labels(self) -> dict[str, dict[str, Any]]:
+        """Return root-level ``/labels`` shape (same fields as :meth:`physical_groups`)."""
+        return self._read_named_index("labels")
+
+    def constraints(self) -> dict[str, Any]:
+        """Return ``{kind: compound_array}`` for ``/constraints/{kind}``.
+
+        Each value is the raw compound h5py dataset content (the
+        symmetric ``target_kind`` / ``target`` / ``payload_kind`` /
+        ``payload`` rows from :mod:`apeGmsh.mesh._record_h5`).  Empty
+        dict if no ``/constraints`` group is present.
+        """
+        g = self._f.get("constraints")
+        if g is None:
+            return {}
+        return {kind: g[kind][:] for kind in g}
+
+    def loads(self) -> dict[str, dict[str, Any]]:
+        """Return ``{kind: {pattern: compound_array}}`` for ``/loads``.
+
+        Kinds are ``"nodal"``, ``"element"``, ``"sp"`` — each maps to
+        a per-pattern dict of compound arrays.  Empty dict if no
+        ``/loads`` group is present.
+        """
+        g = self._f.get("loads")
+        if g is None:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for kind in g:
+            sub = g[kind]
+            out[kind] = {pat: sub[pat][:] for pat in sub}
+        return out
+
+    def masses(self) -> Any:
+        """Return the ``/masses`` compound array, or ``None`` if absent."""
+        ds = self._f.get("masses")
+        if ds is None:
+            return None
+        return ds[:]
+
+    def _read_named_index(
+        self, group_name: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Walk a root-level named index (``physical_groups`` or ``labels``).
+
+        Each child group becomes one entry in the returned dict.
+        """
+        parent = self._f.get(group_name)
+        if parent is None:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for sub_name in parent:
+            sub = parent[sub_name]
+            entry: dict[str, Any] = _attrs_as_dict(sub)
+            if "node_ids" in sub:
+                entry["node_ids"] = sub["node_ids"][:]
+            if "node_coords" in sub:
+                entry["node_coords"] = sub["node_coords"][:]
+            if "element_ids" in sub:
+                entry["element_ids"] = sub["element_ids"][:]
+            out[sub_name] = entry
+        return out
+
     def _group_attrs_map(
         self, group: str,
     ) -> dict[str, dict[str, Any]]:
