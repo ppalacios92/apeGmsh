@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ...solvers._recorder_emit import emit_logical, to_ops_args
+from ..spec._emit import emit_logical, to_ops_args
 
 if TYPE_CHECKING:
     from ...solvers._recorder_specs import ResolvedRecorderSpec

@@ -385,7 +385,7 @@ class ResolvedRecorderSpec:
             ``"out"`` (text) or ``"xml"`` (self-describing). Defaults
             to text.
         """
-        from ._recorder_emit import emit_spec_tcl
+        from ..results.spec._emit import emit_spec_tcl
         return emit_spec_tcl(
             self.records, output_dir=output_dir, file_format=file_format,
         )
@@ -394,7 +394,7 @@ class ResolvedRecorderSpec:
         self, *, output_dir: str = "", file_format: str = "out",
     ) -> list[str]:
         """Emit ``ops.recorder(...)`` Python call lines."""
-        from ._recorder_emit import emit_spec_python
+        from ..results.spec._emit import emit_spec_python
         return emit_spec_python(
             self.records, output_dir=output_dir, file_format=file_format,
         )
@@ -416,7 +416,7 @@ class ResolvedRecorderSpec:
         ``n_steps``, or every step (no ``-T`` flag). MPCO's ``-T``
         accepts both ``dt`` and ``nsteps`` (per the mpco-recorder skill).
         """
-        from ._recorder_emit import emit_mpco_tcl
+        from ..results.spec._emit import emit_mpco_tcl
         return emit_mpco_tcl(
             self.records, output_dir=output_dir, filename=filename,
         )
@@ -425,7 +425,7 @@ class ResolvedRecorderSpec:
         self, *, output_dir: str = "", filename: str = "run.mpco",
     ) -> str:
         """Emit the single ``ops.recorder('mpco', ...)`` Python call."""
-        from ._recorder_emit import emit_mpco_python
+        from ..results.spec._emit import emit_mpco_python
         return emit_mpco_python(
             self.records, output_dir=output_dir, filename=filename,
         )

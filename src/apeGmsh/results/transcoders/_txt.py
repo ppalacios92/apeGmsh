@@ -35,7 +35,7 @@ import numpy as np
 from numpy import ndarray
 
 if TYPE_CHECKING:
-    from ...solvers._recorder_emit import LogicalRecorder
+    from ..spec._emit import LogicalRecorder
 
 
 def parse_node_file(

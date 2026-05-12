@@ -58,7 +58,7 @@ from ...opensees._response_catalog import (
     unflatten,
     unflatten_nodal,
 )
-from ...solvers._recorder_emit import (
+from ..spec._emit import (
     _DEFERRED_CATEGORIES,
     emit_logical,
     line_station_gpx_path,
@@ -1009,7 +1009,7 @@ def _all_shape_equivalent(
 
 def _canonical_to_node_ops(canonical: str) -> tuple[str, int] | None:
     """Forward the emit module's mapping (no separate table)."""
-    from ...solvers._recorder_emit import (
+    from ..spec._emit import (
         _NODAL_PREFIX_TABLE, _NODAL_SCALAR_TABLE,
         _AXIS_TO_TRANS_DOF, _AXIS_TO_ROT_DOF,
     )

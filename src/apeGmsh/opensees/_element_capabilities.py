@@ -1,11 +1,17 @@
 """
-Element specification data for the OpenSees bridge.
+Element capability map for the OpenSees bridge.
 
 Contains ``_ElemSpec`` dataclass, ``_ELEM_REGISTRY`` dictionary mapping
 OpenSees element names to their mesh/material requirements, and the
 Tcl/Python command renderers.
 
-Extracted from OpenSees.py to reduce file size.
+Lives next to :mod:`apeGmsh.opensees._response_catalog` because the
+registry is OpenSees-class metadata that the bridge owns.  The recorder
+declaration helper consults it during ``Recorders.resolve(...)`` to
+validate per-element capability flags (``has_gauss``, ``has_fibers``,
+``has_layers``, ``has_line_stations``, ``has_nodal_forces``).
+
+Relocated from ``apeGmsh.solvers._element_specs`` in Phase 8.3b.
 """
 from __future__ import annotations
 

@@ -36,7 +36,7 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ...solvers._recorder_emit import mpco_ops_args
+from ..spec._emit import mpco_ops_args
 
 if TYPE_CHECKING:
     from ...solvers._recorder_specs import ResolvedRecorderSpec
