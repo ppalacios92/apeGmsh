@@ -15,9 +15,9 @@ Execution decisions:
 * **OpenSees is exercised natively** — notebooks call ``openseespy``
   directly (``ops.node``, ``ops.element``, ``ops.fix``,
   ``ops.analyze``, …). apeGmsh is used only for geometry, meshing,
-  physical-group tagging, and the ``FEMData`` broker. The
-  ``g.opensees.*`` composite is intentionally skipped so learners
-  see the solver calls explicitly.
+  physical-group tagging, and the ``FEMData`` broker. The legacy
+  ``g.opensees.*`` composite (removed in the Phase β teardown) is
+  not used, so learners see the solver calls explicitly.
 
 This document is the planning spec for a structured learning path
 through apeGmsh, OpenSees-first. Every example ends with
@@ -201,8 +201,8 @@ what to expect:
 6. **OpenSees ingest + analysis** — **native** ``openseespy`` calls
    (``ops.node``, ``ops.element``, ``ops.fix``, ``ops.load``), driven
    by ``fem.nodes.get(...)`` / ``fem.elements.get(...)`` iteration
-   over the ``FEMData`` broker. The apeGmsh OpenSees composite
-   (``g.opensees.*``) is **not** used in the curriculum — every
+   over the ``FEMData`` broker. The legacy apeGmsh OpenSees composite
+   (``g.opensees.*``) was removed in the Phase β teardown — every
    notebook shows what the underlying openseespy calls look like.
 7. **Result extraction** — pull the specific number the problem
    statement named, compute error vs the analytical/benchmark
