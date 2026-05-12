@@ -31,6 +31,7 @@ from ._planes import (
     plane_horizontal,
     plane_vertical,
 )
+from ._polygons import bounding_polygon_from_physical_surface
 from ._sweeps import SectionSweepDef
 from ._tag_map import FemToOpsTagMap
 
@@ -43,4 +44,5 @@ __all__ = [
     "plane_from_three_points",
     "plane_from_coords",
     "plane_from_physical_surface",
+    "bounding_polygon_from_physical_surface",
 ]

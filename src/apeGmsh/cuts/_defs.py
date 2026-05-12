@@ -233,6 +233,7 @@ class SectionCutDef:
         normal_hint: Iterable[float] | np.ndarray | None = None,
         tol: float = 1e-6,
         bounding_polygon: PolyVerts | None = None,
+        with_bounding: bool = False,
     ) -> "SectionCutDef":
         """Build a cut where the plane is derived from one PG and the
         element filter from another.
@@ -261,12 +262,30 @@ class SectionCutDef:
             Pass-through. If ``label`` is omitted, an auto-label
             ``"plane=<plane_pg>, elements=<elements_pg>"`` is set for
             traceability in plots / logs.
+        with_bounding:
+            When ``True``, auto-derive a convex bounding polygon from
+            ``plane_pg``'s node convex hull (see
+            :func:`bounding_polygon_from_physical_surface`). Mutually
+            exclusive with passing ``bounding_polygon`` explicitly —
+            raises ``ValueError`` if both are set.
         """
         from ._planes import plane_from_physical_surface
 
         plane = plane_from_physical_surface(
             fem, plane_pg, tol=tol, normal_hint=normal_hint,
         )
+
+        if with_bounding:
+            if bounding_polygon is not None:
+                raise ValueError(
+                    "Pass either bounding_polygon=... OR "
+                    "with_bounding=True, not both."
+                )
+            from ._polygons import bounding_polygon_from_physical_surface
+            bounding_polygon = bounding_polygon_from_physical_surface(
+                fem, plane_pg, tol=tol, normal_hint=normal_hint,
+            )
+
         return cls.from_plane_and_pg(
             plane=plane,
             elements_pg=elements_pg,
