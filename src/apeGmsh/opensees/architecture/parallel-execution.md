@@ -64,6 +64,8 @@ and the sync points where the slices come together.
 
 ## Phase 0 — Foundation (must land FIRST)
 
+✅ **Landed** in [PR #110](https://github.com/nmorabowen/apeGmsh/pull/110) (bundled squash for Phases 0–3).
+
 **Critical gate: every agent in later phases is blocked until Phase 0 is merged.**
 This is the load-bearing layer. Two coordinated agents max — preferably one.
 
@@ -164,6 +166,8 @@ tests/opensees/
 
 ## Phase 1 — Primitive families (parallel)
 
+✅ **Landed** in [PR #110](https://github.com/nmorabowen/apeGmsh/pull/110) (bundled with Phases 0–3).
+
 Four agents, four files. Each agent owns one family end-to-end:
 typed classes + namespace methods + unit tests + contract list
 update.
@@ -232,6 +236,8 @@ designed.
 
 ## Phase 2 — Elements (parallel after Phase 1)
 
+✅ **Landed** in [PR #110](https://github.com/nmorabowen/apeGmsh/pull/110) (bundled with Phases 0–3). `joint.py` deferred — the actual delivery shipped five element files instead of six.
+
 Six files in `element/`. Multiple agents possible — each takes one
 or two files:
 
@@ -251,6 +257,8 @@ method** (apeGmsh-native return type, mirroring
 ElementGroup; Phase 5 expands it with capabilities.
 
 ## Phase 3 — Patterns / recorders / analysis (parallel)
+
+✅ **Landed** in [PR #110](https://github.com/nmorabowen/apeGmsh/pull/110) (bundled with Phases 0–3).
 
 Three independent slices, after primitives stabilize.
 
@@ -285,6 +293,8 @@ file is small.
 
 ## Phase 4 — Concrete emitters (parallel)
 
+✅ **Landed** in [PR #112](https://github.com/nmorabowen/apeGmsh/pull/112) — includes the **Phase 4.5** follow-up that introduced the `BeamIntegration` primitive family (replacing the old `forceBeamColumn(section=, n_ip=)` shape, which modern openseespy rejects).
+
 After Phase 3, three files:
 
 | File | Agent | Notes |
@@ -297,6 +307,8 @@ Each agent ships their emitter + parity tests for the model
 fixtures.
 
 ## Phase 5 — Aggregates
+
+✅ **5A landed** in [PR #114](https://github.com/nmorabowen/apeGmsh/pull/114). **5B (ElementGroup capabilities) not yet started.**
 
 Two slices:
 
@@ -313,12 +325,16 @@ Capabilities on the existing `ElementGroup` from Phase 2:
 
 ## Phase 6 — H5Emitter
 
+✅ **Landed** in [PR #115](https://github.com/nmorabowen/apeGmsh/pull/115) (nine sub-commits, `phase-6a` through `phase-6i`). Subsequently extended through Phases 8.4–8.6 (zone reshuffle under `/opensees/`, broker-side neutral zone composition, FEM↔OpenSees tag map) — schema is currently `2.2.0`.
+
 After everything else stabilizes. One agent, one file:
 `emitter/h5.py`. Implements the schema in [h5-schema.md](h5-schema.md).
 Ships test fixtures listed in
 [viewer-integration.md](viewer-integration.md).
 
 ## Phase 7 — Recipes (off critical path)
+
+**Not started.** Off the critical path; Phase 1 has shipped, so this is unblocked whenever a recipe is needed.
 
 Can start any time after Phase 1. Recipes are pure composition;
 they don't unlock other phases.
@@ -330,6 +346,8 @@ they don't unlock other phases.
 | `RC_Beam` | Materials + Sections |
 
 ## Phase 8 — Untangle `apeGmsh.solvers`
+
+✅ **Sub-phases 8.0 through 8.6 landed** (PRs [#119](https://github.com/nmorabowen/apeGmsh/pull/119), [#121](https://github.com/nmorabowen/apeGmsh/pull/121), [#123](https://github.com/nmorabowen/apeGmsh/pull/123), [#130](https://github.com/nmorabowen/apeGmsh/pull/130), [#134](https://github.com/nmorabowen/apeGmsh/pull/134), [#140](https://github.com/nmorabowen/apeGmsh/pull/140), [#141](https://github.com/nmorabowen/apeGmsh/pull/141), [#143](https://github.com/nmorabowen/apeGmsh/pull/143)). **8.7 (viewer migration off FEMData/solvers) and 8.8 (delete `solvers/`) still ahead.**
 
 Originally framed as "apps migrate" — too small a frame. The
 realized scope is broader: relocate records to the broker, move

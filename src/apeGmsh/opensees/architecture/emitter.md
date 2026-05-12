@@ -2,8 +2,8 @@
 
 The emitter is the single seam between **what to emit** (typed
 primitives) and **where it goes** (Tcl text, openseespy script,
-live `ops` domain). Three concrete emitters share one Protocol; a
-fourth captures calls for tests.
+live `ops` domain, HDF5 archive). Four concrete emitters share one
+Protocol; a fifth captures calls for tests.
 
 ## The Protocol (frozen interface)
 
@@ -70,13 +70,14 @@ genuinely take variable-length tail args. **This is allowed by P12
 because the boundary is internal** — primitives are typed; emitters
 speak OpenSees vocabulary; users never see this surface.
 
-## The three concrete emitters
+## The four concrete emitters
 
 | Class | File | Job |
 |---|---|---|
 | `LiveOpsEmitter` | `emitter/live.py` | Calls `ops.X(...)` directly. Only emitter that imports `openseespy.opensees`. |
 | `TclEmitter` | `emitter/tcl.py` | Accumulates Tcl strings. `pattern_open` writes `pattern Plain N tsTag {`; `pattern_close` writes `}`. `vecxz` rendered inline as space-separated. |
 | `PyEmitter` | `emitter/py.py` | Accumulates `ops.X(...)` strings. `pattern_open` writes `ops.timeSeries(...)` (if needed) then `ops.pattern(...)`; `pattern_close` is a no-op. |
+| `H5Emitter` | `emitter/h5.py` | Buffers structured records and writes the `/opensees/...` zone of an HDF5 archive (the bridge enrichment). See [h5-schema.md](h5-schema.md) for the on-disk format; reference reader at `emitter/h5_reader.py`. |
 | `RecordingEmitter` | `emitter/recording.py` | Captures every method call as `(name, args, kwargs)`. Test fixture only — never written to disk. |
 
 ## Where divergences live
@@ -116,12 +117,14 @@ order:
 3. `OpenSees` on `$PATH`
 4. Raise with a clear error referencing all three.
 
-## Why split now if implementation is deferred
+## Why we locked the Protocol first
 
 The Protocol shape is **load-bearing** for every primitive's `_emit`
-method. Lock the Protocol now; implement concrete emitters later. Once
-`Steel02._emit` calls `emitter.uniaxialMaterial("Steel02", tag, ...)`,
-that signature can't change without rippling through every primitive.
+method. We locked the Protocol in Phase 0, then implemented the
+concrete emitters one by one. Once `Steel02._emit` calls
+`emitter.uniaxialMaterial("Steel02", tag, ...)`, that signature can't
+change without rippling through every primitive — so the Protocol is
+treated as frozen and any addition is an architecture event.
 
 ## Adding a new emit target
 

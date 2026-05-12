@@ -2,47 +2,46 @@
 
 ```
 apeGmsh/opensees/
-├── __init__.py             public exports: apeSees, plus convenience re-exports
-├── apesees.py              the apeSees class (the bridge)
+├── __init__.py             public exports: apeSees, Node, NodeSet,
+│                           Cartesian / Cylindrical / Spherical
+├── apesees.py              the apeSees class (the bridge) + BuiltModel
+├── node.py                 Node, NodeSet — FEM-aware aggregator over fem.nodes
 │
 ├── element/                element primitives — flattened across OpenSees subfolders
-│     beam_column.py        ElasticBeamColumn (2d/3d/Warping/Timoshenko),
-│                           ForceBeamColumn, DispBeamColumn, CatenaryCable
+│     beam_column.py        elasticBeamColumn, forceBeamColumn, dispBeamColumn,
+│                           ElasticTimoshenkoBeam, CatenaryCable
 │     truss.py              Truss, CorotTruss, InertiaTruss
 │     shell.py              ShellMITC3, ShellMITC4, ShellDKGQ, ASDShellQ4, ASDShellT3
 │     solid.py              FourNodeTetrahedron, TenNodeTetrahedron, stdBrick,
 │                           bbarBrick, SSPbrick, FourNodeQuad, Tri31, SSPquad
 │     zero_length.py        ZeroLength, ZeroLengthSection, ZeroLengthContact
-│     joint.py              Joint2D, Joint3D
 │
 ├── material/
 │     uniaxial.py           Steel01, Steel02, ASDSteel1D, Concrete01, Concrete02,
 │                           ASDConcrete1D, Hysteretic, ElasticMaterial, ENT, Cable, ...
 │     nd.py                 ElasticIsotropic, J2Plasticity, DruckerPrager,
 │                           PressureIndepMultiYield, PM4Sand, ASDConcrete3D, ...
-│     yield_surface.py      (rare; brought in only when a model needs it)
 │
 ├── section/                separated from material (see ADR 0004)
 │     fiber.py              Fiber, GeneralFiberSection
-│     plate.py              ElasticMembranePlateSection, ElasticShellSection,
-│                           LayeredShell, LayeredShellFiberSection
+│     plate.py              ElasticMembranePlateSection, LayeredShell,
+│                           LayeredShellFiberSection
 │     beam.py               ElasticSection (1-D scalar A,E,G,J,Iy,Iz wrapper)
-│     aggregator.py         Aggregator, Parallel
+│     _tag_resolver.py      internal helper for cross-section tag refs
 │
 ├── transform.py            Linear, PDelta, Corotational
-│                           (csys.Cartesian / Cylindrical / Spherical re-exported)
+├── integration.py          beamIntegration rules — Lobatto, Legendre, NewtonCotes,
+│                           Radau, Trapezoidal + HingeRadau, HingeRadauTwo,
+│                           HingeMidpoint, HingeEndpoint
 │
 ├── pattern/
-│     pattern.py            Plain, UniformExcitation, MultiSupport, Earthquake
+│     pattern.py            Plain, UniformExcitation, MultiSupport
 │
 ├── time_series/            separated from pattern (OpenSees lumps; we don't)
 │     time_series.py        Linear, Constant, Path, Trig, Pulse,
 │                           ASCE41Protocol, FEMA461Protocol, ATC24Protocol
 │
-├── load/                   mostly internal — concrete element-load shapes
-│     beam_load.py          Beam2dPointLoad, Beam2dUniformLoad, Beam3dPointLoad, ...
-│
-├── recorder.py             Node, Element, MPCO — surfaces existing Recorders system
+├── recorder.py             Node, Element, MPCO — typed recorder primitives
 │
 ├── analysis/
 │     constraint_handler.py Plain, Penalty, Transformation, Lagrange, Auto
@@ -57,22 +56,45 @@ apeGmsh/opensees/
 │                           Newmark, HHT, CentralDifference, ExplicitDifference
 │     analysis.py           Static, Transient, VariableTransient
 │
-├── recipes/                higher-level builders (off the core path)
-│     section_recipes.py    RectangularConfinedColumn, IShape, RC_Beam, ...
-│     element_recipes.py    (rare, but allowed)
-│
 ├── emitter/
 │     base.py               Emitter (Protocol) — frozen interface
 │     live.py               LiveOpsEmitter
 │     tcl.py                TclEmitter
 │     py.py                 PyEmitter
+│     h5.py                 H5Emitter — writes /opensees/... bridge enrichment
+│     h5_reader.py          reference reader for model.h5
 │     recording.py          RecordingEmitter (test fixture)
 │
+├── _csys.py                Cartesian, Cylindrical, Spherical (re-exported through
+│                           __init__.py; relocated from solvers in Phase 8.2)
+├── _response_catalog.py    OpenSees element → response-class map; also consumed
+│                           by apeGmsh.results (one-way dep, Phase 8.3a)
+├── _element_capabilities.py  per-element capability metadata (Phase 8.3b)
+│
 ├── _internal/              not part of the public API
+│     types.py              base classes — Primitive, UniaxialMaterial, Section, ...
 │     tag_allocator.py      TagAllocator
-│     build.py              run_build()  — replaces solvers/_opensees_build.py
-│     ns.py                 namespace classes (_UniaxialMaterialNS, etc.)
-│     types.py              shared Protocol / TypeVar definitions
+│     tag_resolution.py     side-channel helpers (set_element_nodes,
+│                           set_tag_resolver, set_current_fem_element_id)
+│     registry.py           type-token → class registry
+│     build.py              bridge fan-out: emit_element_spec, emit_transform_specs,
+│                           emit_pattern_spec, emit_recorder_spec, topological_order
+│     ns/                   namespace classes (one file per family)
+│           uniaxial.py     _UniaxialMaterialNS
+│           nd.py           _NDMaterialNS
+│           section.py      _SectionNS
+│           geom_transf.py  _GeomTransfNS
+│           beam_integration.py    _BeamIntegrationNS
+│           time_series.py  _TimeSeriesNS
+│           pattern.py      _PatternNS
+│           element.py      _ElementNS
+│           recorder.py     _RecorderNS
+│           analysis.py     _ConstraintsNS, _NumbererNS, _SystemNS, _TestNS,
+│                           _AlgorithmNS, _IntegratorNS, _AnalysisNS
+│
+├── recipes/                higher-level builders — PLANNED (Phase 7, not yet
+│                           implemented). When landed: RectangularConfinedColumn,
+│                           IShape, RC_Beam, etc.
 │
 └── architecture/           this folder
 ```

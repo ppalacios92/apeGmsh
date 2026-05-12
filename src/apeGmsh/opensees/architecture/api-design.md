@@ -49,6 +49,11 @@ ops
 │    .Linear(*, csys=None)                  → Linear
 │    .PDelta(*, csys=None)                  → PDelta
 │    .Corotational(*, csys=None)            → Corotational
+├─ beamIntegration             (namespace)
+│    .Lobatto(*, section, n_ip)             → Lobatto
+│    .Legendre / .NewtonCotes / .Radau / .Trapezoidal (same shape)
+│    .HingeRadau(*, secI, lpI, secJ, lpJ, secE)        → HingeRadau
+│    .HingeRadauTwo / .HingeMidpoint / .HingeEndpoint (same shape)
 ├─ timeSeries                  (namespace)
 │    .Linear(*, factor=1.0)                 → Linear
 │    .Path(*, file=None, values=None, dt=None, factor=1.0)  → Path

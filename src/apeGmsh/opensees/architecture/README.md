@@ -52,9 +52,15 @@ to the broker, make model.h5 the canonical model database), see
 
 ## Status
 
-**Phase: design.** No primitive code, no `apeSees` class, no emitters
-yet. The legacy `apeGmsh.solvers` package remains the production path
-until skeletons land in this package and migration begins.
+**Phase 8.6 landed (May 2026).** The bridge is in production: 81 typed
+primitives, four concrete emitters (Tcl, Py, Live, H5) plus
+`RecordingEmitter` for tests, the `apeSees` class, and the `model.h5`
+dual-zone schema (currently 2.2.0). See
+[phase-8-untangle.md](phase-8-untangle.md) for the active Phase 8 arc
+— 8.0 through 8.6 have shipped; 8.7 (viewer migration) and 8.8
+(`solvers/` deletion) still ahead. The legacy `apeGmsh.solvers`
+package coexists as a deprecation shim per
+[ADR 0009](decisions/0009-no-backwards-compat-with-solvers.md).
 
 ## TL;DR
 
@@ -73,8 +79,9 @@ core  = ops.uniaxialMaterial.Concrete02(
 )
 sec   = ops.section.Fiber(patches=[...], fibers=[...], GJ=1e9)
 trans = ops.geomTransf.PDelta(csys=Cartesian())
+integ = ops.beamIntegration.Lobatto(section=sec, n_ip=5)
 
-ops.element.forceBeamColumn(pg="Cols", section=sec, transf=trans, n_ip=5)
+ops.element.forceBeamColumn(pg="Cols", transf=trans, integration=integ)
 ops.fix(pg="Base", dofs=(1, 1, 1, 1, 1, 1))
 
 with ops.pattern.Plain(series=ops.timeSeries.Linear()) as p:
