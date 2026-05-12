@@ -14,9 +14,9 @@ Algorithm
    fit normal. Mirrors STKO_to_python's convention: ``e1`` is the cross
    product of the normal and the most-perpendicular global axis.
 3. Project all PG nodes to 2-D plane coords.
-4. Take the convex hull via Andrew's monotone-chain algorithm. No
-   scipy — keeps ``apeGmsh.cuts`` runnable without optional plotting
-   dependencies.
+4. Take the convex hull via :class:`scipy.spatial.ConvexHull`. Lazy-
+   imported so the rest of the cuts package stays scipy-free; only
+   :func:`bounding_polygon_from_physical_surface` needs it.
 5. Re-embed the hull vertices in 3-D from the plane basis. Vertices lie
    exactly on the plane (no projection residual).
 
@@ -80,56 +80,60 @@ def _embed_from_basis(
 
 
 # ---------------------------------------------------------------------- #
-# Convex hull (Andrew's monotone chain)
+# Convex hull (scipy.spatial.ConvexHull, lazy-imported)
 # ---------------------------------------------------------------------- #
 def _convex_hull_2d_ccw(points: np.ndarray) -> np.ndarray:
-    """Andrew's monotone-chain convex hull.
+    """Convex hull of 2-D points, vertices returned in CCW order.
 
-    Returns hull vertices in CCW order, no duplicate start/end vertex.
+    Wraps :class:`scipy.spatial.ConvexHull`. Lazy import keeps the
+    rest of the cuts package usable without scipy; only the bounding-
+    polygon path needs it.
 
     Raises
     ------
+    ImportError
+        scipy is not installed. The message points users to
+        ``pip install apeGmsh[plot]`` (the existing extra that bundles
+        scipy + matplotlib) or plain ``pip install scipy``.
     ValueError
-        Fewer than 3 distinct points (after dedup) — no hull defined.
-        Includes the case of all-collinear inputs (which yields ≤2
-        non-duplicate hull endpoints).
+        Fewer than 3 distinct points (after dedup), or the points are
+        collinear / degenerate (qhull raises, we re-wrap as
+        ``ValueError``).
     """
+    try:
+        from scipy.spatial import ConvexHull, QhullError
+    except ImportError as exc:
+        raise ImportError(
+            "Convex-hull-based bounding-polygon derivation requires "
+            "scipy. Install with `pip install apeGmsh[plot]` (the extra "
+            "that bundles scipy + matplotlib) or plain `pip install scipy`."
+        ) from exc
+
     pts = np.unique(points, axis=0)
     if pts.shape[0] < 3:
         raise ValueError(
             f"Convex hull needs at least 3 distinct points; got {pts.shape[0]}."
         )
-    # Lex sort by (x, then y).
-    pts = pts[np.lexsort((pts[:, 1], pts[:, 0]))]
-
-    def _cross(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
-        return float(
-            (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-        )
-
-    # Lower hull (left → right).
-    lower: list[np.ndarray] = []
-    for p in pts:
-        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-
-    # Upper hull (right → left).
-    upper: list[np.ndarray] = []
-    for p in pts[::-1]:
-        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-
-    # Drop each half's last vertex (== other half's first) so we don't
-    # repeat the seam.
-    hull = lower[:-1] + upper[:-1]
-    if len(hull) < 3:
+    # Pre-check collinearity so the user sees a clear message instead
+    # of qhull's "input appears to be less than 2 dimensional" precision
+    # error. Rank of the mean-centred points is 2 iff the points span
+    # the plane.
+    centered = pts - pts.mean(axis=0)
+    if np.linalg.matrix_rank(centered, tol=1e-9) < 2:
         raise ValueError(
-            "Convex hull degenerated to fewer than 3 vertices — input "
-            "points are likely collinear."
+            "2-D convex hull is undefined: input points are collinear."
         )
-    return np.asarray(hull, dtype=float)
+    try:
+        hull = ConvexHull(pts)
+    except QhullError as exc:
+        # Other qhull failures (extreme degeneracy, numerical edge
+        # cases) — surface the message but keep ValueError as the type.
+        raise ValueError(
+            f"Could not compute 2-D convex hull (qhull): {exc}"
+        ) from exc
+
+    # ConvexHull.vertices is in CCW order for 2-D inputs.
+    return pts[hull.vertices]
 
 
 # ---------------------------------------------------------------------- #

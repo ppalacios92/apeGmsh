@@ -153,6 +153,28 @@ def test_convex_hull_too_few_distinct_raises():
         _convex_hull_2d_ccw(pts)
 
 
+def test_convex_hull_missing_scipy_raises_clean_error(monkeypatch):
+    """If scipy isn't installed, the hull function must raise
+    ImportError with the install hint — not a cryptic
+    ModuleNotFoundError."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "scipy" or name.startswith("scipy."):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    pts = np.array([
+        [0.0, 0.0], [1.0, 0.0], [0.0, 1.0],
+    ])
+    with pytest.raises(ImportError, match=r"scipy"):
+        _convex_hull_2d_ccw(pts)
+
+
 # --------------------------------------------------------------------- #
 # Plane basis + projection round-trip
 # --------------------------------------------------------------------- #
