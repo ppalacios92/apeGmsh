@@ -32,6 +32,7 @@ from ._planes import (
     plane_vertical,
 )
 from ._polygons import bounding_polygon_from_physical_surface
+from ._preflight import PreflightError, PreflightIssue, PreflightReport
 from ._sweeps import SectionSweepDef
 from ._tag_map import FemToOpsTagMap
 
@@ -39,6 +40,9 @@ __all__ = [
     "SectionCutDef",
     "SectionSweepDef",
     "FemToOpsTagMap",
+    "PreflightError",
+    "PreflightIssue",
+    "PreflightReport",
     "plane_horizontal",
     "plane_vertical",
     "plane_from_three_points",
