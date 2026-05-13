@@ -71,6 +71,65 @@ class _GroupResultView:
         return len(self._groups) > 0
 
 
+class _NodeLabelsStub:
+    """Stand-in for ``fem.nodes.labels`` — exposes ``node_ids(name)``."""
+
+    def __init__(self, label_to_ids: dict[str, list[int]]) -> None:
+        self._labels = {k: list(v) for k, v in label_to_ids.items()}
+
+    def node_ids(self, name: str) -> ndarray:
+        if name not in self._labels:
+            raise KeyError(
+                f"node label {name!r} not in fixture; have "
+                f"{sorted(self._labels.keys())}"
+            )
+        return np.asarray(self._labels[name], dtype=np.int64)
+
+
+class _ElementLabelsStub:
+    """Stand-in for ``fem.elements.labels`` — exposes ``element_ids(name)``."""
+
+    def __init__(self, label_to_ids: dict[str, list[int]]) -> None:
+        self._labels = {k: list(v) for k, v in label_to_ids.items()}
+
+    def element_ids(self, name: str) -> ndarray:
+        if name not in self._labels:
+            raise KeyError(
+                f"element label {name!r} not in fixture; have "
+                f"{sorted(self._labels.keys())}"
+            )
+        return np.asarray(self._labels[name], dtype=np.int64)
+
+
+class _MeshSelectionStub:
+    """Stand-in for ``fem.mesh_selection`` — exposes ``node_ids`` and
+    ``element_ids`` keyed by selection set name."""
+
+    def __init__(
+        self,
+        nodes: dict[str, list[int]] | None = None,
+        elements: dict[str, list[int]] | None = None,
+    ) -> None:
+        self._nodes = {k: list(v) for k, v in (nodes or {}).items()}
+        self._elements = {k: list(v) for k, v in (elements or {}).items()}
+
+    def node_ids(self, name: str) -> ndarray:
+        if name not in self._nodes:
+            raise KeyError(
+                f"node selection {name!r} not in fixture; have "
+                f"{sorted(self._nodes.keys())}"
+            )
+        return np.asarray(self._nodes[name], dtype=np.int64)
+
+    def element_ids(self, name: str) -> ndarray:
+        if name not in self._elements:
+            raise KeyError(
+                f"element selection {name!r} not in fixture; have "
+                f"{sorted(self._elements.keys())}"
+            )
+        return np.asarray(self._elements[name], dtype=np.int64)
+
+
 class _NodesStub:
     """Stand-in for :class:`apeGmsh.mesh.FEMData.NodeComposite`."""
 
@@ -79,11 +138,13 @@ class _NodesStub:
         ids: list[int],
         coords: list[tuple[float, float, float]],
         node_pgs: dict[str, list[int]],
+        labels: dict[str, list[int]] | None = None,
     ) -> None:
         self._ids = np.asarray(ids, dtype=np.int64)
         self._coords = np.asarray(coords, dtype=np.float64)
         self._id_to_idx = {int(n): i for i, n in enumerate(self._ids)}
         self._pgs = {k: list(v) for k, v in node_pgs.items()}
+        self.labels = _NodeLabelsStub(labels or {})
 
     @property
     def ids(self) -> ndarray:
@@ -130,8 +191,10 @@ class _ElementsStub:
     def __init__(
         self,
         elem_pgs: dict[str, _ElementGroupView],
+        labels: dict[str, list[int]] | None = None,
     ) -> None:
         self._pgs = dict(elem_pgs)
+        self.labels = _ElementLabelsStub(labels or {})
 
     def get(
         self,
@@ -161,9 +224,11 @@ class FEMStub:
         self,
         nodes: _NodesStub,
         elements: _ElementsStub,
+        mesh_selection: _MeshSelectionStub | None = None,
     ) -> None:
         self.nodes = nodes
         self.elements = elements
+        self.mesh_selection = mesh_selection
 
 
 def make_two_node_beam() -> FEMStub:
@@ -226,6 +291,47 @@ def make_two_column_frame() -> FEMStub:
         },
     )
     return FEMStub(nodes=nodes, elements=elements)
+
+
+def make_two_column_frame_with_labels_and_selection() -> FEMStub:
+    """Same geometry as :func:`make_two_column_frame`, plus apeGmsh
+    labels and a mesh_selection store.
+
+    Adds:
+      * node labels: ``"east_column"`` -> nodes 3, 4
+      * element labels: ``"east_column"`` -> element 2
+      * mesh_selection nodes: ``"upper_band"`` -> nodes 2, 4
+      * mesh_selection elements: ``"upper_band"`` -> elements 1, 2
+    """
+    nodes = _NodesStub(
+        ids=[1, 2, 3, 4],
+        coords=[
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 0.0, 1.0),
+        ],
+        node_pgs={"Base": [1, 3], "Top": [2, 4]},
+        labels={"east_column": [3, 4]},
+    )
+    elements = _ElementsStub(
+        elem_pgs={
+            "Cols": _ElementGroupView(
+                ids=(1, 2),
+                connectivity=((1, 2), (3, 4)),
+            ),
+        },
+        labels={"east_column": [2]},
+    )
+    mesh_selection = _MeshSelectionStub(
+        nodes={"upper_band": [2, 4]},
+        elements={"upper_band": [1, 2]},
+    )
+    return FEMStub(
+        nodes=nodes,
+        elements=elements,
+        mesh_selection=mesh_selection,
+    )
 
 
 def make_arch_with_orientation_fan_out() -> FEMStub:

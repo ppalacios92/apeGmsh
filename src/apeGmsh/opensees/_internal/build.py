@@ -759,24 +759,14 @@ def _emit_nodes_record(
     Resolves selectors (``pg``, ``label``, ``selection``, ``ids``) to
     a flat node-tag tuple, groups canonical components by their
     OpenSees recorder token, and emits one ``recorder Node`` call per
-    group.
+    canonical (``ops_token``, ``target_set``) group plus one extra
+    ``recorder Node`` per ``raw=`` token (with dofs defaulting to all
+    DOFs from ``decl.ndf``).
 
-    Phase 9 commit 3a supports ``pg=`` (single string or tuple) and
-    ``ids=`` only. Additional selectors land in commit 3b.
-
-    File path convention: ``<file_root>/<decl.name>__<record_name>__<token>.out``
-    when ``record.dt`` / ``record.n_steps`` is set; cadence flag emitted
-    when present. ``file_root`` is currently fixed at ``"."``; commit
-    3c adds explicit configuration.
+    File path convention:
+      * canonical: ``<file_root>/<decl.name>__<record_name>__<token>.out``
+      * raw: ``<file_root>/<decl.name>__<record_name>__raw_<token>.out``
     """
-    if record.raw:
-        raise NotImplementedError(
-            "RecorderRecord raw= escape hatch fan-out lands in Phase 9 "
-            "commit 3b along with the broader element-level support."
-        )
-
-    # Resolve target node IDs from selectors. Commit 3a supports
-    # pg= (already supported by the legacy bridge) and ids=.
     node_ids = _resolve_node_targets(record, fem)
     if not node_ids:
         return  # nothing to record — silent skip mirrors typed-primitive behavior
@@ -784,13 +774,12 @@ def _emit_nodes_record(
     # Group canonical components by ops token (e.g. "disp": (1, 2)).
     # Caller passes the translator to keep its import scoped to the
     # _emit_recorder_declaration function.
-    grouped = group(record.components)  # type: ignore[operator]
+    grouped = group(record.components) if record.components else {}  # type: ignore[operator]
     record_name = record.name or "default"
-    file_root = "."  # Phase 9 commit 3c will surface this kwarg.
 
     for ops_token, dofs in grouped.items():
-        file_path = (
-            f"{file_root}/{decl.name}__{record_name}__{ops_token}.out"
+        file_path = _recorder_file_path(
+            decl.file_root, decl.name, record_name, ops_token,
         )
         args: list[int | float | str] = ["-file", file_path]
         if record.dt is not None:
@@ -804,6 +793,25 @@ def _emit_nodes_record(
         args.append(ops_token)
         emitter.recorder("Node", *args)
 
+    # Raw escape hatch: one extra recorder Node per raw token. Dofs
+    # default to all DOFs (1..ndf) since raw tokens bypass the
+    # canonical→dof translation.
+    if record.raw:
+        all_dofs = tuple(range(1, decl.ndf + 1))
+        for raw_token in record.raw:
+            file_path = _recorder_file_path(
+                decl.file_root, decl.name, record_name,
+                f"raw_{_sanitize_raw_token(raw_token)}",
+            )
+            args = ["-file", file_path]
+            if record.dt is not None:
+                args += ["-dT", record.dt]
+            args += ["-time"]
+            args += ["-node", *node_ids]
+            args += ["-dof", *all_dofs]
+            args.append(raw_token)
+            emitter.recorder("Node", *args)
+
 
 def _resolve_node_targets(
     record: RecorderRecord, fem: "FEMData",
@@ -811,26 +819,77 @@ def _resolve_node_targets(
     """Resolve a node-category :class:`RecorderRecord`'s selectors to
     a flat tuple of node tags.
 
-    Phase 9 commit 3a supports ``pg=`` and ``ids=``; ``label=`` and
-    ``selection=`` land in commit 3c.
+    Supports ``ids=`` (mutex with named selectors) and the named
+    selectors ``pg=`` / ``label=`` / ``selection=`` (composable — the
+    resulting target sets are unioned and deduplicated, mirroring the
+    legacy ``Recorders`` helper semantics).
     """
     if record.ids is not None:
         return tuple(int(i) for i in record.ids)
-    if record.pg:
-        out: list[int] = []
-        seen: set[int] = set()
-        for pg_name in record.pg:
-            for tag in expand_pg_to_nodes(fem, pg_name):
-                if tag not in seen:
-                    seen.add(tag)
-                    out.append(tag)
-        return tuple(out)
-    if record.label or record.selection:
-        raise NotImplementedError(
-            "RecorderRecord label= / selection= selectors land in Phase 9 "
-            "commit 3c."
+
+    chunks: list[Iterable[int]] = []
+    for pg_name in record.pg:
+        chunks.append(expand_pg_to_nodes(fem, pg_name))
+    for label_name in record.label:
+        chunks.append(_expand_label_to_nodes(fem, label_name))
+    for sel_name in record.selection:
+        chunks.append(_expand_selection_to_nodes(fem, sel_name))
+
+    if not chunks:
+        return ()
+    out: list[int] = []
+    seen: set[int] = set()
+    for chunk in chunks:
+        for tag in chunk:
+            t = int(tag)
+            if t not in seen:
+                seen.add(t)
+                out.append(t)
+    return tuple(out)
+
+
+def _expand_label_to_nodes(fem: "FEMData", label_name: str) -> tuple[int, ...]:
+    """Return node IDs registered under ``label_name`` on ``fem.nodes.labels``.
+
+    Raises :class:`BridgeError` if the FEM snapshot exposes no labels
+    accessor (older fixtures) or the label name is unknown.
+    """
+    nodes_obj = getattr(fem, "nodes", None)
+    labels = getattr(nodes_obj, "labels", None) if nodes_obj is not None else None
+    if labels is None:
+        raise BridgeError(
+            f"label {label_name!r} requested but FEM snapshot has no "
+            f"nodes.labels accessor."
         )
-    return ()
+    try:
+        ids = labels.node_ids(label_name)
+    except (KeyError, ValueError) as e:
+        raise BridgeError(
+            f"node label {label_name!r} not found on FEM snapshot."
+        ) from e
+    return tuple(int(n) for n in ids)
+
+
+def _expand_selection_to_nodes(fem: "FEMData", sel_name: str) -> tuple[int, ...]:
+    """Return node IDs registered under ``sel_name`` on ``fem.mesh_selection``.
+
+    Raises :class:`BridgeError` if the FEM snapshot has no
+    ``mesh_selection`` store or the selection name is unknown.
+    """
+    store = getattr(fem, "mesh_selection", None)
+    if store is None:
+        raise BridgeError(
+            f"selection {sel_name!r} requested but FEM snapshot has no "
+            f"mesh_selection store (no post-mesh selections were declared "
+            f"on the session)."
+        )
+    try:
+        ids = store.node_ids(sel_name)
+    except (KeyError, ValueError) as e:
+        raise BridgeError(
+            f"node selection {sel_name!r} not found on FEM snapshot."
+        ) from e
+    return tuple(int(n) for n in ids)
 
 
 # ---------------------------------------------------------------------------
@@ -851,42 +910,72 @@ def _emit_element_level_record(
     Resolves selectors to element IDs, picks the OpenSees response
     phrase based on the record's components (via the catalog-driven
     ``element_record_response_tokens`` helper), and issues one
-    ``emitter.recorder("Element", ...)`` call.
+    ``emitter.recorder("Element", ...)`` call for the canonical group
+    plus one per ``raw=`` token.
 
-    Per Phase 9 commit 3b: ``label=``/``selection=``/``raw=``
-    selectors and the paired ``integrationPoints`` recorder for
-    ``line_stations`` land in commit 3c.
+    For ``line_stations`` records, also emits a paired
+    ``integrationPoints`` recorder writing to ``<file>_gpx.out`` —
+    consumed by the .out transcoder when reading the line-station
+    results back into a :class:`LineStationSlab`.
     """
-    if record.raw:
-        raise NotImplementedError(
-            "RecorderRecord raw= escape hatch fan-out lands in Phase 9 "
-            "commit 3c."
-        )
-
     elem_ids = _resolve_element_targets(record, fem)
     if not elem_ids:
         return
 
-    tokens = response_tokens(  # type: ignore[operator]
-        record.category, record.components, record_name=record.name,
-    )
-    if tokens is None:
-        # No components routed through this topology — nothing to emit.
-        return
-
     record_name = record.name or "default"
-    file_root = "."  # Phase 9 commit 3c will surface this kwarg.
+    emitted_canonical = False
 
-    file_path = (
-        f"{file_root}/{decl.name}__{record_name}__{record.category}.out"
-    )
-    args: list[int | float | str] = ["-file", file_path]
-    if record.dt is not None:
-        args += ["-dT", record.dt]
-    args += ["-time"]
-    args += ["-ele", *elem_ids]
-    args += list(tokens)
-    emitter.recorder("Element", *args)
+    if record.components:
+        tokens = response_tokens(  # type: ignore[operator]
+            record.category, record.components, record_name=record.name,
+        )
+        if tokens is not None:
+            file_path = _recorder_file_path(
+                decl.file_root, decl.name, record_name, record.category,
+            )
+            args: list[int | float | str] = ["-file", file_path]
+            if record.dt is not None:
+                args += ["-dT", record.dt]
+            args += ["-time"]
+            args += ["-ele", *elem_ids]
+            args += list(tokens)
+            emitter.recorder("Element", *args)
+            emitted_canonical = True
+
+    # Raw escape hatch: one extra recorder Element per raw token.
+    if record.raw:
+        for raw_token in record.raw:
+            file_path = _recorder_file_path(
+                decl.file_root, decl.name, record_name,
+                f"raw_{_sanitize_raw_token(raw_token)}",
+            )
+            args = ["-file", file_path]
+            if record.dt is not None:
+                args += ["-dT", record.dt]
+            args += ["-time"]
+            args += ["-ele", *elem_ids]
+            args.append(raw_token)
+            emitter.recorder("Element", *args)
+
+    # line_stations IP pairing: the .out transcoder needs per-element
+    # integration-point positions to map the section.force samples back
+    # to physical xi*L coordinates. Emit one gpx file per record (shared
+    # across canonical + raw tokens — the GP geometry is independent of
+    # the response token).
+    if record.category == "line_stations" and (
+        emitted_canonical or record.raw
+    ):
+        canonical_path = _recorder_file_path(
+            decl.file_root, decl.name, record_name, record.category,
+        )
+        gpx_path = _line_station_gpx_path(canonical_path)
+        args = ["-file", gpx_path]
+        if record.dt is not None:
+            args += ["-dT", record.dt]
+        args += ["-time"]
+        args += ["-ele", *elem_ids]
+        args.append("integrationPoints")
+        emitter.recorder("Element", *args)
 
 
 def _resolve_element_targets(
@@ -895,23 +984,119 @@ def _resolve_element_targets(
     """Resolve an element-level :class:`RecorderRecord`'s selectors to
     a flat tuple of element tags.
 
-    Phase 9 commit 3b supports ``pg=`` and ``ids=``; ``label=`` and
-    ``selection=`` land in commit 3c.
+    Supports ``ids=`` (mutex with named selectors) and the named
+    selectors ``pg=`` / ``label=`` / ``selection=`` (composable — same
+    union/dedup contract as :func:`_resolve_node_targets`).
     """
     if record.ids is not None:
         return tuple(int(i) for i in record.ids)
-    if record.pg:
-        out: list[int] = []
-        seen: set[int] = set()
-        for pg_name in record.pg:
-            for eid, _conn in expand_pg_to_elements(fem, pg_name):
-                if eid not in seen:
-                    seen.add(eid)
-                    out.append(eid)
-        return tuple(out)
-    if record.label or record.selection:
-        raise NotImplementedError(
-            "RecorderRecord label= / selection= selectors land in Phase 9 "
-            "commit 3c."
+
+    chunks: list[Iterable[int]] = []
+    for pg_name in record.pg:
+        chunks.append(eid for eid, _conn in expand_pg_to_elements(fem, pg_name))
+    for label_name in record.label:
+        chunks.append(_expand_label_to_elements(fem, label_name))
+    for sel_name in record.selection:
+        chunks.append(_expand_selection_to_elements(fem, sel_name))
+
+    if not chunks:
+        return ()
+    out: list[int] = []
+    seen: set[int] = set()
+    for chunk in chunks:
+        for tag in chunk:
+            t = int(tag)
+            if t not in seen:
+                seen.add(t)
+                out.append(t)
+    return tuple(out)
+
+
+def _expand_label_to_elements(
+    fem: "FEMData", label_name: str,
+) -> tuple[int, ...]:
+    """Return element IDs registered under ``label_name`` on
+    ``fem.elements.labels``."""
+    elements_obj = getattr(fem, "elements", None)
+    labels = (
+        getattr(elements_obj, "labels", None)
+        if elements_obj is not None
+        else None
+    )
+    if labels is None:
+        raise BridgeError(
+            f"label {label_name!r} requested but FEM snapshot has no "
+            f"elements.labels accessor."
         )
-    return ()
+    try:
+        ids = labels.element_ids(label_name)
+    except (KeyError, ValueError) as e:
+        raise BridgeError(
+            f"element label {label_name!r} not found on FEM snapshot."
+        ) from e
+    return tuple(int(e) for e in ids)
+
+
+def _expand_selection_to_elements(
+    fem: "FEMData", sel_name: str,
+) -> tuple[int, ...]:
+    """Return element IDs registered under ``sel_name`` on
+    ``fem.mesh_selection``."""
+    store = getattr(fem, "mesh_selection", None)
+    if store is None:
+        raise BridgeError(
+            f"selection {sel_name!r} requested but FEM snapshot has no "
+            f"mesh_selection store (no post-mesh selections were declared "
+            f"on the session)."
+        )
+    try:
+        ids = store.element_ids(sel_name)
+    except (KeyError, ValueError) as e:
+        raise BridgeError(
+            f"element selection {sel_name!r} not found on FEM snapshot."
+        ) from e
+    return tuple(int(e) for e in ids)
+
+
+# ---------------------------------------------------------------------------
+# File-path helpers for RecorderDeclaration emit
+# ---------------------------------------------------------------------------
+
+def _recorder_file_path(file_root: str, *parts: str) -> str:
+    """Build a recorder ``.out`` path from ``file_root`` and a sequence
+    of basename parts joined by ``__``.
+
+    Mirrors the legacy ``_build_file_path`` convention in
+    ``apeGmsh.results.spec._emit`` — handles empty ``file_root`` (no
+    prefix) and trailing slashes on the directory portion.
+    """
+    fname = "__".join(parts) + ".out"
+    if not file_root:
+        return fname
+    sep = "" if file_root.endswith(("/", "\\")) else "/"
+    return f"{file_root}{sep}{fname}"
+
+
+def _line_station_gpx_path(line_station_file_path: str) -> str:
+    """Return the paired ``integrationPoints`` recorder path for a
+    line-stations file.
+
+    Replaces the ``.out`` suffix with ``_gpx.out``. Matches the
+    convention defined in ``apeGmsh.results.spec._emit.line_station_gpx_path``
+    so the legacy .out transcoder locates the paired file unchanged.
+    """
+    if line_station_file_path.endswith(".out"):
+        return line_station_file_path[:-4] + "_gpx.out"
+    return line_station_file_path + "_gpx"
+
+
+def _sanitize_raw_token(token: str) -> str:
+    """Return a filename-safe form of ``token`` for raw= file paths.
+
+    Replaces any character that isn't alphanumeric or underscore with
+    ``_``. Raw tokens are user-supplied OpenSees response strings that
+    may contain spaces, hyphens, or other shell-sensitive chars; the
+    sanitized form is used only in the output ``.out`` filename — the
+    raw token reaches OpenSees verbatim as the recorder response.
+    """
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in token)

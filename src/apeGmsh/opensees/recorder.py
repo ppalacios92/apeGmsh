@@ -501,12 +501,17 @@ class RecorderDeclaration(Recorder):
         Used downstream for shorthand expansion and validation. The
         bridge passes these in (Phase 9 D8 — user never repeats
         ``ops.model(ndm=, ndf=)`` values).
+    file_root
+        Directory prefix for emitted ``.out`` files. Each record fans
+        out to ``<file_root>/<decl.name>__<record_name>__<token>.out``.
+        Defaults to ``"."`` (current working directory).
     """
 
     records: tuple[RecorderRecord, ...]
     name: str = "default"
     ndm: int = 3
     ndf: int = 6
+    file_root: str = "."
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()

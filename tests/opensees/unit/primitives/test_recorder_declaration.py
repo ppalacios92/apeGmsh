@@ -195,6 +195,11 @@ class TestRecorderDeclaration:
         assert d.name == "default"
         assert d.ndm == 3
         assert d.ndf == 6
+        assert d.file_root == "."
+
+    def test_custom_file_root(self) -> None:
+        d = RecorderDeclaration(records=(), file_root="out/")
+        assert d.file_root == "out/"
 
     def test_with_records(self) -> None:
         d = RecorderDeclaration(

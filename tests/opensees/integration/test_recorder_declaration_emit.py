@@ -32,7 +32,11 @@ from apeGmsh.opensees.recorder import (
     RecorderRecord,
 )
 
-from tests.opensees.fixtures.fem_stub import make_two_node_beam
+from apeGmsh.opensees._internal.build import BridgeError
+from tests.opensees.fixtures.fem_stub import (
+    make_two_column_frame_with_labels_and_selection,
+    make_two_node_beam,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +358,11 @@ class TestDeclareGaussCategory:
 
 class TestDeclareLineStationsCategory:
     def test_line_stations_emit(self) -> None:
-        """``line_stations`` category emits ``recorder Element ...
-        section force`` (multi-token response phrase)."""
+        """``line_stations`` category emits two ``recorder Element``
+        calls: one for ``section force`` (the canonical response) and
+        a paired ``integrationPoints`` call writing to ``_gpx.out`` —
+        the .out transcoder needs both to recover physical xi*L
+        coordinates for section samples."""
         fem = make_two_node_beam()
         ops = apeSees(cast("object", fem))
         ops.model(ndm=3, ndf=6)
@@ -369,11 +376,26 @@ class TestDeclareLineStationsCategory:
         bm.emit(rec)
 
         recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
-        assert len(recorder_calls) == 1
-        _, args, _ = recorder_calls[0]
-        assert args[0] == "Element"
-        # section force is a two-token response phrase
-        assert args[-2:] == ("section", "force")
+        assert len(recorder_calls) == 2
+
+        canonical = next(
+            c for c in recorder_calls if "section" in c[1]
+        )
+        gpx = next(
+            c for c in recorder_calls if "integrationPoints" in c[1]
+        )
+
+        _, c_args, _ = canonical
+        assert c_args[0] == "Element"
+        assert c_args[-2:] == ("section", "force")
+
+        _, g_args, _ = gpx
+        assert g_args[0] == "Element"
+        assert g_args[-1] == "integrationPoints"
+        # gpx file path mirrors the canonical path with _gpx suffix
+        canonical_path = c_args[c_args.index("-file") + 1]
+        gpx_path = g_args[g_args.index("-file") + 1]
+        assert gpx_path == canonical_path.replace(".out", "_gpx.out")
 
 
 class TestDeclareCrossCategory:
@@ -466,3 +488,349 @@ class TestDeclareDeferredCategories:
         rec = RecordingEmitter()
         with pytest.raises(NotImplementedError, match="DomainCapture"):
             bm.emit(rec)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 commit 3c — file_root kwarg
+# ---------------------------------------------------------------------------
+
+
+def _recorder_file_paths(rec: RecordingEmitter) -> list[str]:
+    """Return the ``-file`` argument from every recorder call in order."""
+    out: list[str] = []
+    for name, args, _ in rec.calls:
+        if name != "recorder":
+            continue
+        try:
+            idx = args.index("-file")
+        except ValueError:
+            continue
+        out.append(args[idx + 1])
+    return out
+
+
+class TestDeclareFileRoot:
+    def test_default_file_root_is_dot(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(nodes="displacement_x", pg="Top")
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        paths = _recorder_file_paths(rec)
+        assert all(p.startswith("./") for p in paths)
+
+    def test_custom_file_root(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", pg="Top", file_root="results",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        paths = _recorder_file_paths(rec)
+        assert paths == [
+            "results/default__default__disp.out",
+        ]
+
+    def test_file_root_with_trailing_slash_does_not_double_up(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", pg="Top", file_root="results/",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        paths = _recorder_file_paths(rec)
+        assert paths == ["results/default__default__disp.out"]
+
+    def test_empty_file_root_yields_bare_filename(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", pg="Top", file_root="",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        paths = _recorder_file_paths(rec)
+        assert paths == ["default__default__disp.out"]
+
+    def test_file_root_persisted_on_declaration(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        decl = ops.recorder.declare(
+            nodes="displacement_x", pg="Top", file_root="out/",
+        )
+        assert decl.file_root == "out/"
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 commit 3c — label= and selection= selectors
+# ---------------------------------------------------------------------------
+
+
+class TestDeclareLabelSelector:
+    def test_nodes_label_resolves(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", label="east_column",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        node_idx = args.index("-node")
+        # east_column label = nodes 3, 4
+        assert args[node_idx + 1 : node_idx + 3] == (3, 4)
+
+    def test_elements_label_resolves(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            elements="nodal_resisting_force_x", label="east_column",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        ele_idx = args.index("-ele")
+        # east_column label = element 2
+        assert args[ele_idx + 1] == 2
+
+    def test_unknown_label_raises_bridge_error(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", label="missing_label",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        with pytest.raises(BridgeError, match="missing_label"):
+            bm.emit(rec)
+
+
+class TestDeclareSelectionSelector:
+    def test_nodes_selection_resolves(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", selection="upper_band",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        node_idx = args.index("-node")
+        # upper_band selection = nodes 2, 4
+        assert args[node_idx + 1 : node_idx + 3] == (2, 4)
+
+    def test_elements_selection_resolves(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            elements="nodal_resisting_force_x", selection="upper_band",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        ele_idx = args.index("-ele")
+        # upper_band selection = elements 1, 2
+        assert args[ele_idx + 1 : ele_idx + 3] == (1, 2)
+
+    def test_selection_without_mesh_selection_raises(self) -> None:
+        # make_two_node_beam has mesh_selection=None
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", selection="anything",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        with pytest.raises(BridgeError, match="mesh_selection"):
+            bm.emit(rec)
+
+    def test_unknown_selection_raises_bridge_error(self) -> None:
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", selection="missing_set",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        with pytest.raises(BridgeError, match="missing_set"):
+            bm.emit(rec)
+
+
+class TestDeclareCombinedSelectors:
+    def test_pg_plus_label_unions_and_dedups(self) -> None:
+        """``pg="Top"`` (nodes 2, 4) + ``label="east_column"``
+        (nodes 3, 4) → union is (2, 4, 3) — dedup keeps first-seen
+        order from pg, label."""
+        fem = make_two_column_frame_with_labels_and_selection()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x", pg="Top", label="east_column",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        node_idx = args.index("-node")
+        # pg "Top" = (2, 4); label east_column = (3, 4); union with
+        # dedup, first-seen order: (2, 4, 3)
+        dof_idx = args.index("-dof")
+        node_args = args[node_idx + 1 : dof_idx]
+        assert node_args == (2, 4, 3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 commit 3c — raw= per-category escape hatch
+# ---------------------------------------------------------------------------
+
+
+class TestDeclareRawNodes:
+    def test_raw_only_emits_one_recorder(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(raw_nodes=("eigen",), pg="Top")
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        assert args[0] == "Node"
+        assert args[-1] == "eigen"
+        # Default dofs = all DOFs from bridge ndf=6
+        dof_idx = args.index("-dof")
+        assert args[dof_idx + 1 : dof_idx + 7] == (1, 2, 3, 4, 5, 6)
+        # File path uses raw_<token> tag
+        file_idx = args.index("-file")
+        assert "raw_eigen" in args[file_idx + 1]
+
+    def test_raw_alongside_canonical_emits_separate_recorders(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            nodes="displacement_x",
+            raw_nodes=("eigen",),
+            pg="Top",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 2
+        # One canonical disp + one raw eigen
+        last_tokens = sorted(args[-1] for _, args, _ in recorder_calls)
+        assert last_tokens == ["disp", "eigen"]
+
+    def test_raw_token_with_spaces_sanitized_in_filename(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(raw_nodes=("eigen 1",), pg="Top")
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        # The OpenSees response token stays verbatim (with space)
+        assert args[-1] == "eigen 1"
+        # But the filename has the space replaced with underscore
+        file_idx = args.index("-file")
+        assert "raw_eigen_1" in args[file_idx + 1]
+        assert " " not in args[file_idx + 1]
+
+
+class TestDeclareRawElements:
+    def test_raw_elements_emits_one_recorder(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            raw_elements=("customResponse",), pg="Cols",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        assert args[0] == "Element"
+        assert args[-1] == "customResponse"
+
+    def test_raw_gauss_emits_one_recorder(self) -> None:
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            raw_gauss=("customGauss",), pg="Cols",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        assert args[0] == "Element"
+        assert args[-1] == "customGauss"
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 commit 3c — line_stations IP pairing edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestDeclareLineStationsRawIp:
+    def test_raw_line_stations_still_emits_gpx_pair(self) -> None:
+        """A line_stations record with only raw tokens (no canonical
+        components) still emits the paired ``integrationPoints``
+        recorder — the .out transcoder needs GP positions regardless
+        of which response token was used."""
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        ops.recorder.declare(
+            raw_line_stations=("section.shear",),
+            pg="Cols",
+        )
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 2
+
+        last_tokens = sorted(args[-1] for _, args, _ in recorder_calls)
+        assert last_tokens == ["integrationPoints", "section.shear"]

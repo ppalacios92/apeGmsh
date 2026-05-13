@@ -98,23 +98,30 @@ class _RecorderNS(_BridgeNamespace):
         elements: Iterable[str] | str = (),
         line_stations: Iterable[str] | str = (),
         gauss: Iterable[str] | str = (),
+        raw_nodes: Iterable[str] | str | None = None,
+        raw_elements: Iterable[str] | str | None = None,
+        raw_line_stations: Iterable[str] | str | None = None,
+        raw_gauss: Iterable[str] | str | None = None,
         pg: str | Iterable[str] | None = None,
+        label: str | Iterable[str] | None = None,
+        selection: str | Iterable[str] | None = None,
         ids: Iterable[int] | None = None,
         dt: float | None = None,
         n_steps: int | None = None,
         name: str = "default",
         record_name: str | None = None,
         element_class_name: str | None = None,
+        file_root: str = ".",
     ) -> RecorderDeclaration:
         """Declare a unified recorder spec; register on the bridge.
 
-        Phase 9 commits 3a–3b: supports the file-emit-able categories
+        Phase 9 commits 3a–3c: supports the file-emit-able categories
         ``nodes`` / ``elements`` / ``line_stations`` / ``gauss``
-        with ``pg=`` or ``ids=`` selectors. The other categories
-        (``fibers`` / ``layers`` / ``modal``) raise
-        :class:`NotImplementedError` from emit time — they belong on
-        the DomainCapture side (Phase 9 commit 5 surfaces an explicit
-        bridge entry point for that).
+        with ``pg=`` / ``label=`` / ``selection=`` / ``ids=`` selectors.
+        The other categories (``fibers`` / ``layers`` / ``modal``)
+        raise :class:`NotImplementedError` from emit time — they belong
+        on the DomainCapture side (Phase 9 commit 5 surfaces an
+        explicit bridge entry point for that).
 
         Parameters
         ----------
@@ -132,10 +139,17 @@ class _RecorderNS(_BridgeNamespace):
             Tuple of canonical names for continuum stress/strain at
             Gauss points (``stress_xx``, ``strain_yy``,
             ``von_mises_stress``, etc.).
-        pg, ids
-            Selectors — mutually exclusive. ``pg=`` is a physical-
-            group name (or tuple of names); ``ids=`` is an explicit
-            list of node OR element tags depending on category.
+        raw_nodes, raw_elements, raw_line_stations, raw_gauss
+            Per-category escape hatch for non-catalogued OpenSees
+            response tokens. Each entry produces its own ``recorder``
+            command at emit time (canonical-vocabulary validation is
+            bypassed; the token reaches OpenSees verbatim).
+        pg, label, selection, ids
+            Selectors. ``ids=`` is mutually exclusive with the named
+            selectors. ``pg=`` / ``label=`` / ``selection=`` may be
+            combined — at emit time the resolver unions and
+            deduplicates their target IDs (mirroring the legacy
+            ``Recorders`` helper semantics).
         dt, n_steps
             Recording cadence; at most one may be set.
         name
@@ -147,6 +161,9 @@ class _RecorderNS(_BridgeNamespace):
             level records (lifted from the legacy
             ``Recorders.elements`` contract for .out transcoder
             disambiguation — see :class:`RecorderRecord`).
+        file_root
+            Directory prefix for emitted ``.out`` files. Defaults to
+            ``"."`` (current working directory).
 
         Returns
         -------
@@ -167,37 +184,42 @@ class _RecorderNS(_BridgeNamespace):
             )
 
         # Normalize selectors to tuples.
-        if isinstance(pg, str):
-            pg_tuple: tuple[str, ...] = (pg,)
-        elif pg is None:
-            pg_tuple = ()
-        else:
-            pg_tuple = tuple(pg)
+        pg_tuple = _normalize_str_selector(pg)
+        label_tuple = _normalize_str_selector(label)
+        selection_tuple = _normalize_str_selector(selection)
         ids_tuple = tuple(int(i) for i in ids) if ids is not None else None
 
         records: list[RecorderRecord] = []
 
-        # Per-category record construction. Each kwarg, if non-empty,
-        # produces one record with the same shared selectors / cadence.
-        for category, kwarg_value in (
-            ("nodes", nodes),
-            ("elements", elements),
-            ("line_stations", line_stations),
-            ("gauss", gauss),
-        ):
-            seq: tuple[str, ...]
-            if isinstance(kwarg_value, str):
-                seq = (kwarg_value,)
-            else:
-                seq = tuple(kwarg_value)
-            if not seq:
+        # Per-category record construction. Each category produces at
+        # most one record (with both canonical components and raw
+        # tokens combined). A record is skipped only when both are
+        # empty for that category.
+        category_inputs: tuple[
+            tuple[str, Iterable[str] | str, Iterable[str] | str | None], ...
+        ] = (
+            ("nodes",         nodes,         raw_nodes),
+            ("elements",      elements,      raw_elements),
+            ("line_stations", line_stations, raw_line_stations),
+            ("gauss",         gauss,         raw_gauss),
+        )
+        for category, canonical_kw, raw_kw in category_inputs:
+            canonical_seq = _normalize_str_selector(canonical_kw)
+            raw_seq = _normalize_str_selector(raw_kw)
+            if not canonical_seq and not raw_seq:
                 continue
-            components = expand_many(seq, ndm=ndm, ndf=ndf)
+            components = (
+                expand_many(canonical_seq, ndm=ndm, ndf=ndf)
+                if canonical_seq else ()
+            )
             records.append(
                 RecorderRecord(
                     category=category,
                     components=components,
+                    raw=raw_seq,
                     pg=pg_tuple,
+                    label=label_tuple,
+                    selection=selection_tuple,
                     ids=ids_tuple,
                     dt=dt,
                     n_steps=n_steps,
@@ -213,6 +235,7 @@ class _RecorderNS(_BridgeNamespace):
             name=name,
             ndm=ndm,
             ndf=ndf,
+            file_root=file_root,
         )
         return self._bridge._register(decl)
 
@@ -242,3 +265,19 @@ class _RecorderNS(_BridgeNamespace):
                 nsteps=nsteps,
             )
         )
+
+
+def _normalize_str_selector(
+    value: Iterable[str] | str | None,
+) -> tuple[str, ...]:
+    """Coerce a ``str`` / iterable-of-str / ``None`` into a tuple of strs.
+
+    A single string is wrapped in a one-element tuple (so the user can
+    write ``pg="Top"`` instead of ``pg=("Top",)``). ``None`` becomes the
+    empty tuple.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
