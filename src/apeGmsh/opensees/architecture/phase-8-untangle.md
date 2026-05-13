@@ -336,12 +336,29 @@ After this PR, `viewers/` has zero imports from `solvers/` or `mesh/`.
 **Risk:** medium-high — UI changes are user-visible.
 **Test gate:** viewer integration tests pass against fixture .h5 files.
 
-### Phase 8.8 — Delete `solvers/`
-After two release cycles of deprecation. Remove the shim. Delete
-`src/apeGmsh/solvers/`.
+### Phase 8.8 — Delete `solvers/` — landed
+After Phase 9 closed out the recorder deprecation envelope, no
+source code or test under this repo imported from
+``apeGmsh.solvers`` any longer. The 17 deprecation-shim files
+under ``src/apeGmsh/solvers/`` were deleted; the package no
+longer exists.
 
-**Risk:** medium — the irreversible step. Should land only after every
-release-blocker app has migrated.
+The Phase 8 acceptance criteria are now enforced by
+``tests/test_solvers_package_deleted.py``:
+
+- ``apeGmsh/solvers/`` directory absent on disk
+- ``git grep \"from apeGmsh.solvers\" src/`` returns zero matches
+- ``git grep \"from apeGmsh.solvers\" tests/`` returns zero matches
+
+The one curriculum notebook
+(``examples/EOS Examples/curriculum/03-assemblies/12b_constraint_record_tiers``)
+that imported ``from apeGmsh.solvers.Constraints`` was migrated to
+``from apeGmsh.mesh.records`` (the canonical umbrella the Phase
+8.1 shim re-exported).
+
+**Risk:** medium — the irreversible step. Landed only after the
+Phase 9 recorder deprecation envelope closed and the
+release-blocker scan came back clean.
 
 ## 6. Acceptance criteria for Phase 8 as a whole
 

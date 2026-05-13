@@ -346,7 +346,7 @@ they don't unlock other phases.
 
 ## Phase 8 — Untangle `apeGmsh.solvers`
 
-✅ **Sub-phases 8.0 through 8.6 landed** (PRs [#119](https://github.com/nmorabowen/apeGmsh/pull/119), [#121](https://github.com/nmorabowen/apeGmsh/pull/121), [#123](https://github.com/nmorabowen/apeGmsh/pull/123), [#130](https://github.com/nmorabowen/apeGmsh/pull/130), [#134](https://github.com/nmorabowen/apeGmsh/pull/134), [#140](https://github.com/nmorabowen/apeGmsh/pull/140), [#141](https://github.com/nmorabowen/apeGmsh/pull/141), [#143](https://github.com/nmorabowen/apeGmsh/pull/143)). **8.7 (viewer migration off FEMData/solvers) and 8.8 (delete `solvers/`) still ahead.**
+✅ **Sub-phases 8.0 through 8.6 + 8.8 landed** (PRs [#119](https://github.com/nmorabowen/apeGmsh/pull/119), [#121](https://github.com/nmorabowen/apeGmsh/pull/121), [#123](https://github.com/nmorabowen/apeGmsh/pull/123), [#130](https://github.com/nmorabowen/apeGmsh/pull/130), [#134](https://github.com/nmorabowen/apeGmsh/pull/134), [#140](https://github.com/nmorabowen/apeGmsh/pull/140), [#141](https://github.com/nmorabowen/apeGmsh/pull/141), [#143](https://github.com/nmorabowen/apeGmsh/pull/143), plus the Phase 8.8 deletion). **8.7 (viewer migration off FEMData/solvers) is the last remaining piece** — but `apeGmsh.solvers/` itself is gone.
 
 Originally framed as "apps migrate" — too small a frame. The
 realized scope is broader: relocate records to the broker, move
