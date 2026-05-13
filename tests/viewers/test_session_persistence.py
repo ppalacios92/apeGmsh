@@ -12,11 +12,13 @@ from pathlib import Path
 
 import pytest
 
+from apeGmsh.cuts import SectionCutDef
 from apeGmsh.viewers.diagrams import (
     ContourStyle,
     DeformedShapeStyle,
     DiagramSpec,
     LineForceStyle,
+    SectionCutStyle,
     SlabSelector,
     SpringForceStyle,
 )
@@ -74,6 +76,27 @@ def _make_deformed_spec():
             components=("displacement_x", "displacement_y"),
             scale=10.0,
         ),
+    )
+
+
+def _make_section_cut_spec(*, with_bounding: bool = False, side="positive"):
+    bounding = (
+        ((0.0, 0.0, 2.5), (1.0, 0.0, 2.5), (1.0, 1.0, 2.5), (0.0, 1.0, 2.5))
+        if with_bounding else None
+    )
+    cut = SectionCutDef(
+        plane_point=(0.0, 0.0, 2.5),
+        plane_normal=(0.0, 0.0, 1.0),
+        element_ids=(10, 11, 12),
+        side=side,
+        label="Story 3 base shear",
+        bounding_polygon=bounding,
+    )
+    return DiagramSpec(
+        kind="section_cut",
+        selector=SlabSelector(component="Story 3 base shear"),
+        style=SectionCutStyle(cut=cut, show_filter_initially=True),
+        label="Story 3 base shear",
     )
 
 
@@ -315,6 +338,88 @@ def test_v2_session_loads_with_display_defaults(tmp_path: Path):
     assert geom.deform_scale == pytest.approx(5.0)
 
 
-def test_session_schema_version_is_3():
-    """Sanity: the constant tracks the latest schema."""
-    assert SESSION_SCHEMA_VERSION == 3
+def test_session_schema_version_is_4():
+    """Sanity: the constant tracks the latest schema (bumped to 4 for
+    cuts v2.2 — added ``model_h5`` to ``ViewerSession``)."""
+    assert SESSION_SCHEMA_VERSION == 4
+
+
+# =====================================================================
+# Section cut — spec + session round-trip with model_h5
+# =====================================================================
+
+def test_section_cut_spec_round_trip_bounded():
+    spec = _make_section_cut_spec(with_bounding=True)
+    restored = deserialize_spec(serialize_spec(spec))
+    assert restored.kind == "section_cut"
+    assert isinstance(restored.style, SectionCutStyle)
+    cut = restored.style.cut
+    assert isinstance(cut, SectionCutDef)
+    # Plane fields survive the JSON tuple → list → tuple round-trip
+    # because SectionCutDef.__post_init__ coerces.
+    assert cut.plane_point == (0.0, 0.0, 2.5)
+    assert cut.plane_normal == (0.0, 0.0, 1.0)
+    assert cut.element_ids == (10, 11, 12)
+    assert cut.side == "positive"
+    assert cut.label == "Story 3 base shear"
+    # Bounding polygon survives — tuple of (x, y, z) triples.
+    assert cut.bounding_polygon == (
+        (0.0, 0.0, 2.5), (1.0, 0.0, 2.5),
+        (1.0, 1.0, 2.5), (0.0, 1.0, 2.5),
+    )
+    # Style flag carries through too.
+    assert restored.style.show_filter_initially is True
+
+
+def test_section_cut_spec_round_trip_unbounded():
+    spec = _make_section_cut_spec(with_bounding=False, side="negative")
+    restored = deserialize_spec(serialize_spec(spec))
+    cut = restored.style.cut
+    assert cut.bounding_polygon is None
+    assert cut.side == "negative"
+
+
+def test_session_carries_model_h5(tmp_path: Path):
+    """``serialize_session(model_h5=...)`` round-trips through JSON."""
+    h5 = tmp_path / "model.h5"
+    payload = serialize_session(
+        specs=[_make_section_cut_spec(with_bounding=True)],
+        results_path=tmp_path / "run.h5",
+        fem_snapshot_id="snap",
+        model_h5=h5,
+    )
+    # Serialized as a string.
+    assert payload["model_h5"] == str(h5)
+    session = deserialize_session(payload)
+    assert session.model_h5 == str(h5)
+
+
+def test_save_session_with_section_cut(tmp_path: Path):
+    h5 = tmp_path / "model.h5"
+    saved = save_session(
+        specs=[_make_section_cut_spec(with_bounding=True)],
+        results_path=tmp_path / "run.h5",
+        fem_snapshot_id=None,
+        model_h5=h5,
+    )
+    session = load_session(saved)
+    assert len(session.diagrams) == 1
+    assert session.diagrams[0].kind == "section_cut"
+    assert session.model_h5 == str(h5)
+
+
+def test_v3_session_without_model_h5_loads_with_none(tmp_path: Path):
+    """Pre-v4 saves predate ``model_h5`` — they load with the field None."""
+    payload = {
+        "schema_version": 3,
+        "results_path": str(tmp_path / "run.h5"),
+        "fem_snapshot_id": None,
+        "saved_at": "",
+        "diagrams": [serialize_spec(_make_contour_spec())],
+        # No model_h5 key.
+    }
+    target = tmp_path / "v3.json"
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    session = load_session(target)
+    assert session.model_h5 is None
+    assert len(session.diagrams) == 1

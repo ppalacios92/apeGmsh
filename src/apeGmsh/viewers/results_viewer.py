@@ -1258,6 +1258,11 @@ class ResultsViewer:
                 ))
 
             fem = self._results.fem
+            # ``director.model_h5`` is populated by ``set_model_h5`` /
+            # the ``results.viewer(model_h5=...)`` boot kwarg. Emitting
+            # it as part of the session lets restore rebuild the
+            # FemToOpsTagMap that SectionCutDiagram layers need.
+            model_h5_path = getattr(self._director, "model_h5", None)
             save_session(
                 specs=specs,
                 results_path=path,
@@ -1266,6 +1271,7 @@ class ResultsViewer:
                 active_geometry_id=geom_mgr.active_id,
                 active_stage_id=self._director.stage_id,
                 active_step=int(self._director.step_index),
+                model_h5=model_h5_path,
             )
         except Exception as exc:
             from ._failures import report
@@ -1344,6 +1350,18 @@ class ResultsViewer:
         )
         if _batch_cm is not None:
             _batch_cm.__enter__()
+        # Restore the section-cut tag-map binding BEFORE constructing
+        # any layers — a SectionCutDiagram needs ``tag_map=`` at
+        # construction time to translate OpenSees tags back to FEM eids.
+        session_model_h5 = getattr(session, "model_h5", None)
+        if session_model_h5:
+            try:
+                self._director.set_model_h5(session_model_h5)
+            except Exception as exc:
+                from ._failures import report
+                report(
+                    "ResultsViewer._apply_session(model_h5)", exc,
+                )
         kind_to_class = {entry.kind_id: entry.diagram_class for entry in _KINDS}
         n_added = 0
         n_skipped = 0
@@ -1352,13 +1370,24 @@ class ResultsViewer:
         # references stay aligned).
         restored_layers: list[Any] = []
         for spec in session.diagrams:
+            # section_cut is intentionally absent from _KINDS (no
+            # Add-Diagram dialog entry in Phase 1); look it up directly.
             cls = kind_to_class.get(spec.kind)
+            if cls is None and spec.kind == "section_cut":
+                from .diagrams._section_cut import SectionCutDiagram
+                cls = SectionCutDiagram
             if cls is None:
                 n_skipped += 1
                 restored_layers.append(None)
                 continue
             try:
-                diagram = cls(spec, self._results)
+                if spec.kind == "section_cut":
+                    tag_map = self._director.tag_map
+                    diagram = cls(
+                        spec, self._results, tag_map=tag_map,
+                    )
+                else:
+                    diagram = cls(spec, self._results)
                 self._director.registry.add(diagram)
                 restored_layers.append(diagram)
                 n_added += 1

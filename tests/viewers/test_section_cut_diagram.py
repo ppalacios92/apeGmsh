@@ -658,3 +658,62 @@ def test_rebuild_rejects_invalid_side(cube_results):
     tab = _build_settings_tab_against_director(director)
     tab._on_section_cut_rebuild(diagram, side="upward")    # invalid
     assert list(director.registry) == [diagram]
+
+
+# ---------------------------------------------------------------------
+# Phase E — session JSON round-trip + restore against a real diagram
+# ---------------------------------------------------------------------
+
+def test_deserialized_spec_attaches_against_real_fixture(
+    cube_results, headless_plotter,
+):
+    """A spec that went through serialize → JSON → deserialize must
+    still produce a working diagram against the fixture's model.h5.
+
+    The point is to catch any silent dataclass-construction issue
+    (tuple→list→tuple coercion on plane_point / element_ids, nested
+    SectionCutDef rehydration on the style) that the pure JSON
+    round-trip tests in test_session_persistence.py would miss
+    because they don't touch the FEM side.
+    """
+    import json as _json
+    from apeGmsh.viewers.diagrams._session import (
+        deserialize_spec, serialize_spec,
+    )
+    results, fem, h5, ops_to_fem = cube_results
+    scene = build_fem_scene(fem)
+
+    # The fixture's model.h5 maps OpenSees tags 10, 11, 12 → FEM eids.
+    cut = SectionCutDef(
+        plane_point=(0.0, 0.0, 0.5),
+        plane_normal=(0.0, 0.0, 1.0),
+        element_ids=(10, 11, 12),
+        side="positive",
+        label="cube mid-cut",
+        bounding_polygon=(
+            (0.0, 0.0, 0.5), (1.0, 0.0, 0.5),
+            (1.0, 1.0, 0.5), (0.0, 1.0, 0.5),
+        ),
+    )
+    spec = DiagramSpec(
+        kind="section_cut",
+        selector=SlabSelector(component=cut.label),
+        style=SectionCutStyle(cut=cut, show_filter_initially=True),
+        label=cut.label,
+    )
+
+    # Full text-mode round-trip: serialize → JSON dump → JSON load →
+    # deserialize. Mirrors what ``save_session`` / ``load_session`` do.
+    payload = _json.loads(_json.dumps(serialize_spec(spec)))
+    restored = deserialize_spec(payload)
+
+    tag_map = FemToOpsTagMap.from_h5(h5)
+    diagram = SectionCutDiagram(restored, results, tag_map=tag_map)
+    diagram.attach(headless_plotter, fem, scene)
+
+    # The whole point of the round-trip: cut survives intact and the
+    # bootstrap filter highlight applied because show_filter_initially
+    # round-tripped too.
+    assert diagram.cut.element_ids == (10, 11, 12)
+    assert diagram.show_filter is True
+    assert diagram.filter_highlight_actor is not None

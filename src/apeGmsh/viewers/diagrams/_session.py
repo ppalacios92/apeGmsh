@@ -42,6 +42,7 @@ from ._styles import (
     GaussMarkerStyle,
     LayerStackStyle,
     LineForceStyle,
+    SectionCutStyle,
     SpringForceStyle,
     VectorGlyphStyle,
 )
@@ -58,10 +59,15 @@ _KIND_TO_STYLE: dict[str, type[DiagramStyle]] = {
     "layer_stack":    LayerStackStyle,
     "gauss_marker":   GaussMarkerStyle,
     "spring_force":   SpringForceStyle,
+    "section_cut":    SectionCutStyle,
 }
 
 
-SESSION_SCHEMA_VERSION = 3
+# Bumped to 4 in the cuts v2.2 viewer overlay: ``ViewerSession`` gained a
+# ``model_h5`` field so a restored session can rebuild the
+# ``FemToOpsTagMap`` needed by ``SectionCutDiagram`` layers. The on-disk
+# format stays forward/back compatible — missing fields read as defaults.
+SESSION_SCHEMA_VERSION = 4
 
 
 # =====================================================================
@@ -133,6 +139,12 @@ class ViewerSession:
     active_geometry_id: Optional[str] = None
     active_stage_id: Optional[str] = None
     active_step: int = 0
+    # Added in schema v4 (cuts v2.2 viewer overlay). Absolute path to
+    # the ``model.h5`` the SectionCutDiagram layers were built against;
+    # the restore path sets it on the director so the FemToOpsTagMap
+    # can rebuild before cut layers attach. None for sessions that
+    # don't carry any cuts.
+    model_h5: Optional[str] = None
 
 
 # =====================================================================
@@ -182,6 +194,22 @@ def deserialize_spec(data: dict[str, Any]) -> DiagramSpec:
     for key, value in list(style_data.items()):
         if isinstance(value, list):
             style_data[key] = tuple(value)
+    # ``SectionCutStyle.cut`` is a nested SectionCutDef dataclass —
+    # rehydrate it from the dict that ``asdict`` produced. The
+    # SectionCutDef constructor coerces tuple-like fields so we can
+    # just hand it the dict's values directly.
+    if kind == "section_cut":
+        cut_raw = style_data.get("cut")
+        if isinstance(cut_raw, dict):
+            from apeGmsh.cuts import SectionCutDef
+            style_data["cut"] = SectionCutDef(
+                plane_point=cut_raw["plane_point"],
+                plane_normal=cut_raw["plane_normal"],
+                element_ids=cut_raw["element_ids"],
+                side=cut_raw.get("side", "positive"),
+                label=cut_raw.get("label"),
+                bounding_polygon=cut_raw.get("bounding_polygon"),
+            )
     style = style_cls(**style_data)
 
     return DiagramSpec(
@@ -207,6 +235,7 @@ def serialize_session(
     active_geometry_id: Optional[str] = None,
     active_stage_id: Optional[str] = None,
     active_step: int = 0,
+    model_h5: "Optional[str | Path]" = None,
 ) -> dict[str, Any]:
     """Build the JSON-friendly dict for one viewer session.
 
@@ -214,6 +243,9 @@ def serialize_session(
     the live ``GeometryManager``; compositions reference layers by
     their position in ``specs``. When ``None`` or empty we still emit
     a v2 envelope (the restore path falls back to a single Geometry).
+
+    ``model_h5`` is the path the director was pointed at for the
+    section-cut tag map. Only emitted when present.
     """
     return {
         "schema_version":   SESSION_SCHEMA_VERSION,
@@ -225,6 +257,7 @@ def serialize_session(
         "active_geometry_id": active_geometry_id,
         "active_stage_id":  active_stage_id,
         "active_step":      int(active_step),
+        "model_h5":         str(model_h5) if model_h5 is not None else None,
         "geometries":       [
             _serialize_geometry(g) for g in (geometries or ())
         ],
@@ -305,6 +338,7 @@ def deserialize_session(data: dict[str, Any]) -> ViewerSession:
             geometries.append(_deserialize_geometry(raw))
         except Exception:
             continue
+    model_h5_raw = data.get("model_h5")
     return ViewerSession(
         schema_version=int(
             data.get("schema_version", SESSION_SCHEMA_VERSION),
@@ -317,6 +351,7 @@ def deserialize_session(data: dict[str, Any]) -> ViewerSession:
         active_geometry_id=data.get("active_geometry_id"),
         active_stage_id=data.get("active_stage_id"),
         active_step=int(data.get("active_step", 0) or 0),
+        model_h5=str(model_h5_raw) if model_h5_raw else None,
     )
 
 
@@ -340,6 +375,7 @@ def save_session(
     target_path: str | Path | None = None,
     active_stage_id: Optional[str] = None,
     active_step: int = 0,
+    model_h5: "Optional[str | Path]" = None,
 ) -> Path:
     """Write a session JSON next to (or at) the given path.
 
@@ -353,6 +389,7 @@ def save_session(
         active_geometry_id=active_geometry_id,
         active_stage_id=active_stage_id,
         active_step=active_step,
+        model_h5=model_h5,
     )
     out = Path(target_path) if target_path else default_session_path(
         results_path,
