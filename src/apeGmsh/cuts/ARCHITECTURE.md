@@ -132,6 +132,7 @@ cut_def = SectionCutDef.from_plane_and_pg(
 | v2.2 | Viewer overlay — `SectionCutDiagram` Layer kind + filter highlight | **done** |
 | v2.3 | `SectionCutDef.preflight(fem)` validator — drift checks | **done** |
 | Phase 4 | Add-Diagram dialog file picker for pickled cuts / sweeps | **in progress** |
+| v5 | `DriftDef` / `DriftSweepDef` — node-pair drift carrier | **in progress** |
 
 v4 and beyond (`model.h5` persistence of cuts, live editing, drift
 specs, sweep templates) are described in the session that drafted this
@@ -485,9 +486,115 @@ tests/viewers/test_add_diagram_section_cut.py     ← new file (3-5 focused test
 - Drag-and-drop file ingestion onto the viewer window
 - Browsing for cuts inside `model.h5` — that's v4 of the roadmap
 
+## v5 — `DriftDef` / `DriftSweepDef`
+
+A sibling type to `SectionCutDef`: instead of integrating force over a
+planar slice through elements, drift extracts the relative
+displacement between two reference nodes — optionally projected onto
+an axis, optionally normalized by a story height. The natural carrier
+for inter-story drift in building models, but useful anywhere you
+need `node_A.u - node_B.u` extracted from MPCO results.
+
+`DriftDef` is the unit; `DriftSweepDef` is a frozen sequence of them
+(typically one per story) for building-level profiles. Both are pure
+data — no `.to_spec()`, no `.extract()` in v5. Same philosophy as
+`SectionCutDef` v1: build the carrier; defer consumption.
+
+### Why this lives in `apeGmsh.cuts`
+
+The subpackage name is a slight misnomer once drift lands — drift is
+not a "cut". But:
+
+- The plumbing is identical: frozen dataclass + builders + pickle +
+  preflight validator against a live FEM.
+- The user-facing import (`from apeGmsh.cuts import DriftDef`) is
+  still natural — "cuts" reads as "post-process specs" in spirit.
+- A reorg to `apeGmsh.outputs` (or similar) becomes worth doing only
+  when a third post-process type lands; deferring keeps v5 focused.
+
+Re-evaluate when v6 arrives.
+
+### Locked design decisions
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| D1 | Names | `DriftDef`, `DriftSweepDef` | Mirror `SectionCutDef` / `SectionSweepDef`. |
+| D2 | Stored fields | `top_node: int`, `bottom_node: int`, `direction: Vec3 \| None`, `story_height: float \| None`, `label: str \| None` | Minimal carrier; everything else is computed downstream. |
+| D3 | `direction` semantics | `None` → caller wants the raw Δu vector; `Vec3` → caller wants Δu projected onto the (auto-unit-normalized) axis | Common case is horizontal-only ((1,0,0) or (0,1,0)); raw vector is for 3-D analytics. Mirrors `SectionCutDef`'s auto-normalized normal. |
+| D4 | Construction-time validation | top_node ≠ bottom_node; `direction` (if set) is nonzero; `story_height` (if set) is positive; node IDs coerced to `int` | Things that are always wrong regardless of FEM — fail at construction. |
+| D5 | Builders | `from_node_pair(top, bottom, …)` (already covered by `__init__`, but kept as a named classmethod for symmetry with cuts); `from_pgs(top_pg, bottom_pg, fem, …)` | Two-PG builder matches how users tag floor reference points (CM, diaphragm node, etc.). |
+| D6 | Multi-node PG | `from_pgs` raises `ValueError` if either PG resolves to >1 node | Silent averaging would hide a tagging bug; explicit error tells the user to tag a single representative node. |
+| D7 | Story-height auto-derivation | Never auto-derived. `.drift_ratio()` is out of scope for v5; story_height is purely metadata until a consumer needs it | Pure carrier in v5. |
+| D8 | `.to_spec()` / `.extract()` | **Out of scope for v5.** STKO has no `DriftSpec`; no demanded consumer | Matches `SectionCutDef` v1. Add when a real call site appears. |
+| D9 | Preflight | Shared `PreflightReport` (no new report class); codes prefixed `D-` to avoid clashing with cut codes | Option α from the v5 design pass. One report type for both subjects keeps `apeGmsh.cuts` cohesive. |
+| D10 | Preflight issue catalog | **D-E1** top_node not in `fem.nodes`; **D-E2** bottom_node not in `fem.nodes`; **D-W1** top and bottom coordinates coincident within `tol` | Minimal set. Construction-time validation already covers the "always wrong" cases. |
+| D11 | Sweep shape | `DriftSweepDef` = frozen `tuple[DriftDef, ...]`; container protocol; `from_pg_pairs(pg_pairs=[(top, bot), …], fem=…)` builder; `elevations(axis="z", *, fem)` returns one float per drift (top-node coord along axis) | Mirrors `SectionSweepDef` exactly; same pickle support. |
+| D12 | Sweep preflight | Returns `tuple[PreflightReport, ...]` — one per drift, in sweep order | Same contract as `SectionSweepDef.preflight`. |
+| D13 | Module layout | New `_drift.py` next to `_defs.py`. Preflight checks live alongside `DriftDef.preflight`; reuses `PreflightIssue` and `PreflightReport` from `_preflight.py` | Keeps the cuts subpackage organized by topic. |
+
+### Public API
+
+```python
+from apeGmsh.cuts import DriftDef, DriftSweepDef
+
+# Direct construction
+d = DriftDef(
+    top_node=1234,
+    bottom_node=5678,
+    direction=(1.0, 0.0, 0.0),    # project onto x; None → raw Δu vector
+    story_height=3000.0,           # optional metadata
+    label="story 3 drift X",
+)
+
+# Physical-group driven (each PG must resolve to exactly one node)
+d = DriftDef.from_pgs(
+    top_pg="floor-3-CM",
+    bottom_pg="floor-2-CM",
+    fem=fem,
+    direction=(1.0, 0.0, 0.0),
+    story_height=3000.0,
+)
+
+# Building-level profile
+sweep = DriftSweepDef.from_pg_pairs(
+    pg_pairs=[("floor-1-CM", "floor-0-CM"),
+              ("floor-2-CM", "floor-1-CM"),
+              ("floor-3-CM", "floor-2-CM")],
+    fem=fem,
+    direction=(1.0, 0.0, 0.0),
+)
+
+# Drift against the current FEM
+report = d.preflight(fem)
+assert report.ok
+reports = sweep.preflight(fem)  # tuple[PreflightReport, ...]
+
+# Plot top-node elevations for a drift profile
+ys = sweep.elevations(axis="z", fem=fem)
+
+# Pickle round-trip
+d.save_pickle("story3.pkl")
+restored = DriftDef.load_pickle("story3.pkl")
+```
+
+### Phase roadmap
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| v5-0 | This architecture section | **done** |
+| v5-1 | `DriftDef` + `DriftSweepDef` + preflight + tests | **done** |
+
+### Out of scope for v5
+
+- `.to_spec()` — STKO_to_python has no `DriftSpec` counterpart; build when there's a real call site.
+- `.extract()` against an MPCODataSet — same reason. Currently the user computes drift themselves from nodal displacement histories.
+- `.drift_ratio()` — needs a story_height consumer; trivial to add when one exists.
+- Viewer overlay — drift has no spatial extent; a "drift between these two nodes" decoration is a different design pass.
+- Renaming `apeGmsh.cuts` → `apeGmsh.outputs`. Revisit when v6 arrives.
+
 ## Versioning
 
 apeGmsh follows pyproject `version` bumps. New optional subpackage =
 minor bump. Schema bump only at v4 of the roadmap (cuts persisted in
-`model.h5`, schema 2.2.0 → 2.3.0). v2.3 and Phase 4 are pure additive
-surface — no schema impact.
+`model.h5`, schema 2.2.0 → 2.3.0). v2.3, Phase 4, and v5 are pure
+additive surface — no schema impact.

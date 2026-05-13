@@ -24,6 +24,7 @@ Phases 2–5 will add ``plane_from_physical_surface``,
 from __future__ import annotations
 
 from ._defs import SectionCutDef
+from ._drift import DriftDef, DriftSweepDef
 from ._planes import (
     plane_from_coords,
     plane_from_physical_surface,
@@ -39,6 +40,8 @@ from ._tag_map import FemToOpsTagMap
 __all__ = [
     "SectionCutDef",
     "SectionSweepDef",
+    "DriftDef",
+    "DriftSweepDef",
     "FemToOpsTagMap",
     "PreflightError",
     "PreflightIssue",
