@@ -118,6 +118,44 @@ class RecordingEmitter:
     def recorder(self, kind: str, *args: int | float | str) -> None:
         self.calls.append(("recorder", (kind, *args), {}))
 
+    def recorder_declaration_begin(
+        self,
+        *,
+        declaration_name: str,
+        record_name: str | None,
+        category: str,
+        components: tuple[str, ...],
+        raw: tuple[str, ...] = (),
+        pg: tuple[str, ...] = (),
+        label: tuple[str, ...] = (),
+        selection: tuple[str, ...] = (),
+        ids: tuple[int, ...] | None = None,
+        dt: float | None = None,
+        n_steps: int | None = None,
+        file_root: str = ".",
+    ) -> None:
+        """Capture Phase 9 declaration-begin events for tests."""
+        self.calls.append((
+            "recorder_declaration_begin", (), {
+                "declaration_name": declaration_name,
+                "record_name": record_name,
+                "category": category,
+                "components": components,
+                "raw": raw,
+                "pg": pg,
+                "label": label,
+                "selection": selection,
+                "ids": ids,
+                "dt": dt,
+                "n_steps": n_steps,
+                "file_root": file_root,
+            },
+        ))
+
+    def recorder_declaration_end(self) -> None:
+        """Capture Phase 9 declaration-end events for tests."""
+        self.calls.append(("recorder_declaration_end", (), {}))
+
     # -- Analysis chain --------------------------------------------------
     def constraints(self, c_type: str, *args: float) -> None:
         self.calls.append(("constraints", (c_type, *args), {}))

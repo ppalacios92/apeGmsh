@@ -184,6 +184,31 @@ class PyEmitter:
     def recorder(self, kind: str, *args: int | float | str) -> None:
         self._lines.append(_ops_call("recorder", kind, *args))
 
+    def recorder_declaration_begin(
+        self,
+        *,
+        declaration_name: str,
+        record_name: str | None,
+        category: str,
+        components: tuple[str, ...],
+        raw: tuple[str, ...] = (),
+        pg: tuple[str, ...] = (),
+        label: tuple[str, ...] = (),
+        selection: tuple[str, ...] = (),
+        ids: tuple[int, ...] | None = None,
+        dt: float | None = None,
+        n_steps: int | None = None,
+        file_root: str = ".",
+    ) -> None:
+        """Phase 9 schema 2.3.0 declaration metadata — no-op for openseespy."""
+        del (
+            declaration_name, record_name, category, components, raw,
+            pg, label, selection, ids, dt, n_steps, file_root,
+        )
+
+    def recorder_declaration_end(self) -> None:
+        """Phase 9 schema 2.3.0 declaration metadata — no-op for openseespy."""
+
     # -- Analysis chain -----------------------------------------------------
 
     def constraints(self, c_type: str, *args: float) -> None:

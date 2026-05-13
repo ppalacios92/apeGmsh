@@ -110,7 +110,18 @@ __all__ = ["H5Emitter", "SCHEMA_VERSION"]
 #:     fanned out from (master plan §3 "tag_map").  Sentinel ``-1``
 #:     entries mark records emitted outside a bridge fan-out.
 #:     Additive — old v2.1.0 readers ignore the new dataset.
-SCHEMA_VERSION: str = "2.2.0"
+#:   * 2.3.0 — Phase 9 commit 6: unified ``/opensees/recorders/``
+#:     archive.  Every record group gains a ``kind`` attr —
+#:     ``"typed"`` for Node / Element / MPCO primitives (1:1
+#:     OpenSees), ``"declared"`` for fan-out calls produced by
+#:     ``ops.recorder.declare(...)``. Declared records also carry
+#:     the original declaration metadata as attrs:
+#:     ``declaration_name``, ``record_name``, ``category``,
+#:     ``components``, ``raw``, ``pg``, ``label``, ``selection``,
+#:     ``ids``, ``dt``, ``n_steps``, ``file_root``.  Additive — old
+#:     v2.2.0 readers see ``kind="declared"`` records as well-formed
+#:     recorder groups (they just ignore the extra attrs).
+SCHEMA_VERSION: str = "2.3.0"
 
 
 # Map known time-series type tokens to "is path-bearing": for a Path
@@ -359,10 +370,35 @@ class _PatternRecord:
     ele_loads: list[_EleLoadRecord] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class _DeclContext:
+    """Declaration metadata captured between
+    :meth:`Emitter.recorder_declaration_begin` and
+    :meth:`Emitter.recorder_declaration_end`. Attached to each
+    :class:`_RecorderRecord` emitted while a context is active, so
+    schema 2.3.0's unified ``/opensees/recorders/`` group can persist
+    the original declaration intent alongside the fan-out call.
+    """
+
+    declaration_name: str
+    record_name: str | None
+    category: str
+    components: tuple[str, ...]
+    raw: tuple[str, ...]
+    pg: tuple[str, ...]
+    label: tuple[str, ...]
+    selection: tuple[str, ...]
+    ids: tuple[int, ...] | None
+    dt: float | None
+    n_steps: int | None
+    file_root: str
+
+
 @dataclass(slots=True)
 class _RecorderRecord:
     kind: str
     args: tuple[int | float | str, ...]
+    decl_context: _DeclContext | None = None
 
 
 @dataclass(slots=True)
@@ -440,6 +476,11 @@ class H5Emitter:
 
         # Recorders.
         self._recorders: list[_RecorderRecord] = []
+        # Active declaration context (set by ``recorder_declaration_begin``,
+        # cleared by ``recorder_declaration_end``). While non-None, every
+        # ``recorder(...)`` call inherits this context for schema 2.3.0
+        # archival.
+        self._decl_context: _DeclContext | None = None
 
         # Analysis chain (collected attrs).
         self._analysis_attrs: dict[str, Any] = {}
@@ -690,7 +731,64 @@ class H5Emitter:
     # =====================================================================
 
     def recorder(self, kind: str, *args: int | float | str) -> None:
-        self._recorders.append(_RecorderRecord(kind=kind, args=tuple(args)))
+        self._recorders.append(_RecorderRecord(
+            kind=kind,
+            args=tuple(args),
+            decl_context=self._decl_context,
+        ))
+
+    def recorder_declaration_begin(
+        self,
+        *,
+        declaration_name: str,
+        record_name: str | None,
+        category: str,
+        components: tuple[str, ...],
+        raw: tuple[str, ...] = (),
+        pg: tuple[str, ...] = (),
+        label: tuple[str, ...] = (),
+        selection: tuple[str, ...] = (),
+        ids: tuple[int, ...] | None = None,
+        dt: float | None = None,
+        n_steps: int | None = None,
+        file_root: str = ".",
+    ) -> None:
+        """Open a recorder-declaration archival context.
+
+        Each subsequent :meth:`recorder` call (until the matching
+        :meth:`recorder_declaration_end`) is tagged with this
+        metadata, persisted in the unified ``/opensees/recorders/``
+        group as schema 2.3.0 ``kind="declared"`` entries.
+        """
+        if self._decl_context is not None:
+            raise RuntimeError(
+                "H5Emitter.recorder_declaration_begin: a declaration "
+                "context is already open. Nested declarations are not "
+                "supported — call recorder_declaration_end() first."
+            )
+        self._decl_context = _DeclContext(
+            declaration_name=declaration_name,
+            record_name=record_name,
+            category=category,
+            components=components,
+            raw=raw,
+            pg=pg,
+            label=label,
+            selection=selection,
+            ids=ids,
+            dt=dt,
+            n_steps=n_steps,
+            file_root=file_root,
+        )
+
+    def recorder_declaration_end(self) -> None:
+        """Close the active recorder-declaration archival context."""
+        if self._decl_context is None:
+            raise RuntimeError(
+                "H5Emitter.recorder_declaration_end: no active "
+                "declaration context (begin/end mismatch)."
+            )
+        self._decl_context = None
 
     # =====================================================================
     # Protocol — Analysis chain
@@ -1335,6 +1433,11 @@ class H5Emitter:
         recorders = self._ops_group(f).create_group("recorders")
         for idx, rec in enumerate(self._recorders):
             g = recorders.create_group(recorder_name(rec, idx))
+            # Schema 2.3.0: every record carries a ``kind`` attr.
+            # ``typed`` — Node / Element / MPCO primitive (1:1 OpenSees).
+            # ``declared`` — fan-out call from a ``RecorderDeclaration``
+            # (carries the original declaration metadata alongside).
+            _set_attr(g, "kind", "declared" if rec.decl_context else "typed")
             _set_attr(g, "type", rec.kind)
             # Surface the -file flag's value as an explicit attr; it's
             # the most-used identifier across recorders.
@@ -1342,6 +1445,22 @@ class H5Emitter:
             if file_path is not None:
                 _set_attr(g, "file", file_path)
             _write_param_array(g, "params", rec.args)
+            # Schema 2.3.0: declaration metadata for ``declared`` records.
+            ctx = rec.decl_context
+            if ctx is not None:
+                _set_attr(g, "declaration_name", ctx.declaration_name)
+                _set_attr(g, "record_name", ctx.record_name)
+                _set_attr(g, "category", ctx.category)
+                _set_attr(g, "components", ctx.components)
+                _set_attr(g, "raw", ctx.raw)
+                _set_attr(g, "pg", ctx.pg)
+                _set_attr(g, "label", ctx.label)
+                _set_attr(g, "selection", ctx.selection)
+                if ctx.ids is not None:
+                    _set_attr(g, "ids", ctx.ids)
+                _set_attr(g, "dt", ctx.dt)
+                _set_attr(g, "n_steps", ctx.n_steps)
+                _set_attr(g, "file_root", ctx.file_root)
 
     # -- Analysis chain --------------------------------------------------
 

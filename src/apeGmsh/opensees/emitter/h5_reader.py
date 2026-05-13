@@ -203,7 +203,26 @@ class H5Model:
         return self._group_attrs_map("opensees/patterns")
 
     def recorders(self) -> dict[str, dict[str, Any]]:
-        return self._group_attrs_map("opensees/recorders")
+        """Return ``{name: attrs}`` for ``/opensees/recorders``.
+
+        Schema 2.3.0 unifies typed and declared recorders into one
+        group. Every entry carries a ``kind`` attr — ``"typed"`` for
+        ``Node`` / ``Element`` / ``MPCO`` primitives (1:1 with an
+        OpenSees recorder command), ``"declared"`` for fan-out calls
+        produced by ``ops.recorder.declare(...)``. Declared entries
+        also expose the original declaration metadata as attrs
+        (``declaration_name``, ``record_name``, ``category``,
+        ``components``, ``raw``, ``pg``, ``label``, ``selection``,
+        ``ids``, ``dt``, ``n_steps``, ``file_root``).
+
+        For legacy 2.0.0 – 2.2.0 archives (no ``kind`` attr at write
+        time) this accessor synthesizes ``kind="typed"`` so callers
+        can branch on the field uniformly without a version probe.
+        """
+        out = self._group_attrs_map("opensees/recorders")
+        for entry in out.values():
+            entry.setdefault("kind", "typed")
+        return out
 
     def analysis(self) -> dict[str, Any] | None:
         a = self._f.get("opensees/analysis")

@@ -727,24 +727,49 @@ def _emit_recorder_declaration(
     )
 
     for record in decl.records:
-        if record.category == "nodes":
-            _emit_nodes_record(record, decl, emitter, fem,
-                               group_node_components_by_ops_token)
-        elif record.category in ("elements", "line_stations", "gauss"):
-            _emit_element_level_record(
-                record, decl, emitter, fem, element_record_response_tokens,
-            )
-        elif record.category in ("fibers", "layers", "modal"):
+        if record.category in ("fibers", "layers", "modal"):
             raise NotImplementedError(
                 f"RecorderDeclaration record(category={record.category!r}) "
                 "is not file-emit-able; use DomainCapture instead (Phase 9 "
                 "commit 5 provides the bridge-friendly entry point)."
             )
-        else:  # pragma: no cover  - guarded by RecorderRecord validation
+        if record.category not in (
+            "nodes", "elements", "line_stations", "gauss",
+        ):  # pragma: no cover  - guarded by RecorderRecord validation
             raise ValueError(
                 f"unrecognized category {record.category!r} on "
                 f"RecorderDeclaration record"
             )
+
+        # Schema 2.3.0: bracket every fan-out with declaration
+        # metadata so the H5 emitter can archive the original intent
+        # alongside each emitted ``recorder(...)`` call. Lean emitters
+        # (Tcl / Py / Live / Recording) treat these calls as no-ops.
+        emitter.recorder_declaration_begin(
+            declaration_name=decl.name,
+            record_name=record.name,
+            category=record.category,
+            components=record.components,
+            raw=record.raw,
+            pg=record.pg,
+            label=record.label,
+            selection=record.selection,
+            ids=record.ids,
+            dt=record.dt,
+            n_steps=record.n_steps,
+            file_root=decl.file_root,
+        )
+        try:
+            if record.category == "nodes":
+                _emit_nodes_record(record, decl, emitter, fem,
+                                   group_node_components_by_ops_token)
+            else:
+                _emit_element_level_record(
+                    record, decl, emitter, fem,
+                    element_record_response_tokens,
+                )
+        finally:
+            emitter.recorder_declaration_end()
 
 
 def _emit_nodes_record(

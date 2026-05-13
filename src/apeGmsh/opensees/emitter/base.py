@@ -98,6 +98,35 @@ class Emitter(Protocol):
     # -- Recorders -------------------------------------------------------
     def recorder(self, kind: str, *args: int | float | str) -> None: ...
 
+    # -- Recorder declaration archival (Phase 9 schema 2.3.0) ------------
+    # These two methods bracket the file-emit fan-out of a single
+    # :class:`apeGmsh.opensees.recorder.RecorderRecord`. Every
+    # :meth:`recorder` call issued between ``recorder_declaration_begin``
+    # and ``recorder_declaration_end`` is associated with the same
+    # declaration metadata; emitters that archive model state (the H5
+    # emitter, schema 2.3.0+) persist that metadata alongside each
+    # fan-out call. Tcl / py / live / recording emitters implement
+    # both methods as no-ops — they don't archive declaration intent,
+    # only the OpenSees commands themselves.
+    def recorder_declaration_begin(
+        self,
+        *,
+        declaration_name: str,
+        record_name: str | None,
+        category: str,
+        components: tuple[str, ...],
+        raw: tuple[str, ...] = (),
+        pg: tuple[str, ...] = (),
+        label: tuple[str, ...] = (),
+        selection: tuple[str, ...] = (),
+        ids: tuple[int, ...] | None = None,
+        dt: float | None = None,
+        n_steps: int | None = None,
+        file_root: str = ".",
+    ) -> None: ...
+
+    def recorder_declaration_end(self) -> None: ...
+
     # -- Analysis chain --------------------------------------------------
     def constraints(self, c_type: str, *args: float) -> None: ...
     def numberer(self, n_type: str) -> None: ...
