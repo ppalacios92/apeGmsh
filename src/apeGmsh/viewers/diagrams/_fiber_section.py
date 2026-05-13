@@ -31,8 +31,8 @@ from ._scalar_bar_support import ScalarBarSupport
 from ._styles import FiberSectionStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -86,20 +86,20 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError(
                 "FiberSectionDiagram.attach requires a FEMSceneData."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: FiberSectionStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve element IDs (line elements only) ────────────────
         element_ids = self._resolved_element_ids
         if element_ids is None:
-            element_ids = self._collect_line_element_ids(fem)
+            element_ids = self._collect_line_element_ids(view)
         if element_ids.size == 0:
             return
         self._element_ids_to_read = tuple(int(e) for e in element_ids)
@@ -130,7 +130,7 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
 
         # ── Endpoints lookup for unique beam IDs ────────────────────
         unique_eids = np.unique(slab_eid)
-        endpoints = self._collect_endpoints(fem, unique_eids)
+        endpoints = self._collect_endpoints(view, unique_eids)
 
         # ── Cache per-beam local frames (computed once) ─────────────
         local_frames: dict[int, tuple[ndarray, ndarray, ndarray, ndarray]] = {}
@@ -422,27 +422,27 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
             return None
 
     @staticmethod
-    def _collect_line_element_ids(fem: "FEMData") -> ndarray:
+    def _collect_line_element_ids(view: "ViewerData") -> ndarray:
         ids: list[int] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim == 1:
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)
 
     @staticmethod
     def _collect_endpoints(
-        fem: "FEMData", element_ids: ndarray,
+        view: "ViewerData", element_ids: ndarray,
     ) -> dict[int, tuple[ndarray, ndarray]]:
         eid_set = {int(e) for e in element_ids}
-        node_ids_arr = np.asarray(list(fem.nodes.ids), dtype=np.int64)
-        coords_arr = np.asarray(fem.nodes.coords, dtype=np.float64)
+        node_ids_arr = np.asarray(list(view.nodes.ids), dtype=np.int64)
+        coords_arr = np.asarray(view.nodes.coords, dtype=np.float64)
         if node_ids_arr.size == 0:
             return {}
         max_nid = int(node_ids_arr.max())
         nid_to_idx = np.full(max_nid + 2, -1, dtype=np.int64)
         nid_to_idx[node_ids_arr] = np.arange(node_ids_arr.size, dtype=np.int64)
         out: dict[int, tuple[ndarray, ndarray]] = {}
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim != 1:
                 continue
             ids = np.asarray(group.ids, dtype=np.int64)

@@ -38,8 +38,8 @@ from ._beam_geometry import (
 from ._styles import LineForceStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -89,7 +89,7 @@ class LineForceDiagram(Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
@@ -97,13 +97,13 @@ class LineForceDiagram(Diagram):
                 "LineForceDiagram.attach requires a FEMSceneData. The "
                 "Director must call bind_plotter(plotter, scene=scene)."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: LineForceStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve element IDs (line elements only) ────────────────
         element_ids = self._resolved_element_ids
         if element_ids is None:
-            element_ids = self._collect_line_element_ids(fem)
+            element_ids = self._collect_line_element_ids(view)
         if element_ids.size == 0:
             from ._base import NoDataError
             raise NoDataError(
@@ -146,7 +146,7 @@ class LineForceDiagram(Diagram):
         # ── Endpoint lookup for each unique beam ────────────────────
         unique_eids = np.unique(slab_eids)
         endpoints, endpoint_subs = self._collect_endpoints_with_subs(
-            fem, scene, unique_eids,
+            view, scene, unique_eids,
         )
         self._endpoint_subs_idx = endpoint_subs
 
@@ -407,14 +407,14 @@ class LineForceDiagram(Diagram):
         if self._runtime_axis == normalized:
             return
         self._runtime_axis = normalized
-        if self.is_attached and self._fem is not None:
-            # Capture before detach() — that call clears _fem/_plotter/_scene.
+        if self.is_attached and self._view is not None:
+            # Capture before detach() — that call clears _view/_plotter/_scene.
             plotter = self._plotter
             scene = self._scene
-            fem = self._fem
+            view = self._view
             last_step = self._last_step
             self.detach()
-            self.attach(plotter, fem, scene)
+            self.attach(plotter, view, scene)
             # Re-attach starts at step-0 values against the undeformed
             # FEM coords. Push the step the user was on, then sync to
             # the current (possibly deformed) substrate so the diagram
@@ -493,17 +493,17 @@ class LineForceDiagram(Diagram):
             return None
 
     @staticmethod
-    def _collect_line_element_ids(fem: "FEMData") -> ndarray:
+    def _collect_line_element_ids(view: "ViewerData") -> ndarray:
         """Return all 1-D element IDs in the FEM."""
         ids: list[int] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim == 1:
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)
 
     @staticmethod
     def _collect_endpoints_with_subs(
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData",
         element_ids: ndarray,
     ) -> "tuple[dict[int, tuple[ndarray, ndarray]], dict[int, tuple[int, int]]]":
@@ -514,8 +514,8 @@ class LineForceDiagram(Diagram):
         re-samples from to follow the deformed substrate.
         """
         eid_set = {int(e) for e in element_ids}
-        node_ids_arr = np.asarray(list(fem.nodes.ids), dtype=np.int64)
-        coords_arr = np.asarray(fem.nodes.coords, dtype=np.float64)
+        node_ids_arr = np.asarray(list(view.nodes.ids), dtype=np.int64)
+        coords_arr = np.asarray(view.nodes.coords, dtype=np.float64)
         if node_ids_arr.size == 0:
             return {}, {}
         max_nid = int(node_ids_arr.max())
@@ -532,7 +532,7 @@ class LineForceDiagram(Diagram):
 
         coords_out: dict[int, tuple[ndarray, ndarray]] = {}
         subs_out: dict[int, tuple[int, int]] = {}
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim != 1:
                 continue
             ids = np.asarray(group.ids, dtype=np.int64)

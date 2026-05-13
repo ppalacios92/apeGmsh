@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
     from apeGmsh.results.readers._protocol import StageInfo
+    from apeGmsh.viewers.data import ViewerData
     from ._base import Diagram
     from ..scene.fem_scene import FEMSceneData
 
@@ -147,6 +148,26 @@ class ResultsDirector:
     @property
     def fem(self) -> "Optional[FEMData]":
         return self._results.fem
+
+    @property
+    def view(self) -> "Optional[ViewerData]":
+        """Cached :class:`ViewerData` wrap of the bound results' FEMData.
+
+        Phase 8.7 commit 5 — the canonical viewer-facing structural
+        snapshot.  Cached lazily; callers should treat it as immutable
+        for the lifetime of the director.  Returns ``None`` if no
+        FEMData is bound.
+        """
+        from apeGmsh.viewers.data import ViewerData
+        cached: "Optional[ViewerData]" = getattr(self, "_view_cache", None)
+        if cached is not None:
+            return cached
+        fem = self._results.fem
+        if fem is None:
+            return None
+        new_view = ViewerData.from_fem(fem)
+        self._view_cache: "Optional[ViewerData]" = new_view
+        return new_view
 
     @property
     def registry(self) -> DiagramRegistry:
@@ -526,13 +547,13 @@ class ResultsDirector:
             per event. If ``None``, the registry is bound but no
             auto-render fires (test mode).
         """
-        fem = self._results.fem
-        if fem is None:
+        view = self.view
+        if view is None:
             raise RuntimeError(
                 "Cannot bind a ResultsDirector without a bound FEMData. "
                 "Construct Results with fem= or call results.bind(fem)."
             )
-        self._registry.bind(plotter, fem, scene)
+        self._registry.bind(plotter, view, scene)
         self._render_callback = render_callback
 
     def unbind_plotter(self) -> None:

@@ -771,7 +771,7 @@ class ResultsViewer:
                     continue
                 try:
                     d.detach()
-                    d.attach(plotter, director.fem, scene)
+                    d.attach(plotter, director.view, scene)
                 except Exception:
                     continue
 

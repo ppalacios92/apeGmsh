@@ -21,7 +21,7 @@ import numpy as np
 from numpy import ndarray
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
+    from apeGmsh.viewers.data import ViewerData
 
 
 @dataclass(frozen=True)
@@ -71,8 +71,16 @@ class SlabSelector:
     # Resolution
     # ------------------------------------------------------------------
 
-    def resolve_node_ids(self, fem: "FEMData") -> Optional[ndarray]:
-        """Return a node ID array, or None for 'all nodes'."""
+    def resolve_node_ids(self, view: "ViewerData") -> Optional[ndarray]:
+        """Return a node ID array, or None for 'all nodes'.
+
+        ``view`` is a :class:`ViewerData` snapshot; a raw FEMData still
+        works at runtime via duck typing on
+        ``nodes.physical.node_ids(name)`` / ``nodes.labels.node_ids(name)``.
+        The ``selection=`` branch is ViewerData-only — passing a raw
+        FEMData with ``selection=`` set will silently return empty
+        arrays (the documented gap in schema 2.4.0; see ADR 0014).
+        """
         if self.ids is not None:
             return np.asarray(self.ids, dtype=np.int64)
         if self._is_unrestricted():
@@ -82,29 +90,41 @@ class SlabSelector:
         if self.pg is not None:
             for name in self.pg:
                 out.append(np.asarray(
-                    fem.nodes.physical.node_ids(name), dtype=np.int64,
+                    view.nodes.physical.node_ids(name), dtype=np.int64,
                 ))
         elif self.label is not None:
             for name in self.label:
                 out.append(np.asarray(
-                    fem.nodes.labels.node_ids(name), dtype=np.int64,
+                    view.nodes.labels.node_ids(name), dtype=np.int64,
                 ))
         elif self.selection is not None:
-            store = getattr(fem, "mesh_selection", None)
-            if store is None:
-                raise RuntimeError(
-                    "selection= requires fem.mesh_selection — none captured "
-                    "in this FEMData snapshot."
-                )
-            for name in self.selection:
-                out.append(np.asarray(
-                    store.node_ids(name), dtype=np.int64,
-                ))
+            selection_view = getattr(
+                getattr(view, "nodes", None), "selection", None,
+            )
+            if selection_view is None:
+                # Legacy FEMData input without ViewerData wrap — fall
+                # back to the live store path so existing apps keep
+                # working until full migration.
+                store = getattr(view, "mesh_selection", None)
+                if store is None:
+                    raise RuntimeError(
+                        "selection= requires a ViewerData (or a FEMData "
+                        "with mesh_selection captured)."
+                    )
+                for name in self.selection:
+                    out.append(np.asarray(
+                        store.node_ids(name), dtype=np.int64,
+                    ))
+            else:
+                for name in self.selection:
+                    out.append(np.asarray(
+                        selection_view.node_ids(name), dtype=np.int64,
+                    ))
         if not out:
             return np.array([], dtype=np.int64)
         return np.unique(np.concatenate(out))
 
-    def resolve_element_ids(self, fem: "FEMData") -> Optional[ndarray]:
+    def resolve_element_ids(self, view: "ViewerData") -> Optional[ndarray]:
         """Return an element ID array, or None for 'all elements'."""
         if self.ids is not None:
             return np.asarray(self.ids, dtype=np.int64)
@@ -115,24 +135,33 @@ class SlabSelector:
         if self.pg is not None:
             for name in self.pg:
                 out.append(np.asarray(
-                    fem.elements.physical.element_ids(name), dtype=np.int64,
+                    view.elements.physical.element_ids(name), dtype=np.int64,
                 ))
         elif self.label is not None:
             for name in self.label:
                 out.append(np.asarray(
-                    fem.elements.labels.element_ids(name), dtype=np.int64,
+                    view.elements.labels.element_ids(name), dtype=np.int64,
                 ))
         elif self.selection is not None:
-            store = getattr(fem, "mesh_selection", None)
-            if store is None:
-                raise RuntimeError(
-                    "selection= requires fem.mesh_selection — none captured "
-                    "in this FEMData snapshot."
-                )
-            for name in self.selection:
-                out.append(np.asarray(
-                    store.element_ids(name), dtype=np.int64,
-                ))
+            selection_view = getattr(
+                getattr(view, "elements", None), "selection", None,
+            )
+            if selection_view is None:
+                store = getattr(view, "mesh_selection", None)
+                if store is None:
+                    raise RuntimeError(
+                        "selection= requires a ViewerData (or a FEMData "
+                        "with mesh_selection captured)."
+                    )
+                for name in self.selection:
+                    out.append(np.asarray(
+                        store.element_ids(name), dtype=np.int64,
+                    ))
+            else:
+                for name in self.selection:
+                    out.append(np.asarray(
+                        selection_view.element_ids(name), dtype=np.int64,
+                    ))
         if not out:
             return np.array([], dtype=np.int64)
         return np.unique(np.concatenate(out))

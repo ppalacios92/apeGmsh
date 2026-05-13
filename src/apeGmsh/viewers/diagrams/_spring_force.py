@@ -25,8 +25,8 @@ from ._base import Diagram, DiagramSpec
 from ._styles import SpringForceStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -83,20 +83,20 @@ class SpringForceDiagram(Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError(
                 "SpringForceDiagram.attach requires a FEMSceneData."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: SpringForceStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve element IDs (zero-length springs are 1-D elements) ─
         element_ids = self._resolved_element_ids
         if element_ids is None:
-            element_ids = self._collect_zero_length_ids(fem)
+            element_ids = self._collect_zero_length_ids(view)
         if element_ids.size == 0:
             from ._base import NoDataError
             raise NoDataError(
@@ -106,7 +106,7 @@ class SpringForceDiagram(Diagram):
         self._element_ids_to_read = tuple(int(e) for e in element_ids)
 
         # ── Spring world positions (use node i — i and j coincide) ──
-        positions = self._collect_spring_positions(fem, element_ids)
+        positions = self._collect_spring_positions(view, element_ids)
         if positions.shape[0] == 0:
             from ._base import NoDataError
             raise NoDataError(
@@ -347,22 +347,22 @@ class SpringForceDiagram(Diagram):
             return pv.PolyData(np.asarray(self._source.points))
 
     @staticmethod
-    def _collect_zero_length_ids(fem: "FEMData") -> ndarray:
+    def _collect_zero_length_ids(view: "ViewerData") -> ndarray:
         """All 1-D element IDs (springs are 1-D, dim==1)."""
         ids: list[int] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim == 1:
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)
 
     @staticmethod
     def _collect_spring_positions(
-        fem: "FEMData", element_ids: ndarray,
+        view: "ViewerData", element_ids: ndarray,
     ) -> ndarray:
         """Return ``(n_elements, 3)`` of node-i positions (i == j for ZL)."""
         eid_set = {int(e) for e in element_ids}
-        node_ids_arr = np.asarray(list(fem.nodes.ids), dtype=np.int64)
-        coords_arr = np.asarray(fem.nodes.coords, dtype=np.float64)
+        node_ids_arr = np.asarray(list(view.nodes.ids), dtype=np.int64)
+        coords_arr = np.asarray(view.nodes.coords, dtype=np.float64)
         if node_ids_arr.size == 0:
             return np.zeros((0, 3))
         max_nid = int(node_ids_arr.max())
@@ -372,7 +372,7 @@ class SpringForceDiagram(Diagram):
         )
         out_eids: list[int] = []
         out_pos: list[ndarray] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim != 1:
                 continue
             ids = np.asarray(group.ids, dtype=np.int64)

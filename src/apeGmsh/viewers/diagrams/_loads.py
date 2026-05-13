@@ -25,8 +25,8 @@ from ._base import Diagram, DiagramSpec
 from ._styles import LoadsStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -62,12 +62,12 @@ class LoadsDiagram(Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError("LoadsDiagram.attach requires a FEMSceneData.")
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: LoadsStyle = self.spec.style    # type: ignore[assignment]
         pattern = self.spec.selector.component
 
@@ -77,7 +77,7 @@ class LoadsDiagram(Diagram):
         node_ids: list[int] = []
         forces: list[tuple[float, float, float]] = []
         try:
-            records = list(fem.nodes.loads.by_pattern(pattern))
+            records = list(view.nodes.loads.by_pattern(pattern))
         except Exception:
             records = []
         for r in records:
