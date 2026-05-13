@@ -129,11 +129,12 @@ cut_def = SectionCutDef.from_plane_and_pg(
 | 5 | `SectionSweepDef` + `from_pg_pattern` | **done** |
 | v2.1 | `bounding_polygon_from_physical_surface` + `with_bounding=True` flag | **done** |
 | v3.1 | `SectionSweepDef.from_pg_glob(pattern=...)` + `with_bounding` propagation | **done** |
-| v2.2 | Viewer overlay — `SectionCutDiagram` Layer kind + filter highlight | **in progress** |
+| v2.2 | Viewer overlay — `SectionCutDiagram` Layer kind + filter highlight | **done** |
+| v2.3 | `SectionCutDef.preflight(fem)` validator — drift checks | **in progress** |
 
 v4 and beyond (`model.h5` persistence of cuts, live editing, drift
 specs, sweep templates) are described in the session that drafted this
-plan — out of scope for this directory until v2.2 is complete.
+plan — out of scope for this directory until v2.3 is complete.
 
 ## v2.2 — Viewer overlay
 
@@ -271,8 +272,121 @@ If this passes, the seam holds.
 - **Required for `to_spec()`:** `STKO_to_python` (optional, lazy-imported).
 - **Required for `from_planar_pg(...)` (Phase 4):** `h5py` (already a hard apeGmsh dep via `model.h5`).
 
+## v2.3 — Preflight validator
+
+A `SectionCutDef` can drift away from the FEM that produced it: the
+user re-meshes, renames a physical group, drops a column, edits the
+diaphragm geometry. The pickled cut still loads — it doesn't know any
+of this happened — and `.to_spec()` happily round-trips it. Errors
+only surface much later, at consumption time inside STKO, with a stack
+trace that doesn't point back to the stale cut.
+
+`preflight()` is a structured validator that checks a cut against a
+live `FEMData` (optionally plus a `model.h5` for the OpenSees-tag
+bridge) and returns a report of errors and warnings. Doesn't auto-fix.
+Doesn't mutate the cut. Pure inspection.
+
+### Locked design decisions
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| P1 | Inputs | `preflight(fem, *, model_h5=None, tag_map=None)` — either `model_h5` or a cached `tag_map` enables ops-tag checks; both omitted skips E1/E2; both supplied raises `ValueError` | Sweep callers cache one `FemToOpsTagMap` and reuse across N cuts. `fem`-only mode supports "I haven't emitted model.h5 yet, just want geometry sanity." |
+| P2 | Severity model | Two buckets — errors (cut will produce wrong/empty results) vs warnings (suspicious but possibly legitimate) | Matches the brief. Avoids over-engineered severity ladders. |
+| P3 | Error list | **E1** ops tag not in tag map; **E2** ops tag → FEM eid that's no longer in `fem.elements`; **E3** bounding polygon vertex off cut plane beyond `tol`; **E4** filter resolves to zero existing elements | All four are conditions where the cut, as written, cannot produce a correct result. |
+| P4 | Warning list | **W1** bulk AABB of filter elements doesn't straddle the cut plane (all nodes one side, by `tol`) | The "cut would integrate zero area" case — usually a mistake, but legitimate for sweeps near a structure edge. Warning, not error. |
+| P5 | Tolerance | One `tol: float = 1e-6` kwarg, used for both E3 (polygon-on-plane) and W1 (AABB-straddle) | Matches `plane_from_physical_surface`. Mismatched tolerances confuse users. |
+| P6 | Module layout | New `_preflight.py` holds `PreflightIssue` + `PreflightReport`; `SectionCutDef.preflight` / `SectionSweepDef.preflight` are thin methods that import and dispatch | Keeps `_defs.py` focused on the dataclass; preflight grows independently. |
+| P7 | Sweep return type | `SectionSweepDef.preflight(...) -> tuple[PreflightReport, ...]` — one report per cut in cut order | Caller composes aggregation; no wrapper class until a real call site demands one. |
+| P8 | Dependencies | numpy only — no scipy, no STKO, no h5py beyond what `FemToOpsTagMap.from_h5` already pulls | Honors the "cuts importable without scipy" constraint. |
+
+### Issue codes
+
+| Code | Severity | Trigger | What the user usually did |
+|------|----------|---------|----------------------------|
+| E1 | error | `ops_tag in cut.element_ids` not present in tag map | Re-emitted model.h5 with new tag namespace; old cut is stale |
+| E2 | error | `ops_tag` resolves to `fem_eid` not in `fem.elements.ids` | FEM eid was deleted from the mesh after the cut was built |
+| E3 | error | `bounding_polygon` vertex distance from plane > `tol` | Edited plane or polygon independently; they no longer agree |
+| E4 | error | No filter elements exist in the current FEM | All filter elements were removed; cut is empty |
+| W1 | warning | Filter node AABB lies entirely one side of plane | Either a deliberate edge-of-structure sweep, or a forgotten plane-elevation update |
+
+### Report shape
+
+```python
+@dataclass(frozen=True)
+class PreflightIssue:
+    code: str                          # "E1", "E2", "E3", "E4", "W1"
+    severity: Literal["error", "warning"]
+    message: str                       # human-readable, one line
+    detail: Mapping[str, object] | None = None  # structured payload
+
+@dataclass(frozen=True)
+class PreflightReport:
+    cut_label: str | None
+    errors: tuple[PreflightIssue, ...]
+    warnings: tuple[PreflightIssue, ...]
+
+    @property
+    def ok(self) -> bool: ...          # no errors (warnings don't block)
+
+    def raise_for_errors(self) -> None: ...  # PreflightError if any
+
+    def __str__(self) -> str: ...      # multi-line summary
+```
+
+### Data flow
+
+```
+SectionCutDef (carrying OpenSees tags)
+    │
+    │  preflight(fem, model_h5=... or tag_map=...)
+    ▼
+1. E3 — polygon-on-plane: vertex distance from plane vs tol
+2. If tag_map present:
+    a. E1 — every ops_tag in cut.element_ids must be in tag_map
+    b. Resolve survivors to fem_eids
+    c. E2 — every resolved fem_eid must be in fem.elements.ids
+    d. E4 — at least one fem_eid must remain
+   Else:
+    a. (skip E1/E2/E4; document this in the report?)
+3. If we resolved fem_eids successfully:
+    a. Collect unique node ids from filter elements' connectivity
+    b. Look up coords in fem.nodes
+    c. W1 — signed distance min/max must straddle 0 (within tol)
+4. Build PreflightReport(errors, warnings)
+```
+
+### Package-layout addition
+
+```
+src/apeGmsh/cuts/
+└── _preflight.py            ← new: PreflightIssue, PreflightReport, _run_checks
+```
+
+`_defs.py` gains `SectionCutDef.preflight(...)`. `_sweeps.py` gains
+`SectionSweepDef.preflight(...)`. `__init__.py` re-exports
+`PreflightIssue` and `PreflightReport` (the report types — `_run_checks`
+stays internal).
+
+### Phase roadmap
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| v2.3-0 | This architecture section | **done** |
+| v2.3-1 | `PreflightIssue` + `PreflightReport` + `SectionCutDef.preflight` + `SectionSweepDef.preflight` + tests | **done** |
+
+### Out of scope for v2.3
+
+- Auto-fixing drifted cuts (e.g. re-resolving filter elements after a
+  re-mesh). The Def is frozen; "fix" means construct a new one.
+- Validating against `model.h5` content beyond the tag map (e.g. is
+  the cut plane near a recorder?). The recorder layer is a different
+  concern.
+- Strict-mode preflight that promotes warnings to errors. Caller can
+  do this on the report.
+
 ## Versioning
 
 apeGmsh follows pyproject `version` bumps. New optional subpackage =
 minor bump. Schema bump only at Phase 4 if we decide to persist cuts
 in `model.h5` (currently planned for v4 of the roadmap, not v1).
+v2.3 is a pure additive method — no schema impact.

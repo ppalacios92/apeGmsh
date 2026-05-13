@@ -34,6 +34,9 @@ from ._defs import SectionCutDef, Side, Vec3
 if TYPE_CHECKING:
     from apeGmsh.mesh.FEMData import FEMData
 
+    from ._preflight import PreflightReport
+    from ._tag_map import FemToOpsTagMap
+
 
 @dataclass(frozen=True)
 class SectionSweepDef:
@@ -227,6 +230,38 @@ class SectionSweepDef:
             normal_hint=normal_hint,
             tol=tol,
             with_bounding=with_bounding,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Preflight (v2.3)
+    # ------------------------------------------------------------------ #
+    def preflight(
+        self,
+        fem: "FEMData",
+        *,
+        model_h5: str | Path | None = None,
+        tag_map: "FemToOpsTagMap | None" = None,
+        tol: float = 1e-6,
+    ) -> tuple["PreflightReport", ...]:
+        """Run :meth:`SectionCutDef.preflight` on every cut in the sweep.
+
+        Returns one report per cut in sweep order. If ``model_h5`` is
+        supplied, the tag map is loaded once and reused across all
+        cuts (cheaper than letting each cut re-read the file).
+
+        ``model_h5`` and ``tag_map`` are mutually exclusive — same
+        contract as :meth:`SectionCutDef.preflight`.
+        """
+        if model_h5 is not None and tag_map is not None:
+            raise ValueError(
+                "Pass either model_h5=... or tag_map=..., not both."
+            )
+        if tag_map is None and model_h5 is not None:
+            from ._tag_map import FemToOpsTagMap
+            tag_map = FemToOpsTagMap.from_h5(model_h5)
+        return tuple(
+            cut.preflight(fem, tag_map=tag_map, tol=tol)
+            for cut in self.cuts
         )
 
     # ------------------------------------------------------------------ #

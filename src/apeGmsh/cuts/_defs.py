@@ -28,6 +28,9 @@ import numpy as np
 if TYPE_CHECKING:
     from apeGmsh.mesh.FEMData import FEMData
 
+    from ._preflight import PreflightReport
+    from ._tag_map import FemToOpsTagMap
+
 
 Vec3 = tuple[float, float, float]
 Side = Literal["positive", "negative"]
@@ -298,6 +301,42 @@ class SectionCutDef:
                 else f"plane={plane_pg}, elements={elements_pg}"
             ),
             bounding_polygon=bounding_polygon,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Preflight (v2.3)
+    # ------------------------------------------------------------------ #
+    def preflight(
+        self,
+        fem: "FEMData",
+        *,
+        model_h5: str | Path | None = None,
+        tag_map: "FemToOpsTagMap | None" = None,
+        tol: float = 1e-6,
+    ) -> "PreflightReport":
+        """Validate this cut against a live ``FEMData`` snapshot.
+
+        Returns a :class:`PreflightReport` with structured errors and
+        warnings; does not mutate the cut. See
+        :mod:`apeGmsh.cuts._preflight` for the issue catalog
+        (E1–E4, W1) and design rationale.
+
+        Parameters
+        ----------
+        fem:
+            Solver-ready :class:`apeGmsh.mesh.FEMData.FEMData` to check
+            against.
+        model_h5, tag_map:
+            Provide one (not both) to enable the OpenSees-tag checks
+            (E1, E2, E4) and the W1 AABB scan. Without either, only
+            the polygon-on-plane check (E3) runs.
+        tol:
+            Tolerance for the polygon-on-plane check (E3) and the
+            AABB-straddle check (W1). Default ``1e-6``.
+        """
+        from ._preflight import run_cut_checks
+        return run_cut_checks(
+            self, fem, model_h5=model_h5, tag_map=tag_map, tol=tol,
         )
 
     # ------------------------------------------------------------------ #
