@@ -129,11 +129,99 @@ cut_def = SectionCutDef.from_plane_and_pg(
 | 5 | `SectionSweepDef` + `from_pg_pattern` | **done** |
 | v2.1 | `bounding_polygon_from_physical_surface` + `with_bounding=True` flag | **done** |
 | v3.1 | `SectionSweepDef.from_pg_glob(pattern=...)` + `with_bounding` propagation | **done** |
+| v2.2 | Viewer overlay — `SectionCutDiagram` Layer kind + filter highlight | **in progress** |
 
-v2 and beyond (viewer overlay, bounding-polygon derivation, `model.h5`
-persistence, drift specs, sweep templates) are described in the
-session that drafted this plan — out of scope for this directory until
-v1 is complete.
+v4 and beyond (`model.h5` persistence of cuts, live editing, drift
+specs, sweep templates) are described in the session that drafted this
+plan — out of scope for this directory until v2.2 is complete.
+
+## v2.2 — Viewer overlay
+
+Renders planned cuts in `results.viewer()` so a user can see the
+plane, identify the kept side, and inspect which elements the filter
+resolves to. Out of scope: F/M resultants (post-analysis), per-step
+animation (cuts are static), STKO kernel changes.
+
+### Integration choice — Diagram Layer, not Overlay
+
+A cut becomes a `Diagram` of `kind="section_cut"` slotted into the
+existing Geometries → Diagrams → Layers outline. One `SectionCutDef`
+maps to one Layer; a `SectionSweepDef` fans out into N Layers at add
+time. Rationale:
+
+- Reuses the four-method Diagram lifecycle (attach / update / detach
+  / settings_widget), the registry's add/remove/replace plumbing, the
+  outline tree's selection routing, and the dispatcher's GATE pump
+  for per-Geometry visibility — no new infrastructure.
+- The "non-Results-data diagram kind" precedent already exists:
+  `LoadsDiagram` reads `fem.nodes.loads`, not a Results composite.
+  `SectionCutDiagram` is the same shape — it reads a `SectionCutDef`
+  carried on its own style record.
+- One Layer per cut means individual toggle / select / highlight
+  comes for free. Fanning a sweep into N Layers preserves that
+  granularity at the cost of a longer outline list.
+
+### Locked design decisions
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| D1 | Primary viewer | `results.viewer()` first; `g.mesh.viewer(fem=)` reuse deferred to Phase 1c | The outline hierarchy the brief calls out lives in `results.viewer()` post-PR-#54 |
+| D2 | Quad extent | `bounding_polygon` when set; else clip plane to the filter elements' AABB (not the model AABB) | Bounded case matches kernel exactly. Unbounded case shows roughly where the cut actually integrates — model-AABB would be a visual fiction on large structures |
+| D3 | Kept-side visual | Two-tone quad (front=kept color, back=discarded color) + small fixed-size normal arrow at quad centroid | Half-space translucent fill dominates with multiple cuts; two-tone uses VTK's native front/back face coloring with the arrow as the orbit-edge-on fallback |
+| D4 | Filter highlight | Per-card "Show filter elements" checkbox on the layer's `settings_widget()` — explicit toggle. The v2 outline pivot dropped per-Layer selection events, so auto-highlight-on-select is deferred to Phase 2 when a per-Layer selection model lands. | Always-on crowds the scene and fights contour/vector layers' coloring |
+| D5 | Filter highlight rendering | Separate `scene.grid.extract_cells(...)` actor drawn on top of substrate, uniform color | Avoids stomping substrate scalars used by other layers in the same composition |
+| D6 | Deformation | Cuts are reference-config only; ignore the Geometry's deform field | The cut plane was defined against the input model — making it follow deformation is conceptually muddled |
+| D7 | OpenSees → FEM eid bridge | `ResultsDirector` gains a `model_h5` setter + lazy `tag_map: Optional[FemToOpsTagMap]` property; Layers consume it | Tag map is per-viewer-session state, not per-layer. Avoids re-reading model.h5 once per cut |
+| D8 | Spec carrier | `SectionCutStyle(cut: SectionCutDef, ...)` — frozen-in-frozen, used as `DiagramSpec.style` | Keeps the existing `DiagramSpec` record untouched; cut data rides where styles already ride |
+| D9 | Phase-1 ingress | `director.add_section_cut(def, ...)`, `director.add_section_cut_sweep(sweep, ...)`, and `results.viewer(cuts=[...])` kwarg | Covers in-process and `blocking=False` subprocess launches. File-picker dialog deferred to Phase 4 |
+| D10 | Live edit | Deferred to Phase 2 — `settings_widget()` rebuilds a fresh spec, `registry.replace(old, new)` swaps it | Frozen spec preserves the persistence story; replace is already in the registry |
+
+### Data flow at attach
+
+```
+SectionCutDef (style.cut)
+  │
+  │  attach(plotter, fem, scene)
+  ▼
+1. Resolve OpenSees tags → FEM eids via director.tag_map
+2. Compute quad vertices:
+     if cut.bounding_polygon:   use it directly
+     else:                       clip cut.plane to filter-AABB
+3. Build polydata (quad, front-face=kept, back-face=discarded)
+4. Add normal-arrow actor at quad centroid
+5. Cache resolved FEM eids for filter-highlight on selection
+```
+
+### Package layout additions
+
+```
+src/apeGmsh/viewers/diagrams/
+├── _section_cut.py          ← SectionCutDiagram (new)
+├── _styles.py               ← SectionCutStyle (added)
+├── _kind_catalog.py         ← "section_cut" entry (added)
+└── __init__.py              ← re-export (added)
+
+src/apeGmsh/viewers/diagrams/_director.py
+└── model_h5 setter, tag_map property, add_section_cut*, add_section_cut_sweep*  (added)
+
+src/apeGmsh/viewers/results_viewer.py
+└── cuts= kwarg threaded into director at boot  (added)
+```
+
+Tests mirror under `tests/cuts/test_viewer_*.py` and
+`tests/viewers/test_section_cut_diagram.py`.
+
+### Phase roadmap
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| v2.2-0 | This architecture section | **in progress** |
+| v2.2-1 | Static quad rendering + programmatic ingress + tests | pending |
+| v2.2-1b | Filter highlight on outline selection + tests | pending |
+| v2.2-1c | `g.mesh.viewer(fem=)` reuse (optional) | deferred |
+| v2.2-2 | Live edit via settings_widget + replace | deferred (v3 of viewer plan) |
+| v2.2-3 | Session JSON persistence for cut layers | deferred |
+| v2.2-4 | Add-layer dialog with `.pkl` file picker | deferred |
 
 ## Acceptance test (north star)
 
@@ -174,7 +262,6 @@ If this passes, the seam holds.
 - Reimplementing any kernel math. Use STKO's `Plane.intersect_*`, the
   beam/shell/solid kernels, the polygon clipping. No exceptions.
 - Reading MPCO output. apeGmsh users open the dataset themselves.
-- Viewer overlay. Separate effort; reuses `SectionCutDef` as data.
 - Recorder emission (computing the cut during analysis). Probably never.
 - Non-convex bounding polygons. STKO doesn't support them; we won't either.
 

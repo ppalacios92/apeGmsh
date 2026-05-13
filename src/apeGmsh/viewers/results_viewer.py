@@ -19,9 +19,11 @@ Usage::
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 if TYPE_CHECKING:
+    from apeGmsh.cuts import SectionCutDef
     from apeGmsh.results.Results import Results
     from apeGmsh.mesh.FEMData import FEMData
     from .diagrams._director import ResultsDirector
@@ -63,6 +65,8 @@ class ResultsViewer:
         title: Optional[str] = None,
         restore_session: "bool | str" = "prompt",
         save_session: bool = True,
+        cuts: "Optional[Sequence[SectionCutDef]]" = None,
+        model_h5: "Optional[str | Path]" = None,
     ) -> None:
         if results.fem is None:
             raise RuntimeError(
@@ -74,6 +78,14 @@ class ResultsViewer:
         self._title = title
         self._restore_session = restore_session
         self._save_session = save_session
+        # Section cuts to wire in at boot. The director constructs in
+        # ``show()`` — these are queued until then and applied right
+        # after the registry is bound, so the cut Layers attach against
+        # a live plotter + scene like any other diagram added at boot.
+        self._pending_cuts: tuple = tuple(cuts) if cuts else ()
+        self._pending_model_h5: Optional[Path] = (
+            Path(model_h5) if model_h5 is not None else None
+        )
 
         # Populated in show()
         self._director: "ResultsDirector | None" = None
@@ -858,6 +870,13 @@ class ResultsViewer:
             render_callback=lambda: plotter.render() if plotter else None,
         )
 
+        # ── Wire any pending section cuts (programmatic ingress) ────
+        # Done after bind_plotter so each cut Layer's attach() lands
+        # against a live plotter + scene; done before session restore
+        # so the restore path sees pre-existing layers and can decide
+        # whether to replace or augment them.
+        self._apply_pending_cuts()
+
         # ── Subscribe to diagram changes for side-panel docking ─────
         # Side-panel sync stays as its own observer — purely UI;
         # doesn't touch the rendering pipeline.
@@ -1099,6 +1118,39 @@ class ResultsViewer:
             glyph.points = new_pts
         except Exception:
             pass
+
+    def _apply_pending_cuts(self) -> None:
+        """Wire ``cuts=`` and ``model_h5=`` constructor arguments into the
+        director immediately after the registry binds to a live plotter.
+
+        Failures here are logged but non-fatal — a malformed cut
+        shouldn't prevent the rest of the viewer from opening. The user
+        sees the error in the session log and can construct the cut by
+        hand afterwards.
+        """
+        if self._director is None:
+            return
+        if not self._pending_cuts and self._pending_model_h5 is None:
+            return
+        from ._log import log_action, log_error
+        if self._pending_model_h5 is not None:
+            try:
+                self._director.set_model_h5(self._pending_model_h5)
+            except Exception as exc:
+                log_error("init", "ResultsViewer.set_model_h5", exc)
+        for i, cut in enumerate(self._pending_cuts):
+            try:
+                self._director.add_section_cut(cut)
+            except Exception as exc:
+                log_action(
+                    "session", "section_cut_add_failed",
+                    index=i, label=str(getattr(cut, "label", "")),
+                    error=type(exc).__name__,
+                )
+                log_error("init", f"ResultsViewer.cut[{i}]", exc)
+        # Clear the queue so a future re-show (test contexts mainly)
+        # doesn't double-add.
+        self._pending_cuts = ()
 
     def _sync_diagram_substrate_points(self, deformed_pts) -> None:
         """Forward the deformation to every layer's

@@ -13,7 +13,10 @@ runtime values into a fresh frozen ``DiagramSpec`` when needed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from apeGmsh.cuts import SectionCutDef
 
 
 @dataclass(frozen=True)
@@ -360,6 +363,57 @@ class LayerStackStyle(DiagramStyle):
     show_scalar_bar: bool = True
     fmt: str = "%.3g"
     aggregation: str = "mid_layer"
+
+
+@dataclass(frozen=True)
+class SectionCutStyle(DiagramStyle):
+    """Render parameters for ``SectionCutDiagram``.
+
+    Carries the :class:`apeGmsh.cuts.SectionCutDef` as the ``cut`` field
+    — frozen-in-frozen, fully picklable. The quad is drawn two-tone:
+    the kept side (per ``cut.side``) shows ``kept_color``; the discarded
+    side shows ``discarded_color`` via the VTK backface property. A
+    small normal arrow at the quad centroid points into the kept
+    half-space.
+
+    Attributes
+    ----------
+    cut
+        The :class:`apeGmsh.cuts.SectionCutDef` instance being rendered.
+    kept_color
+        Front-face color — visible when looking at the cut from the kept
+        side of the plane.
+    discarded_color
+        Back-face color — visible from the discarded side.
+    quad_opacity
+        Opacity of the cut quad in ``[0, 1]``. Default ``0.45`` is
+        semi-transparent so the structure behind the cut stays legible.
+    edge_color
+        Outline color of the cut quad.
+    show_edges
+        Whether to draw the outline.
+    show_normal_arrow
+        Whether to draw the side-aware normal arrow at the quad
+        centroid.
+    normal_arrow_fraction
+        Arrow length as a fraction of the model bounding-box diagonal.
+        Default ``0.05`` is readable on most structures without
+        dominating the scene.
+    """
+    cut: "SectionCutDef"
+    kept_color: str = "#3CB371"           # medium sea green
+    discarded_color: str = "#B33C3C"      # warm red
+    quad_opacity: float = 0.45
+    edge_color: str = "#404040"
+    show_edges: bool = True
+    show_normal_arrow: bool = True
+    normal_arrow_fraction: float = 0.05
+    # Filter-highlight controls — drawn as a separate cell-extracted
+    # overlay actor when ``show_filter_initially`` is True or
+    # ``SectionCutDiagram.set_show_filter(True)`` is called at runtime.
+    highlight_color: str = "#FFC107"      # amber
+    highlight_opacity: float = 0.85
+    show_filter_initially: bool = False
 
 
 @dataclass(frozen=True)

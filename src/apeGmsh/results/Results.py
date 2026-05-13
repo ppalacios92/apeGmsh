@@ -46,7 +46,7 @@ re-using session-side labels and Parts).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from numpy import ndarray
 
@@ -401,6 +401,8 @@ class Results:
         title: Optional[str] = None,
         restore_session: "bool | str" = "prompt",
         save_session: bool = True,
+        cuts: "Optional[Any]" = None,
+        model_h5: "Optional[Any]" = None,
     ):
         """Open the post-solve results viewer.
 
@@ -426,6 +428,19 @@ class Results:
             If ``True`` (default), the active set of diagrams + scrubber
             position is saved to ``<results>.viewer-session.json`` when
             the window closes. ``False`` disables auto-save.
+        cuts
+            Optional sequence of :class:`apeGmsh.cuts.SectionCutDef`
+            instances to render as Layers at boot. Each cut becomes a
+            new ``SectionCutDiagram`` in the active geometry's
+            ``"Section cuts"`` composition (created if absent). Requires
+            ``model_h5`` so OpenSees tags can be mapped back to FEM
+            eids — pass it alongside ``cuts``. Subprocess launches
+            (``blocking=False``) currently ignore this argument; build
+            cuts programmatically via ``director.add_section_cut`` on
+            the spawned viewer once it exposes IPC.
+        model_h5
+            Path to the ``model.h5`` the cuts were built against.
+            Required when ``cuts`` is non-empty; ignored otherwise.
 
         Returns
         -------
@@ -465,6 +480,8 @@ class Results:
             title=title,
             restore_session=restore_session,
             save_session=save_session,
+            cuts=cuts,
+            model_h5=model_h5,
         ).show()
 
     def _spawn_viewer_subprocess(self, *, title: Optional[str]):

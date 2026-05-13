@@ -19,6 +19,7 @@ calls ``director.set_step(...)``; that would create a feedback loop.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional
 
 import numpy as np
@@ -37,9 +38,11 @@ COMBINED_STAGE_ID = "__all__"
 COMBINED_STAGE_NAME = "All stages"
 
 if TYPE_CHECKING:
+    from apeGmsh.cuts import FemToOpsTagMap, SectionCutDef, SectionSweepDef
     from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
     from apeGmsh.results.readers._protocol import StageInfo
+    from ._base import Diagram
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -84,6 +87,13 @@ class ResultsDirector:
         # own (initially empty) CompositionManager. Each geometry holds
         # the deformation state for its child compositions.
         self._geometries = GeometryManager()
+
+        # Section-cut tag-map state. Populated lazily on first
+        # ``tag_map`` access after a path is set via :meth:`set_model_h5`.
+        # The map translates :class:`SectionCutDef.element_ids`
+        # (OpenSees tags) into FEM eids the viewer's FEMData can use.
+        self._model_h5: Optional[Path] = None
+        self._tag_map_cache: "Optional[FemToOpsTagMap]" = None
 
         # Combined-stage state. ``_combined_active`` mirrors the
         # public ``stage_id == COMBINED_STAGE_ID`` view; ``_real_stages``
@@ -161,6 +171,235 @@ class ResultsDirector:
         """
         active = self._geometries.active
         return active.compositions if active is not None else None
+
+    # ------------------------------------------------------------------
+    # Section-cut tag map (cuts subpackage integration)
+    # ------------------------------------------------------------------
+
+    def set_model_h5(self, path: "Optional[str | Path]") -> None:
+        """Point the director at a ``model.h5`` for OpenSees-tag bridging.
+
+        Required before adding any ``SectionCutDef`` layer — the cut's
+        ``element_ids`` are OpenSees tags but the viewer's FEMData
+        speaks FEM eids. Setting the path drops the cached
+        :class:`FemToOpsTagMap` so the next access re-reads the file.
+
+        Passing ``None`` clears the binding (subsequent cut adds will
+        raise).
+        """
+        new_path = Path(path) if path is not None else None
+        if new_path == self._model_h5:
+            return
+        self._model_h5 = new_path
+        self._tag_map_cache = None
+
+    @property
+    def model_h5(self) -> Optional[Path]:
+        return self._model_h5
+
+    @property
+    def tag_map(self) -> "Optional[FemToOpsTagMap]":
+        """Lazy-built :class:`FemToOpsTagMap` for the current ``model_h5``.
+
+        Returns ``None`` when no ``model_h5`` has been set. The first
+        access after :meth:`set_model_h5` opens the file via
+        :meth:`FemToOpsTagMap.from_h5`; subsequent accesses reuse the
+        cached map. Propagates any reader exception so callers see the
+        underlying error (missing file, schema mismatch, …).
+        """
+        if self._model_h5 is None:
+            return None
+        if self._tag_map_cache is None:
+            from apeGmsh.cuts import FemToOpsTagMap
+            self._tag_map_cache = FemToOpsTagMap.from_h5(self._model_h5)
+        return self._tag_map_cache
+
+    def add_section_cut(
+        self,
+        cut: "SectionCutDef",
+        *,
+        geometry_id: Optional[str] = None,
+        composition_id: Optional[str] = None,
+        composition_name: str = "Section cuts",
+        label: Optional[str] = None,
+        style: "Optional[Any]" = None,
+        model_h5: "Optional[str | Path]" = None,
+    ) -> "Diagram":
+        """Wire a :class:`SectionCutDef` into the registry as a Layer.
+
+        Defaults: routes to the active geometry's first matching
+        composition (by ``composition_name``); creates that composition
+        if absent. Pass ``geometry_id`` / ``composition_id`` to target
+        an existing pair explicitly.
+
+        Parameters
+        ----------
+        cut
+            The cut definition to render.
+        geometry_id
+            Target geometry. ``None`` → the active geometry.
+        composition_id
+            Target composition. ``None`` → reuse / create
+            ``composition_name`` on the geometry.
+        composition_name
+            Auto-created composition name when neither
+            ``composition_id`` nor an existing match is found. Default
+            ``"Section cuts"``.
+        label
+            Override the Layer's user-facing label. Defaults to
+            ``cut.label`` (or ``"section cut"`` when the def has none).
+        style
+            Override the :class:`SectionCutStyle`. Defaults to one
+            wrapping ``cut`` with the standard colors.
+        model_h5
+            Convenience — equivalent to a prior ``set_model_h5(path)``
+            call. Set once for the first cut, then omit for subsequent
+            adds against the same run.
+
+        Returns
+        -------
+        Diagram
+            The attached :class:`SectionCutDiagram` instance.
+        """
+        if model_h5 is not None:
+            self.set_model_h5(model_h5)
+        tag_map = self.tag_map
+        if tag_map is None:
+            raise RuntimeError(
+                "add_section_cut: no model.h5 bound. Pass model_h5= "
+                "to this call, or set director.set_model_h5(path) first."
+            )
+
+        from ._base import DiagramSpec
+        from ._section_cut import SectionCutDiagram
+        from ._selectors import SlabSelector
+        from ._styles import SectionCutStyle
+
+        if style is None:
+            style = SectionCutStyle(cut=cut)
+        elif not isinstance(style, SectionCutStyle):
+            raise TypeError(
+                "style must be a SectionCutStyle (or None); "
+                f"got {type(style).__name__}."
+            )
+        elif style.cut is not cut:
+            # Caller passed a custom style without wiring the cut in —
+            # rebuild so the rendered cut matches the parameter.
+            style = SectionCutStyle(
+                cut=cut,
+                kept_color=style.kept_color,
+                discarded_color=style.discarded_color,
+                quad_opacity=style.quad_opacity,
+                edge_color=style.edge_color,
+                show_edges=style.show_edges,
+                show_normal_arrow=style.show_normal_arrow,
+                normal_arrow_fraction=style.normal_arrow_fraction,
+                highlight_color=style.highlight_color,
+                highlight_opacity=style.highlight_opacity,
+                show_filter_initially=style.show_filter_initially,
+            )
+
+        layer_label = label if label is not None else (cut.label or "section cut")
+        component = layer_label or "section_cut"
+        spec = DiagramSpec(
+            kind="section_cut",
+            selector=SlabSelector(component=component),
+            style=style,
+            stage_id=self._stage_id,
+            visible=True,
+            label=layer_label,
+        )
+        diagram = SectionCutDiagram(spec, self._results, tag_map=tag_map)
+
+        target_geom = self._resolve_target_geometry(geometry_id)
+        target_comp = self._resolve_target_composition(
+            target_geom, composition_id, composition_name,
+        )
+        self._registry.add(diagram)
+        target_geom.compositions.add_layer(target_comp.id, diagram)
+        return diagram
+
+    def add_section_cut_sweep(
+        self,
+        sweep: "SectionSweepDef",
+        *,
+        geometry_id: Optional[str] = None,
+        composition_id: Optional[str] = None,
+        composition_name: str = "Section cuts",
+        label_prefix: Optional[str] = None,
+        style: "Optional[Any]" = None,
+        model_h5: "Optional[str | Path]" = None,
+    ) -> "list[Diagram]":
+        """Fan a :class:`SectionSweepDef` into one Layer per cut.
+
+        All cuts land in the same Composition so the user can toggle
+        the sweep as a unit (per-Layer checkboxes) or select an
+        individual cut for inspection. Labels default to each cut's
+        own label; pass ``label_prefix`` to override (becomes
+        ``f"{prefix}[{i}]"``).
+        """
+        if model_h5 is not None:
+            self.set_model_h5(model_h5)
+        diagrams: list = []
+        for i, cut in enumerate(sweep):
+            cut_label = (
+                f"{label_prefix}[{i}]" if label_prefix is not None
+                else None
+            )
+            diagrams.append(self.add_section_cut(
+                cut,
+                geometry_id=geometry_id,
+                composition_id=composition_id,
+                composition_name=composition_name,
+                label=cut_label,
+                style=style,
+            ))
+        return diagrams
+
+    def _resolve_target_geometry(
+        self, geometry_id: Optional[str],
+    ):
+        if geometry_id is not None:
+            target = self._geometries.find(geometry_id)
+            if target is None:
+                raise KeyError(
+                    f"Geometry id {geometry_id!r} not found. "
+                    f"Available: {[g.id for g in self._geometries.geometries]}"
+                )
+            return target
+        target = self._geometries.active
+        if target is None:
+            # Bootstrap guarantees at least one geometry, but the
+            # active pointer may be None if the user explicitly
+            # cleared it — fall back to the first.
+            geoms = self._geometries.geometries
+            if not geoms:
+                raise RuntimeError(
+                    "No geometries available — GeometryManager bootstrap "
+                    "should have created one."
+                )
+            return geoms[0]
+        return target
+
+    def _resolve_target_composition(
+        self,
+        geom,
+        composition_id: Optional[str],
+        composition_name: str,
+    ):
+        comps = geom.compositions
+        if composition_id is not None:
+            target = comps.find(composition_id)
+            if target is None:
+                raise KeyError(
+                    f"Composition id {composition_id!r} not found "
+                    f"on geometry {geom.id!r}."
+                )
+            return target
+        for c in comps.compositions:
+            if c.name == composition_name:
+                return c
+        return comps.add(composition_name)
 
     @property
     def stage_id(self) -> Optional[str]:

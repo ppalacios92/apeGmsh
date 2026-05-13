@@ -15,6 +15,7 @@ from ._line_force import LineForceDiagram
 from ._loads import LoadsDiagram
 from ._reactions import ReactionsDiagram
 from ._registry import DiagramRegistry
+from ._section_cut import SectionCutDiagram
 from ._selectors import SlabSelector, normalize as normalize_selector
 from ._spring_force import SpringForceDiagram
 from ._styles import (
@@ -27,6 +28,7 @@ from ._styles import (
     LineForceStyle,
     LoadsStyle,
     ReactionsStyle,
+    SectionCutStyle,
     SpringForceStyle,
     VectorGlyphStyle,
 )
@@ -55,6 +57,8 @@ __all__ = [
     "ReactionsDiagram",
     "ReactionsStyle",
     "ResultsDirector",
+    "SectionCutDiagram",
+    "SectionCutStyle",
     "SlabSelector",
     "SpringForceDiagram",
     "SpringForceStyle",
