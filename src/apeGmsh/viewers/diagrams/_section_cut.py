@@ -45,8 +45,8 @@ from ._styles import SectionCutStyle
 if TYPE_CHECKING:
     from numpy import ndarray
     from apeGmsh.cuts import FemToOpsTagMap, SectionCutDef
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -94,7 +94,7 @@ class SectionCutDiagram(Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
@@ -109,7 +109,7 @@ class SectionCutDiagram(Diagram):
                 "layers, or use director.add_section_cut(cut_def, "
                 "model_h5=path) which sets it implicitly."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
 
         style: SectionCutStyle = self.spec.style    # type: ignore[assignment]
         cut: "SectionCutDef" = style.cut
@@ -134,7 +134,7 @@ class SectionCutDiagram(Diagram):
         if cut.bounding_polygon is not None:
             verts = np.asarray(cut.bounding_polygon, dtype=np.float64)
         else:
-            verts = self._quad_from_filter_aabb(fem, fem_eids, cut)
+            verts = self._quad_from_filter_aabb(view, fem_eids, cut)
 
         # Orient the polygon so the front face points to the kept side.
         verts_oriented = self._orient_for_kept_side(verts, cut)
@@ -303,7 +303,7 @@ class SectionCutDiagram(Diagram):
 
     def _quad_from_filter_aabb(
         self,
-        fem: "FEMData",
+        view: "ViewerData",
         fem_eids: "ndarray",
         cut: "SectionCutDef",
     ) -> "ndarray":
@@ -314,7 +314,7 @@ class SectionCutDiagram(Diagram):
         the FEM connectivity lookup fails for any reason — the quad
         becomes a coarse hint rather than aborting the whole diagram.
         """
-        coords = self._coords_of_filter_elements(fem, fem_eids)
+        coords = self._coords_of_filter_elements(view, fem_eids)
         if coords.size == 0:
             # Defensive: if we couldn't pull any coords (mesh / fem
             # mismatch the user didn't anticipate), fall back to the
@@ -338,14 +338,14 @@ class SectionCutDiagram(Diagram):
 
     def _coords_of_filter_elements(
         self,
-        fem: "FEMData",
+        view: "ViewerData",
         fem_eids: "ndarray",
     ) -> "ndarray":
         """Gather the world coords of every node referenced by ``fem_eids``.
 
-        Walks each :class:`ElementGroup` in :attr:`fem.elements`,
+        Walks each :class:`ElementGroup` in :attr:`view.elements`,
         masks its rows against ``fem_eids``, and unions the resulting
-        node ids. Then looks up positions in :attr:`fem.nodes.coords`
+        node ids. Then looks up positions in :attr:`view.nodes.coords`
         via a single id-to-row scatter. Robust to mixed-topology meshes.
         """
         if fem_eids.size == 0:
@@ -353,7 +353,7 @@ class SectionCutDiagram(Diagram):
 
         wanted = set(int(e) for e in fem_eids)
         node_ids_set: set[int] = set()
-        for group in fem.elements:
+        for group in view.elements:
             g_ids = np.asarray(group.ids, dtype=np.int64)
             mask = np.isin(g_ids, list(wanted))
             if not mask.any():
@@ -366,8 +366,8 @@ class SectionCutDiagram(Diagram):
             return np.zeros((0, 3), dtype=np.float64)
 
         node_ids = np.array(sorted(node_ids_set), dtype=np.int64)
-        all_node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)
-        all_coords = np.asarray(fem.nodes.coords, dtype=np.float64)
+        all_node_ids = np.asarray(view.nodes.ids, dtype=np.int64)
+        all_coords = np.asarray(view.nodes.coords, dtype=np.float64)
         max_nid = int(max(int(all_node_ids.max(initial=0)),
                           int(node_ids.max()))) + 1
         nid_to_row = np.full(max_nid + 1, -1, dtype=np.int64)

@@ -30,8 +30,8 @@ from ._scalar_bar_support import ScalarBarSupport
 from ._styles import LayerStackStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -90,20 +90,20 @@ class LayerStackDiagram(ScalarBarSupport, Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError(
                 "LayerStackDiagram.attach requires a FEMSceneData."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: LayerStackStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve element IDs (shell elements only) ───────────────
         element_ids = self._resolved_element_ids
         if element_ids is None:
-            element_ids = self._collect_shell_element_ids(fem)
+            element_ids = self._collect_shell_element_ids(view)
         if element_ids.size == 0:
             return
         self._element_ids_to_read = tuple(int(e) for e in element_ids)
@@ -432,10 +432,10 @@ class LayerStackDiagram(ScalarBarSupport, Diagram):
             return None
 
     @staticmethod
-    def _collect_shell_element_ids(fem: "FEMData") -> ndarray:
+    def _collect_shell_element_ids(view: "ViewerData") -> ndarray:
         """All 2-D element IDs (shells / plates / membranes)."""
         ids: list[int] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim == 2:
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)

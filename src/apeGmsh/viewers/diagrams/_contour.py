@@ -52,8 +52,8 @@ from ._scalar_bar_support import ScalarBarSupport
 from ._styles import ContourStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -136,7 +136,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
@@ -145,7 +145,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
                 "viewer's substrate mesh). The Director must call "
                 "bind_plotter(plotter, scene=scene)."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
 
         topology = self._resolve_topology()
         if topology == _TOPO_GAUSS:
@@ -510,7 +510,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
         )
 
         node_ids, nodal_values = extrapolate_gauss_slab_to_nodes(
-            slab_step0, self._fem,
+            slab_step0, self._view,
         )
         if node_ids.size == 0:
             raise NoDataError(
@@ -586,7 +586,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
             extrapolate_gauss_slab_per_element,
         )
 
-        per_elem = extrapolate_gauss_slab_per_element(slab_step0, self._fem)
+        per_elem = extrapolate_gauss_slab_per_element(slab_step0, self._view)
         if per_elem.element_ids.size == 0:
             raise NoDataError(
                 f"ContourDiagram (gauss-discrete): no element "
@@ -719,7 +719,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
         )
         if slab.values.size == 0:
             return
-        per_elem = extrapolate_gauss_slab_per_element(slab, self._fem)
+        per_elem = extrapolate_gauss_slab_per_element(slab, self._view)
         if per_elem.element_ids.size == 0:
             return
         per_elem_step: dict[int, ndarray] = {}
@@ -884,7 +884,7 @@ class ContourDiagram(ScalarBarSupport, Diagram):
         )
         if slab.values.size == 0:
             return None
-        node_ids, nodal = extrapolate_gauss_slab_to_nodes(slab, self._fem)
+        node_ids, nodal = extrapolate_gauss_slab_to_nodes(slab, self._view)
         if node_ids.size == 0:
             return None
         return (node_ids, nodal[0])

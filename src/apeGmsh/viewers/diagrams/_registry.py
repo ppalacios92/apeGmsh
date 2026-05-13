@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Optional
 from ._base import Diagram
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -31,7 +31,7 @@ class DiagramRegistry:
     def __init__(self) -> None:
         self._diagrams: list[Diagram] = []
         self._plotter: Any = None
-        self._fem: "FEMData | None" = None
+        self._view: "ViewerData | None" = None
         self._scene: "FEMSceneData | None" = None
         self.on_changed: list[Callable[[], None]] = []
 
@@ -42,10 +42,10 @@ class DiagramRegistry:
     def bind(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
-        """Bind to a plotter + FEMData (+ optional substrate scene).
+        """Bind to a plotter + ViewerData (+ optional substrate scene).
 
         Future ``add(...)`` calls attach immediately to this plotter.
 
@@ -58,11 +58,11 @@ class DiagramRegistry:
                 if d.is_attached:
                     d.detach()
         self._plotter = plotter
-        self._fem = fem
+        self._view = view
         self._scene = scene
         for d in self._diagrams:
             if not d.is_attached:
-                d.attach(plotter, fem, scene)
+                d.attach(plotter, view, scene)
 
     def unbind(self) -> None:
         """Detach all diagrams and forget the plotter binding."""
@@ -70,7 +70,7 @@ class DiagramRegistry:
             if d.is_attached:
                 d.detach()
         self._plotter = None
-        self._fem = None
+        self._view = None
         self._scene = None
 
     @property
@@ -91,7 +91,7 @@ class DiagramRegistry:
         self._diagrams.append(diagram)
         if self.is_bound and not diagram.is_attached:
             try:
-                diagram.attach(self._plotter, self._fem, self._scene)  # type: ignore[arg-type]
+                diagram.attach(self._plotter, self._view, self._scene)  # type: ignore[arg-type]
             except Exception:
                 # Roll back the append; the caller (dialog) surfaces the
                 # error to the user.
@@ -132,13 +132,13 @@ class DiagramRegistry:
         self._diagrams[idx] = new
         if self.is_bound and not new.is_attached:
             try:
-                new.attach(self._plotter, self._fem, self._scene)  # type: ignore[arg-type]
+                new.attach(self._plotter, self._view, self._scene)  # type: ignore[arg-type]
             except Exception:
                 # Roll back: restore old at the same index and re-attach.
                 self._diagrams[idx] = old
                 if was_attached:
                     try:
-                        old.attach(self._plotter, self._fem, self._scene)  # type: ignore[arg-type]
+                        old.attach(self._plotter, self._view, self._scene)  # type: ignore[arg-type]
                     except Exception:
                         pass
                 raise
@@ -195,7 +195,7 @@ class DiagramRegistry:
             if d.is_attached:
                 d.detach()
         for d in self._diagrams:
-            d.attach(self._plotter, self._fem, self._scene)  # type: ignore[arg-type]
+            d.attach(self._plotter, self._view, self._scene)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # Iteration / inspection

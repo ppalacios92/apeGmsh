@@ -21,8 +21,8 @@ from ._scalar_bar_support import ScalarBarSupport
 from ._styles import VectorGlyphStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -80,14 +80,14 @@ class VectorGlyphDiagram(ScalarBarSupport, Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError(
                 "VectorGlyphDiagram.attach requires a FEMSceneData."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: VectorGlyphStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve node IDs ────────────────────────────────────────

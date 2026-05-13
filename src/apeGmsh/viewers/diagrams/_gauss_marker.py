@@ -25,8 +25,8 @@ from ._scalar_bar_support import ScalarBarSupport
 from ._styles import GaussMarkerStyle
 
 if TYPE_CHECKING:
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -81,20 +81,20 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         if scene is None:
             raise RuntimeError(
                 "GaussPointDiagram.attach requires a FEMSceneData."
             )
-        super().attach(plotter, fem, scene)
+        super().attach(plotter, view, scene)
         style: GaussMarkerStyle = self.spec.style    # type: ignore[assignment]
 
         # ── Resolve element IDs (continuum: 2-D + 3-D) ──────────────
         element_ids = self._resolved_element_ids
         if element_ids is None:
-            element_ids = self._collect_continuum_element_ids(fem)
+            element_ids = self._collect_continuum_element_ids(view)
         if element_ids.size == 0:
             return
         self._element_ids_to_read = tuple(int(e) for e in element_ids)
@@ -128,7 +128,7 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         ).copy()
 
         try:
-            world = slab.global_coords(fem)
+            world = slab.global_coords(view)
         except Exception:
             # Defensive: fall back to a zero array — we'd rather show
             # something than crash the viewer.
@@ -263,7 +263,7 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         if (
             self._glyphs is None
             or self._cloud is None
-            or self._fem is None
+            or self._view is None
             or self._gp_element_index is None
             or self._gp_natural_coords is None
             or self._gp_centers_at_build is None
@@ -278,7 +278,7 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             new_centers = compute_global_coords_from_arrays(
                 self._gp_element_index,
                 self._gp_natural_coords,
-                self._fem,
+                self._view,  # type: ignore[arg-type]
                 node_coords_override=deformed_pts,
             )
             shifts = new_centers - self._gp_centers_at_build
@@ -424,10 +424,10 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             return None
 
     @staticmethod
-    def _collect_continuum_element_ids(fem: "FEMData") -> ndarray:
+    def _collect_continuum_element_ids(view: "ViewerData") -> ndarray:
         """All 2-D and 3-D element IDs (continuum types)."""
         ids: list[int] = []
-        for group in fem.elements:
+        for group in view.elements:
             if group.element_type.dim in (2, 3):
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)

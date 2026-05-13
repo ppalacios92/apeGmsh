@@ -3,8 +3,10 @@
 A Diagram is a renderable layer driven by one or more Results slabs.
 Subclasses implement the four-method protocol:
 
-* ``attach(plotter, fem)`` — build initial actors at step 0,
-  resolve the selector to concrete IDs (once).
+* ``attach(plotter, view, scene)`` — build initial actors at step 0,
+  resolve the selector to concrete IDs (once).  ``view`` is a
+  :class:`apeGmsh.viewers.data.ViewerData` snapshot (Phase 8.7
+  commit 5 renamed the parameter from ``fem``).
 * ``update_to_step(step_index)`` — refresh actors for a new step.
   Must mutate VTK arrays in place; never re-add actors.
 * ``detach()`` — remove actors and release cached arrays.
@@ -28,8 +30,8 @@ from ._styles import DiagramStyle
 
 if TYPE_CHECKING:
     from numpy import ndarray
-    from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh.results.Results import Results
+    from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
 
 
@@ -86,7 +88,7 @@ class Diagram:
     Lifecycle::
 
         diagram = ContourDiagram(spec, results)
-        diagram.attach(plotter, fem)         # builds actors
+        diagram.attach(plotter, view, scene) # builds actors
         diagram.update_to_step(0)            # initial render
         ...
         diagram.update_to_step(i)            # on time change
@@ -129,7 +131,7 @@ class Diagram:
         # Attached state (populated by attach, cleared by detach)
         self._attached: bool = False
         self._plotter: Any = None
-        self._fem: "FEMData | None" = None
+        self._view: "ViewerData | None" = None
         self._scene: "FEMSceneData | None" = None
         self._resolved_node_ids: "ndarray | None" = None
         self._resolved_element_ids: "ndarray | None" = None
@@ -173,31 +175,35 @@ class Diagram:
     def attach(
         self,
         plotter: Any,
-        fem: "FEMData",
+        view: "ViewerData",
         scene: "FEMSceneData | None" = None,
     ) -> None:
         """Build initial actors. Subclass override.
 
-        The default implementation stores ``plotter`` / ``fem`` /
+        The default implementation stores ``plotter`` / ``view`` /
         ``scene`` and resolves the selector to concrete IDs.
-        Subclasses should ``super().attach(plotter, fem, scene)``
+        Subclasses should ``super().attach(plotter, view, scene)``
         first, then build their actors.
 
+        ``view`` is the :class:`ViewerData` structural snapshot;
+        a raw FEMData still works at runtime via duck typing on
+        the read accessors the diagrams exercise (kept for the
+        transition while tests / external callers haven't switched).
         ``scene`` is the substrate FEMSceneData built once at viewer
         open. Diagrams that paint on the substrate (Contour,
         DeformedShape, …) require it; stub diagrams may pass ``None``.
         """
         self._plotter = plotter
-        self._fem = fem
+        self._view = view
         self._scene = scene
         # Subclasses decide which axis matters; resolving both is
         # cheap and avoids subclass boilerplate.
         try:
-            self._resolved_node_ids = self.selector.resolve_node_ids(fem)
+            self._resolved_node_ids = self.selector.resolve_node_ids(view)
         except Exception:
             self._resolved_node_ids = None
         try:
-            self._resolved_element_ids = self.selector.resolve_element_ids(fem)
+            self._resolved_element_ids = self.selector.resolve_element_ids(view)
         except Exception:
             self._resolved_element_ids = None
         self._attached = True
@@ -223,7 +229,7 @@ class Diagram:
                     pass
         self._actors = []
         self._plotter = None
-        self._fem = None
+        self._view = None
         self._scene = None
         self._resolved_node_ids = None
         self._resolved_element_ids = None
