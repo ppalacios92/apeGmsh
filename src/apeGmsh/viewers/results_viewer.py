@@ -385,6 +385,12 @@ class ResultsViewer:
         self._registry_unsub = director.registry.subscribe(
             self._refresh_active_layer,
         )
+        # Plan 04 step 2 cont. — layer card focus drives active_layer.
+        # Clicking a specific card in the diagram dock binds the editor
+        # to *that* card, not just the first contour layer in the
+        # composition. The composition-default path stays as the
+        # fallback for plain navigation.
+        settings_tab.on_layer_focused(self._active.set_active_layer)
         # Two-way binding (B++ §7): the Plots group in the outline
         # tree mirrors the plot pane's tab list; clicking a plot row
         # activates the corresponding tab and vice versa.
@@ -2338,16 +2344,13 @@ class ResultsViewer:
     def _refresh_active_layer(self) -> None:
         """Pick a sensible default active layer and broadcast.
 
-        The first layer in the active composition that exposes a
-        non-None ``lut`` attribute wins (only ContourDiagram qualifies
-        in v1; other diagram types stay on the legacy ``style.cmap``
-        path). If nothing matches, the active layer is cleared so the
-        editor goes into its empty state.
-
-        Called from the composition handler and from the registry
-        observer — adding / removing layers should keep the editor's
-        binding fresh without requiring the user to re-click the
-        outline.
+        Preserves the user's explicit pick (card focus from plan 04
+        step 2 cont.) when that layer is still in the active
+        composition. Falls back to the first layer with a LUT when the
+        prior pick is gone — typically after add/remove churn or when
+        a fresh composition becomes active. Clearing to ``None`` means
+        the composition has no LUT-bearing layers; the editor goes
+        empty.
         """
         if self._director is None:
             return
@@ -2356,6 +2359,10 @@ class ResultsViewer:
         except Exception:
             comp = None
         layers = list(getattr(comp, "layers", []) or [])
+        current = self._active.active_layer
+        # User-picked layer still valid in this composition? Keep it.
+        if current is not None and current in layers:
+            return
         chosen = None
         for layer in layers:
             if getattr(layer, "lut", None) is not None:
