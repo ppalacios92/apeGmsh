@@ -106,6 +106,10 @@ class OutputDock:
         self._counts: dict[str, int] = {"info": 0, "warning": 0, "error": 0}
         # Observers called on every append (for status-bar badge etc.).
         self._on_append_observers: list[Callable[[str, str], None]] = []
+        # Observers fired when counts change for any reason — append OR
+        # clear. Status-bar badges subscribe here so the badge resets to
+        # zero when the user hits Clear, not just on the next append.
+        self._on_counts_changed_observers: list[Callable[[], None]] = []
 
         # ── Wire to router ───────────────────────────────────────
         router.message.connect(self.append)
@@ -166,20 +170,39 @@ class OutputDock:
                 obs(text, severity)
             except Exception:
                 pass
+        self._fire_counts_changed()
 
     def clear(self) -> None:
         """Wipe the log buffer and reset counts."""
         self._text.clear()
         self._counts = {"info": 0, "warning": 0, "error": 0}
+        self._fire_counts_changed()
 
     def on_append(self, callback: Callable[[str, str], None]) -> None:
         """Register a callback fired on every :meth:`append`.
 
         Receives ``(text, severity)``. Used by status-bar badges or
-        similar peripherals. Idempotent — registering the same
-        callback twice subscribes it twice.
+        similar peripherals. Registering the same callback twice
+        subscribes it twice.
         """
         self._on_append_observers.append(callback)
+
+    def on_counts_changed(self, callback: Callable[[], None]) -> None:
+        """Register a callback fired whenever counts change.
+
+        Fires on both :meth:`append` and :meth:`clear`. No arguments —
+        the consumer reads :attr:`counts` to learn the new state.
+        Use this for widgets that need to refresh even when the cause
+        of the change is a Clear (not an Append).
+        """
+        self._on_counts_changed_observers.append(callback)
+
+    def _fire_counts_changed(self) -> None:
+        for obs in list(self._on_counts_changed_observers):
+            try:
+                obs()
+            except Exception:
+                pass
 
     def close(self) -> None:
         """Disconnect from the router. Idempotent.

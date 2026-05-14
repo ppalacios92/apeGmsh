@@ -101,6 +101,7 @@ class ResultsViewer:
         # - router.uninstall() in _on_close
         self._log_router: Any = None
         self._output_dock: Any = None
+        self._output_badge: Any = None
         self._time_scrubber: Any = None
         self._substrate_actor: Any = None
         self._wireframe_actor: Any = None
@@ -262,6 +263,21 @@ class ResultsViewer:
             extension_docks=[output_spec],
         )
         self._win = win
+
+        # ── Status-bar Output badge ─────────────────────────────────
+        # Surfaces warning/error counts before the user opens the
+        # dock; clicking it raises the dock. Lives in the status bar
+        # as a permanent widget. Hidden when counts are zero.
+        try:
+            from .ui._output_badge import OutputBadge
+            output_dock_widget = win.extension_dock("dock_output")
+            badge = OutputBadge(output_dock, output_dock_widget)
+            self._output_badge = badge
+            win.window.statusBar().addPermanentWidget(badge.widget)
+        except Exception:
+            # Badge is purely peripheral — never let it block viewer
+            # startup. The dock + log router work fine without it.
+            self._output_badge = None
 
         # ProbeOverlay needs the plotter, which doesn't exist until
         # ``win`` is constructed below. We initialise to None here so
