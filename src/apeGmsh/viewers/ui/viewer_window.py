@@ -404,17 +404,6 @@ class ViewerWindow:
         """Add a tab to the right-side panel (after construction)."""
         self._tab_widget.addTab(widget, name)
 
-    def add_right_bottom_dock(self, title: str, widget) -> None:
-        """Add a dock below the tabs dock on the right side."""
-        QtWidgets = self._QtWidgets
-        QtCore = self._QtCore
-        dock = QtWidgets.QDockWidget(title)
-        dock.setTitleBarWidget(QtWidgets.QWidget())  # hide title bar
-        dock.setFeatures(QtWidgets.QDockWidget.NoDockWidgetFeatures)
-        dock.setWidget(widget)
-        self._window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-        self._window.splitDockWidget(self._tabs_dock, dock, QtCore.Qt.Vertical)
-
     # ------------------------------------------------------------------
     # Extension docks (plan 08 — registry-driven extras)
     # ------------------------------------------------------------------

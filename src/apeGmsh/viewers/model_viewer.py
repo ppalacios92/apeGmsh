@@ -509,8 +509,29 @@ class ModelViewer:
         win.add_tab("Browser", browser.widget)
         win.add_tab("View", view_tab.widget)
         win.add_tab("Filter", filter_tab.widget)
-        # Add selection tree as bottom dock
-        win.add_right_bottom_dock("Selection", sel_tree.widget)
+        # Plan 08 — Selection tree as a registry-driven extension dock.
+        # We still place it BELOW the tabs dock and keep it title-less +
+        # immobile to match the legacy ``add_right_bottom_dock`` look;
+        # gaining the auto View-menu toggle is the only intentional UX
+        # delta. ``tabify_with`` would side-by-side it with the tabs
+        # dock — wrong shape for this row, so we re-anchor with
+        # ``splitDockWidget`` after mount.
+        from .ui._dock_registry import DockSpec
+        from qtpy import QtCore, QtWidgets
+        sel_dock = win.add_extension_dock(DockSpec(
+            dock_id="dock_model_selection",
+            title="Selection",
+            factory=lambda _parent: sel_tree.widget,
+        ))
+        sel_dock.setTitleBarWidget(QtWidgets.QWidget())    # hide title bar
+        sel_dock.setFeatures(QtWidgets.QDockWidget.NoDockWidgetFeatures)
+        tabs_dock = win.window.findChild(
+            QtWidgets.QDockWidget, win.DOCK_TABS,
+        )
+        if tabs_dock is not None:
+            win.window.splitDockWidget(
+                tabs_dock, sel_dock, QtCore.Qt.Vertical,
+            )
 
         plotter = win.plotter
 
