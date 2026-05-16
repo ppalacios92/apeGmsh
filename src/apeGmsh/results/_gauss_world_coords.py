@@ -4,9 +4,10 @@ Maps natural-space Gauss-point coordinates to world coordinates by
 evaluating element shape functions against the bound FEMData's node
 coordinates.
 
-Backed by :mod:`apeGmsh.results._shape_functions` (a vectorized
+Backed by :mod:`apeGmsh.fem._shape_functions` (a vectorized
 shape-function library mined from STKO_to_python and adapted to be
-keyed by Gmsh element-type codes). Coverage:
+keyed by Gmsh element-type codes; shared with the input-side mass
+resolver). Coverage:
 
 * Hex8 (code 5) — trilinear in ``[-1, +1]^3``
 * Quad4 (code 3) — bilinear in ``[-1, +1]^2``
@@ -18,7 +19,7 @@ For element types not in the catalog (higher-order P2/P3, prisms,
 pyramids) we fall back to ``centroid + 0.5 * bbox_span * natural`` —
 visualization-faithful for axis-aligned elements while we wait for
 explicit shape-fn coverage. The upcoming-work block in
-``_shape_functions.py`` lists what's left to add.
+``apeGmsh.fem._shape_functions`` lists what's left to add.
 
 Per-element evaluation: rather than rely on STKO's "all elements
 same IP layout" batched einsum (which doesn't hold across our
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy import ndarray
 
-from ._shape_functions import (
+from ..fem._shape_functions import (
     SHAPE_FUNCTIONS_BY_GMSH_CODE,
     get_shape_functions,
 )
@@ -57,13 +58,13 @@ if TYPE_CHECKING:
 
 def _hex8_shape_functions(natural_xyz: ndarray) -> ndarray:
     """Single-IP wrapper around ``hex8_N`` — input ``(3,)``, output ``(8,)``."""
-    from ._shape_functions import hex8_N
+    from ..fem._shape_functions import hex8_N
     return hex8_N(np.asarray(natural_xyz, dtype=np.float64).reshape(1, 3))[0]
 
 
 def _quad4_shape_functions(natural_xy: ndarray) -> ndarray:
     """Single-IP wrapper around ``quad4_N`` — input ``(2,)``, output ``(4,)``."""
-    from ._shape_functions import quad4_N
+    from ..fem._shape_functions import quad4_N
     return quad4_N(np.asarray(natural_xy, dtype=np.float64).reshape(1, 2))[0]
 
 
