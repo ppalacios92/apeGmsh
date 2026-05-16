@@ -970,19 +970,20 @@ def build_stylesheet(p: Palette, density: object = None) -> str:
         background-color: {p.surface0};
         border-color: {p.surface1};
     }}
+    /* Outline trees — ParaView-compact rows. Scoped by id so they
+       win over the density ``QTreeWidget::item`` block (regardless of
+       order) while every other panel keeps the current density. Tight
+       row + small font ≈ the ParaView Pipeline Browser's ~20px rows.
+       Applied to all three: model / mesh / results viewers. */
+    QTreeWidget#ModelOutlineTreeWidget,
+    QTreeWidget#MeshOutlineTreeWidget,
     QTreeWidget#OutlineTreeWidget {{
-        border: none;
-    }}
-    /* model.viewer Outline — ParaView-compact rows. Scoped to this
-       tree only (id selector wins over the density ``QTreeWidget::item``
-       block regardless of order), so results.viewer and every other
-       panel keep the current density. Tight row + small font ≈ the
-       ParaView Pipeline Browser's ~20px rows. */
-    QTreeWidget#ModelOutlineTreeWidget {{
         border: none;
         font-size: 11px;
     }}
-    QTreeWidget#ModelOutlineTreeWidget::item {{
+    QTreeWidget#ModelOutlineTreeWidget::item,
+    QTreeWidget#MeshOutlineTreeWidget::item,
+    QTreeWidget#OutlineTreeWidget::item {{
         min-height: 20px;
         padding-top: 1px;
         padding-bottom: 1px;

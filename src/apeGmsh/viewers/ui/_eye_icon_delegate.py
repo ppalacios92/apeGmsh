@@ -86,23 +86,45 @@ def _build_delegate_class():
         # ──────────────────────────────────────────────────────────
 
         def paint(self, painter, option, index) -> None:    # noqa: D401
-            # Delegate the standard paint first so selection / hover
-            # highlight + text render exactly as Qt would by default.
-            # Then paint the eye glyph on top of the left margin.
-            super().paint(painter, option, index)
-            if index.column() != 0:
-                return
-            role_val = index.data(ROLE_VISIBLE)
+            role_val = (
+                index.data(ROLE_VISIBLE) if index.column() == 0 else None
+            )
             if role_val is None:
+                super().paint(painter, option, index)
                 return
-            is_visible = bool(role_val)
+            # Reserve a left gutter for the eye and inset the text into
+            # the remaining area, so the glyph never paints over the
+            # label (that over-paint was the "eye overlaps text" bug).
+            # Pre-fill the selection highlight full-width so the gutter
+            # still reads as selected.
+            if option.state & QtWidgets.QStyle.State_Selected:
+                painter.fillRect(option.rect, option.palette.highlight())
+            opt = QtWidgets.QStyleOptionViewItem(option)
+            opt.rect = QtCore.QRect(option.rect)
+            opt.rect.setLeft(option.rect.left() + _ICON_HIT_WIDTH)
+            super().paint(painter, opt, index)
+            dpr = self._dpr(option)
             color = self._foreground_color(option)
-            pix = self._glyph(is_visible, color)
+            pix = self._glyph(bool(role_val), color, dpr)
             if pix is None:
                 return
-            x = option.rect.x() + (_ICON_HIT_WIDTH - pix.width()) // 2
-            y = option.rect.y() + (option.rect.height() - pix.height()) // 2
-            painter.drawPixmap(x, y, pix)
+            pw = pix.width() / dpr
+            ph = pix.height() / dpr
+            x = option.rect.x() + (_ICON_HIT_WIDTH - pw) / 2.0
+            y = option.rect.y() + (option.rect.height() - ph) / 2.0
+            painter.drawPixmap(int(x), int(y), pix)
+
+        @staticmethod
+        def _dpr(option: Any) -> float:
+            """View device-pixel-ratio so the glyph renders crisp on
+            HiDPI (the pixmap is built at this ratio, never rescaled)."""
+            try:
+                w = option.widget
+                if w is not None:
+                    return float(w.devicePixelRatioF()) or 1.0
+            except Exception:
+                pass
+            return 1.0
 
         # ──────────────────────────────────────────────────────────
         # Click handling
@@ -143,36 +165,51 @@ def _build_delegate_class():
         # Internals — glyph rendering + theming
         # ──────────────────────────────────────────────────────────
 
-        def _glyph(self, is_visible: bool, color: str) -> Any:
-            """Return the cached pixmap for the requested state, or
-            re-render if the color has changed (theme switch)."""
-            if color != self._pix_color:
+        def _glyph(
+            self, is_visible: bool, color: str, dpr: float = 1.0,
+        ) -> Any:
+            """Cached crisp dot pixmap; re-render on theme (colour) or
+            display (dpr) change."""
+            key = f"{color}|{dpr:.3f}"
+            if key != self._pix_color:
                 self._pix_visible = None
                 self._pix_hidden = None
-                self._pix_color = color
+                self._pix_color = key
             cache_attr = "_pix_visible" if is_visible else "_pix_hidden"
             pix = getattr(self, cache_attr)
             if pix is not None:
                 return pix
-            pix = self._render_glyph("●" if is_visible else "○", color)
+            pix = self._render_glyph(is_visible, color, dpr)
             setattr(self, cache_attr, pix)
             return pix
 
         @staticmethod
-        def _render_glyph(text: str, color: str) -> Any:
-            pix = QtGui.QPixmap(_ICON_GLYPH_SIZE, _ICON_GLYPH_SIZE)
+        def _render_glyph(
+            is_visible: bool, color: str, dpr: float = 1.0,
+        ) -> Any:
+            # Vector ellipse (not a font glyph) at the view dpr so it
+            # stays a crisp dot instead of a rescaled fuzzy oval —
+            # same treatment as the model.viewer outline.
+            s = _ICON_GLYPH_SIZE
+            pix = QtGui.QPixmap(round(s * dpr), round(s * dpr))
+            pix.setDevicePixelRatio(dpr)
             pix.fill(QtGui.QColor(0, 0, 0, 0))
-            painter = QtGui.QPainter(pix)
-            painter.setRenderHint(QtGui.QPainter.Antialiasing)
-            painter.setPen(QtGui.QColor(color))
-            font = QtGui.QFont("Segoe UI", 11)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.drawText(
-                QtCore.QRect(0, 0, _ICON_GLYPH_SIZE, _ICON_GLYPH_SIZE),
-                QtCore.Qt.AlignCenter, text,
-            )
-            painter.end()
+            p = QtGui.QPainter(pix)
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            qc = QtGui.QColor(color)
+            d = s * 0.55
+            off = (s - d) / 2.0
+            rect = QtCore.QRectF(off, off, d, d)
+            if is_visible:
+                p.setPen(QtCore.Qt.NoPen)
+                p.setBrush(qc)               # filled dot = visible
+            else:
+                pen = QtGui.QPen(qc)
+                pen.setWidthF(max(1.0, s * 0.09))
+                p.setPen(pen)
+                p.setBrush(QtCore.Qt.NoBrush)  # hollow ring = hidden
+            p.drawEllipse(rect)
+            p.end()
             return pix
 
         @staticmethod
