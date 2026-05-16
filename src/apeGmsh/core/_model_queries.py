@@ -621,6 +621,10 @@ class _Queries:
     def _select_all(self, dim: int) -> Selection:
         return Selection(gmsh.model.getEntities(dim), _queries=self)
 
+    def select_all(self) -> Selection:
+        """Every entity in the model (all dims), as a chainable Selection."""
+        return Selection(gmsh.model.getEntities(), _queries=self)
+
     def select_all_points(self) -> Selection:
         """Every point (dim=0) in the model, as a chainable Selection."""
         return self._select_all(0)
