@@ -142,27 +142,32 @@ def build_node_cloud(
     marker_size: float = 6.0,
     color: str | None = None,
 ) -> tuple[pv.PolyData, Any]:
-    """Build a node-cloud glyph overlay (not pickable).
+    """Build a node-cloud overlay (not pickable).
 
-    ``color`` defaults to the active palette's ``node_accent`` when None.
+    Renders each node as a GPU point-sprite via
+    ``vtkProperty::SetRenderPointsAsSpheres``. No glyph geometry is
+    generated — the mapper rasterises a shaded sphere per pixel from
+    the vertex array. Mirrors ParaView's "Render Points As Spheres"
+    actor flag.
+
+    ``marker_size`` is screen pixels (constant under zoom). The
+    legacy sphere-mesh path scaled with ``model_diagonal``; that arg
+    stays in the signature for caller compat but is no longer read.
+    ``color`` defaults to the active palette's ``node_accent``.
     Returns (cloud_polydata, actor).
     """
     if color is None:
         from ..ui.theme import THEME
         color = THEME.current.node_accent
     cloud = pv.PolyData(node_coords)
-    glyph_r = _auto_glyph_radius(node_coords, marker_size, model_diagonal)
-    sphere_src = pv.Sphere(
-        radius=glyph_r,
-        theta_resolution=8,
-        phi_resolution=8,
-    )
-    glyphs = cloud.glyph(geom=sphere_src, orient=False, scale=False)
     actor = plotter.add_mesh(
-        glyphs,
+        cloud,
         color=color,
-        smooth_shading=True,
+        style="points",
+        point_size=float(marker_size),
+        render_points_as_spheres=True,
         pickable=False,
         opacity=1.0,
+        reset_camera=False,
     )
     return cloud, actor

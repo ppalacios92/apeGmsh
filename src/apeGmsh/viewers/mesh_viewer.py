@@ -322,14 +322,26 @@ class MeshViewer:
         # ── Resolve FEM snapshot for overlays ───────────────────────
         view = self._view
         if view is None:
-            try:
-                fem = self._parent.mesh.queries.get_fem_data(
-                    dim=max(self._dims))
-            except Exception:
-                fem = None
-            if fem is not None:
-                from .data import ViewerData
-                view = ViewerData.from_fem(fem)
+            # ``get_fem_data`` builds the full FEMData broker (~2.7 s on
+            # a 600 k-node mesh). Its only consumer is ``self._view``,
+            # which feeds the loads / mass / constraints tabs and their
+            # rebuild callbacks — and those tabs are only created when
+            # the matching composite exists. For a mesh-only model
+            # (no loads/mass/constraints) the broker is pure waste, so
+            # skip it unless something will actually read it.
+            _needs_fem = any(
+                getattr(self._parent, _c, None) is not None
+                for _c in ("loads", "masses", "constraints")
+            )
+            if _needs_fem:
+                try:
+                    fem = self._parent.mesh.queries.get_fem_data(
+                        dim=max(self._dims))
+                except Exception:
+                    fem = None
+                if fem is not None:
+                    from .data import ViewerData
+                    view = ViewerData.from_fem(fem)
         self._view = view
 
         # ── Insert overlay tabs (loads/mass/constraints) ────────────
@@ -449,6 +461,19 @@ class MeshViewer:
             plotter,
             get_orbit_pivot=lambda: sel.centroid(registry),
         )
+
+        # ── Motion LOD ──────────────────────────────────────────────
+        # The per-dim node cloud (one sphere-sprite per FE node — 600k+
+        # on large meshes) dominates per-frame GPU cost. Hide it while
+        # the camera is moving and restore it ~120 ms after the gesture
+        # settles, so orbit/zoom stay smooth without losing the node
+        # display at rest. Mirrors ParaView's interactive LOD.
+        from .core.motion_lod import MotionLOD
+        self._motion_lod = MotionLOD(
+            plotter,
+            lambda: list(registry.dim_node_actors.values()),
+        )
+        self._motion_lod.install()
 
         # ── Install pick engine ─────────────────────────────────────
         pick_engine.install()
@@ -736,15 +761,22 @@ class MeshViewer:
         plotter = self._plotter
         if registry is None or plotter is None:
             return
-        # Mesh edges are drawn by the dedicated wireframe actor (per-dim
-        # corner-edge PolyData). Toggling edges = toggling that actor's
-        # visibility — color/width are owned by the theme, not this
-        # callback.
+        # Mesh edges are rendered by the fill mapper itself via
+        # ``vtkProperty::EdgeVisibility`` — only dim>=2 actors carry
+        # them (set by build_mesh_scene). Flipping the property is a
+        # shader-level toggle, no pipeline rebuild. Also sync the
+        # stored add_mesh kwargs so visibility-driven actor rebuilds
+        # (hide/isolate) don't restore the default.
         for dim in registry.dims:
-            wire_actor = registry.dim_wire_actors.get(dim)
-            if wire_actor is None:
+            if dim < 2:
                 continue
-            wire_actor.SetVisibility(checked)
+            actor = registry.dim_actors.get(dim)
+            if actor is None:
+                continue
+            actor.GetProperty().SetEdgeVisibility(1 if checked else 0)
+            kw = registry._add_mesh_kwargs.get(dim)
+            if kw is not None and "show_edges" in kw:
+                kw["show_edges"] = bool(checked)
         plotter.render()
 
     def _on_color_mode(self, mode: str) -> None:

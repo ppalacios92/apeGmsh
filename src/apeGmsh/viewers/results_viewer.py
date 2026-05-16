@@ -1091,6 +1091,23 @@ class ResultsViewer:
             on_shift_click=self._on_shift_click_world,
         )
 
+        # ── Motion LOD ──────────────────────────────────────────────
+        # Hide the FE node cloud (one sphere-sprite per node — 600k+ on
+        # large results models) while the camera is moving; restore
+        # ~120 ms after the gesture settles. Same interactive-LOD model
+        # as the pre-solve mesh viewer. The getter reads
+        # ``_node_cloud_actor`` fresh so it tracks the point-size
+        # rebuild (the actor handle is replaced there).
+        from .core.motion_lod import MotionLOD
+        self._motion_lod = MotionLOD(
+            plotter,
+            lambda: (
+                [self._node_cloud_actor]
+                if self._node_cloud_actor is not None else []
+            ),
+        )
+        self._motion_lod.install()
+
         # ── Plain LMB pick — node by default, element via E, GP via G.
         # The pick observer absorbs plain LMB so the trackball does
         # not also rotate on drag. Mode is toggled by ``N`` / ``E`` /

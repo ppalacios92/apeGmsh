@@ -132,6 +132,31 @@ def _get_elem_props(etype: int) -> tuple:
     return props
 
 
+def _extract_surface_fast(grid: pv.UnstructuredGrid) -> pv.PolyData:
+    """Memory-efficient boundary-surface extraction.
+
+    Wraps ``vtkGeometryFilter`` with ``FastMode=True`` +
+    ``PassThroughCellIds=True``. FastMode skips the point-to-cell
+    adjacency hash table that the conservative path allocates at
+    ~96 B per point (~466 MB at 607k points). PassThroughCellIds
+    emits ``vtkOriginalCellIds`` on the output, mapping each surface
+    face back to its source 3D cell — used to translate surface
+    picks to volume elements and to propagate volume cell_data
+    onto the rendered polydata.
+
+    Mirrors ParaView's ``vtkPVGeometryFilter::UnstructuredGridExecute``
+    fast path (``Remoting/Views/.../vtkPVGeometryFilter.cxx``).
+    """
+    from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
+    gf = vtkGeometryFilter()
+    gf.SetInputData(grid)
+    gf.SetFastMode(True)
+    gf.SetPassThroughCellIds(True)
+    gf.SetPassThroughPointIds(False)
+    gf.Update()
+    return pv.wrap(gf.GetOutput())
+
+
 # ======================================================================
 # MeshSceneData
 # ======================================================================
@@ -444,16 +469,45 @@ def build_mesh_scene(
         grid["colors"] = colors
         grid.cell_data["entity_tag"] = np.array(all_entity_tags, dtype=np.int64)
 
-        # Fill layer never draws cell edges for dim>=2 — the dedicated
-        # wireframe layer (built from per-element corner edges) is what
-        # draws FE element boundaries. VTK's edge rendering on linearized
-        # higher-order cells would also be visually wrong (it tessellates
-        # quadratic cells into sub-triangle fans).
+        # Surface-only render for 3D unstructured grids. ParaView does
+        # the same — see vtkPVGeometryFilter::UnstructuredGridExecute.
+        # Avoids the default vtkGeometryFilter hash table (~96 B/point,
+        # 466 MB at 607k points) that the implicit mapper pipeline
+        # would build per frame, and reduces the GPU draw call from
+        # all volume hexes to just the ~2% on the boundary. Cell data
+        # (colors, entity_tag) is propagated from the volume cell that
+        # owns each face via ``vtkOriginalCellIds``; pick / visibility
+        # paths then operate on surface-cell indices.
+        if dim == 3:
+            surface = _extract_surface_fast(grid)
+            orig_ids = np.asarray(
+                surface.cell_data["vtkOriginalCellIds"], dtype=np.int64
+            )
+            surface["colors"] = np.ascontiguousarray(colors[orig_ids])
+            surface.cell_data["entity_tag"] = (
+                np.asarray(all_entity_tags, dtype=np.int64)[orig_ids]
+            )
+            # Remap cell_to_dt + element-tag table to surface-cell index.
+            cell_to_dt = {
+                int(i): cell_to_dt[int(orig_ids[i])]
+                for i in range(len(orig_ids))
+            }
+            all_elem_tags_flat = (
+                np.asarray(all_elem_tags_flat, dtype=np.int64)[orig_ids]
+            ).tolist()
+            grid = surface
+
+        # FE element wireframe is drawn by the fill mapper itself via
+        # ``show_edges`` (vtkProperty::EdgeVisibility). The grid has been
+        # linearized at this point (higher-order Gmsh nodes sliced off),
+        # so the mapper's per-cell edge rendering produces the correct
+        # FE element boundaries — no separate ``extract_all_edges()``
+        # pass needed. Mirrors ParaView's "Surface With Edges" mode.
         opacity = surface_opacity if dim >= 2 else 1.0
         dim_kwargs: dict[str, Any] = dict(
             scalars="colors", rgb=True,
             opacity=opacity,
-            show_edges=False,
+            show_edges=(dim >= 2 and show_surface_edges),
             edge_color=edge_color,
             line_width=line_width if dim == 1 else 0.5,
             render_lines_as_tubes=(dim == 1),
@@ -481,29 +535,6 @@ def build_mesh_scene(
         )
         batch_cell_to_elem[dim] = np.asarray(all_elem_tags_flat, dtype=np.int64)
         n_actors += 1
-
-        # ── wireframe layer (dim>=2 only) ───────────────────────────
-        # Built from the linearized fill grid via ``extract_all_edges``,
-        # which produces unique corner-to-corner edges per cell. This
-        # is what the user sees as the FE element wireframe — separate
-        # from VTK's higher-order tessellation, which would subdivide
-        # quadratic cells into sub-triangle fans and is not what an
-        # FE preprocessor wants.
-        if show_surface_edges and dim >= 2:
-            try:
-                wire_mesh = grid.extract_all_edges()
-                wire_actor = plotter.add_mesh(
-                    wire_mesh,
-                    color=edge_color,
-                    line_width=0.5,
-                    pickable=False,
-                    reset_camera=False,
-                )
-                registry.register_wire(dim, wire_mesh, wire_actor)
-                n_actors += 1
-            except Exception as exc:
-                if verbose:
-                    print(f"[mesh_scene] wireframe build failed for dim={dim}: {exc}")
 
     plotter.reset_camera()  # type: ignore[call-arg]  # pyvista stub quirk
     t_actors_elapsed = time.perf_counter() - t_actors

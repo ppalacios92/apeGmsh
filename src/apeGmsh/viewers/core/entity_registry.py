@@ -291,8 +291,23 @@ class EntityRegistry:
                     pos += c
                 pt_ids = connectivity[flat]
                 unique = np.unique(pt_ids)
+            elif (
+                (rf := getattr(mesh, "regular_faces", None)) is not None
+                and len(rf) > 0
+                and int(cell_arr.max(initial=-1)) < len(rf)
+            ):
+                # PolyData uniform-face fast path. ``dim_meshes`` is a
+                # PolyData when the dim>=3 actor renders the pre-extracted
+                # boundary surface (all quads for a hex mesh). PolyData
+                # exposes neither ``cell_connectivity`` nor ``offset``, so
+                # the UG path above is skipped; ``regular_faces`` is the
+                # vectorized equivalent — (n_cells, k) point ids — and
+                # avoids the ~20x-slower per-cell ``get_cell()`` round
+                # trip (82k calls / 3.5s per box-pick on the 607k mesh).
+                unique = np.unique(np.asarray(rf)[cell_arr].ravel())
             else:
-                # Fallback: per-cell VTK round-trip.
+                # Fallback: per-cell VTK round-trip (mixed faces or an
+                # unrecognised mesh type).
                 pt_ids_set: set[int] = set()
                 for ci in cell_arr:
                     pt_ids_set.update(mesh.get_cell(int(ci)).point_ids)

@@ -66,8 +66,20 @@ def _qrot(q: tuple, v: tuple) -> tuple:
     return (r[1], r[2], r[3])
 
 
-def _orbit_around(renderer, pivot: tuple, dx_px: int, dy_px: int) -> None:
-    """Orbit camera around *pivot* using quaternion rotation."""
+def _orbit_around(
+    renderer, pivot: tuple, dx_px: int, dy_px: int,
+    clip_bounds: tuple | None = None,
+) -> None:
+    """Orbit camera around *pivot* using quaternion rotation.
+
+    *clip_bounds* — when given, a static ``(xmin,xmax,ymin,ymax,
+    zmin,zmax)`` passed to ``ResetCameraClippingRange(bounds)``. The
+    no-arg form calls ``ComputeVisiblePropBounds`` every tick, which
+    queries the camera-dependent silhouette actor and forces a full
+    silhouette recompute (~107 ms/frame on a 600 k mesh). Geometry
+    bounds don't change while orbiting (only the camera moves), so a
+    cached superset is correct and skips that cascade entirely.
+    """
     cam = renderer.GetActiveCamera()
     pos = cam.GetPosition()
     fp  = cam.GetFocalPoint()
@@ -107,7 +119,10 @@ def _orbit_around(renderer, pivot: tuple, dx_px: int, dy_px: int) -> None:
     cam.SetPosition(*(pivot[i] + rp[i] for i in range(3)))
     cam.SetFocalPoint(*(pivot[i] + rfp[i] for i in range(3)))
     cam.OrthogonalizeViewUp()
-    renderer.ResetCameraClippingRange()
+    if clip_bounds is not None and clip_bounds[0] <= clip_bounds[1]:
+        renderer.ResetCameraClippingRange(*clip_bounds)
+    else:
+        renderer.ResetCameraClippingRange()
 
 
 def _scene_center(renderer) -> tuple[float, float, float]:
@@ -188,6 +203,40 @@ def install_navigation(
     # Cached lazy picker for the on_shift_click callback's world coord.
     _shift_click_picker: list[Any] = [None]
 
+    # ── cached static clipping bounds ───────────────────────────────
+    # Computed once, lazily, on the first camera gesture. The initial
+    # scene has every actor visible, so its bounds are an encompassing
+    # superset for the whole session — hiding entities only shrinks
+    # geometry, and a too-generous clipping range is harmless (minor
+    # depth precision) whereas recomputing per frame stalls on the
+    # silhouette filter. Reused by orbit + zoom.
+    _clip_bounds: list[tuple | None] = [None]
+
+    def _ensure_clip_bounds() -> tuple | None:
+        if _clip_bounds[0] is None:
+            try:
+                b = renderer.ComputeVisiblePropBounds()
+                if b is not None and b[0] <= b[1]:
+                    _clip_bounds[0] = tuple(b)
+            except Exception:
+                pass
+        return _clip_bounds[0]
+
+    def _pivot_center() -> tuple[float, float, float]:
+        """Orbit-pivot fallback — centre of the cached scene bounds.
+
+        Avoids ``_scene_center``'s fresh ``ComputeVisiblePropBounds``
+        (silhouette stall) on every pivot-less gesture start.
+        """
+        cb = _ensure_clip_bounds()
+        if cb is not None and cb[0] <= cb[1]:
+            return (
+                (cb[0] + cb[1]) * 0.5,
+                (cb[2] + cb[3]) * 0.5,
+                (cb[4] + cb[5]) * 0.5,
+            )
+        return _scene_center(renderer)
+
     # ── tag storage for observer removal (if needed) ────────────────
     _tags: dict[str, int] = {}
 
@@ -204,7 +253,9 @@ def install_navigation(
             _orbit_last[0] = (px, py)
             dx = px - lx
             dy = 0 if _orbit_mode[0] == "yaw_only" else py - ly
-            _orbit_around(renderer, _orbit_pivot[0], dx, dy)
+            _orbit_around(
+                renderer, _orbit_pivot[0], dx, dy, _ensure_clip_bounds()
+            )
             plotter.render()
             _abort(caller, _tags["move"])
             return
@@ -225,7 +276,7 @@ def install_navigation(
                 if get_orbit_pivot is not None:
                     pivot = get_orbit_pivot()
                 if pivot is None:
-                    pivot = _scene_center(renderer)
+                    pivot = _pivot_center()
                 _orbit_pivot[0] = pivot
                 _orbit_last[0] = (px, py)
                 _orbit_mode[0] = "yaw_only"
@@ -283,7 +334,11 @@ def install_navigation(
             new_pos = tuple(fp[i] + (pos[i] - fp[i]) / factor for i in range(3))
             cam.SetPosition(*new_pos)
 
-        renderer.ResetCameraClippingRange()
+        cb = _ensure_clip_bounds()
+        if cb is not None and cb[0] <= cb[1]:
+            renderer.ResetCameraClippingRange(*cb)
+        else:
+            renderer.ResetCameraClippingRange()
         plotter.render()
 
     def on_scroll_fwd(caller, _event):

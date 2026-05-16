@@ -235,21 +235,16 @@ class VisibilityManager:
                     if mask.all():
                         visible = full_mesh
                     elif not mask.any():
-                        # All cells hidden — remove fill and wire actors
+                        # All cells hidden — drop the fill actor.
+                        # Edges are rendered by the fill mapper itself
+                        # (vtkProperty::EdgeVisibility on the fill kwargs),
+                        # so no separate wire actor exists to remove.
                         old = reg.dim_actors.get(dim)
                         if old is not None:
                             try:
                                 plotter.remove_actor(old)
                             except Exception:
                                 pass
-                        old_wire = reg.dim_wire_actors.get(dim)
-                        if old_wire is not None:
-                            try:
-                                plotter.remove_actor(old_wire)
-                            except Exception:
-                                pass
-                            reg.dim_wire_actors.pop(dim, None)
-                            reg.dim_wire_meshes.pop(dim, None)
                         continue
                     else:
                         visible = full_mesh.extract_cells(
@@ -264,7 +259,10 @@ class VisibilityManager:
                 except Exception:
                     pass
 
-            # Add new fill actor with same visual properties
+            # Add new fill actor with same visual properties — its
+            # mapper inherits ``show_edges=True`` for dim>=2 from the
+            # original ``add_mesh`` kwargs, so element edges follow
+            # the mask automatically without a second pipeline pass.
             new_actor = plotter.add_mesh(
                 visible,
                 reset_camera=False,
@@ -272,44 +270,6 @@ class VisibilityManager:
                 **kwargs,
             )
             reg.swap_dim(dim, visible, new_actor)
-
-            # Rebuild wire actor from the visible (post-mask) grid so
-            # hidden entities also lose their wireframe. Only rebuild
-            # if the dim already had a registered wire — the mesh
-            # viewer registers one during scene build, the BRep model
-            # viewer does not (it uses silhouette + dim=1 curves).
-            old_wire = reg.dim_wire_actors.get(dim)
-            if old_wire is not None:
-                try:
-                    plotter.remove_actor(old_wire)
-                except Exception:
-                    pass
-                try:
-                    new_wire_mesh = visible.extract_all_edges()
-                    wire_color = "#666666"
-                    wire_width = 0.5
-                    try:
-                        prop = old_wire.GetProperty()
-                        rgb = prop.GetColor()
-                        wire_color = (
-                            float(rgb[0]),
-                            float(rgb[1]),
-                            float(rgb[2]),
-                        )
-                        wire_width = float(prop.GetLineWidth()) or 0.5
-                    except Exception:
-                        pass
-                    new_wire_actor = plotter.add_mesh(
-                        new_wire_mesh,
-                        color=wire_color,
-                        line_width=wire_width,
-                        pickable=False,
-                        reset_camera=False,
-                    )
-                    reg.register_wire(dim, new_wire_mesh, new_wire_actor)
-                except Exception:
-                    reg.dim_wire_actors.pop(dim, None)
-                    reg.dim_wire_meshes.pop(dim, None)
 
         if self._verbose:
             import time as _time
