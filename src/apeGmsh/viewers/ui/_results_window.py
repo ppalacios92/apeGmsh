@@ -302,76 +302,17 @@ class ResultsWindow:
             except Exception:
                 pass
 
-        # ── Allow nested + tabified docks for full user control ─────
-        win.setDockNestingEnabled(True)
-        win.setDockOptions(
-            QtWidgets.QMainWindow.DockOption.AnimatedDocks
-            | QtWidgets.QMainWindow.DockOption.AllowNestedDocks
-            | QtWidgets.QMainWindow.DockOption.AllowTabbedDocks
-        )
-        # When the user drags one dock onto another's title bar to tabify
-        # them, place the tab strip on the LEFT edge of every dock area
-        # (sidebar style — consistent regardless of which side the area
-        # sits on). Tab text stays horizontal via the proxy style
-        # applied below to any QTabBar QMainWindow creates for tabified
-        # docks.
-        for area in (
-            QtCore.Qt.LeftDockWidgetArea,
-            QtCore.Qt.RightDockWidgetArea,
-            QtCore.Qt.TopDockWidgetArea,
-            QtCore.Qt.BottomDockWidgetArea,
-        ):
-            win.setTabPosition(area, QtWidgets.QTabWidget.TabPosition.West)
-
-        # Apply the horizontal-text proxy style to any QTabBar that
-        # QMainWindow creates for tabified docks. The bars don't exist
-        # until two docks get tabified, so we hook the QMainWindow's
-        # showEvent / a QTimer to scan for them once tabification has
-        # happened. For now, install on existing bars too (covers the
-        # restored-layout case where docks are already tabified).
-        from .viewer_window import _make_horizontal_tab_style
-        self._htab_style = _make_horizontal_tab_style()
-        # Parent the style to the window so Qt's GC keeps it alive.
-        self._htab_style.setParent(win)
-
-        def _apply_htab_style_to_tabbars() -> None:
-            for tb in win.findChildren(QtWidgets.QTabBar):
-                # Only restyle bars whose shape is West/East (vertical).
-                shape = tb.shape()
-                if shape in (
-                    QtWidgets.QTabBar.Shape.RoundedWest,
-                    QtWidgets.QTabBar.Shape.RoundedEast,
-                    QtWidgets.QTabBar.Shape.TriangularWest,
-                    QtWidgets.QTabBar.Shape.TriangularEast,
-                ):
-                    tb.setStyle(self._htab_style)
-
-        # Apply now (covers restored layouts with already-tabified docks)
-        # and again shortly after Qt finishes laying out.
-        _apply_htab_style_to_tabbars()
-        QtCore.QTimer.singleShot(0, _apply_htab_style_to_tabbars)
-        self._apply_htab_style_to_tabbars = _apply_htab_style_to_tabbars
-
-        # Catch tab bars created LATER (when the user drags one dock onto
-        # another to tabify them at runtime). QMainWindow creates the
-        # QTabBar as a child as part of that operation, so we listen for
-        # ChildAdded events and restyle any new tabbar.
-        outer_self = self
-
-        class _TabBarChildFilter(QtCore.QObject):
-            def eventFilter(self, _obj, event):
-                if event.type() == QtCore.QEvent.Type.ChildAdded:
-                    child = event.child()
-                    if isinstance(child, QtWidgets.QTabBar):
-                        # Defer one tick — the tab bar's shape is set
-                        # *after* the ChildAdded event fires.
-                        QtCore.QTimer.singleShot(
-                            0, outer_self._apply_htab_style_to_tabbars,
-                        )
-                return False
-
-        self._tabbar_filter = _TabBarChildFilter(win)
-        win.installEventFilter(self._tabbar_filter)
+        # ── Tabified-dock UX is owned by ViewerWindow ───────────────
+        # ``ViewerWindow.__init__`` (the window we wrap) already sets
+        # ``setDockNestingEnabled`` / ``setDockOptions`` /
+        # ``setTabPosition(West)`` on this same ``win`` and installs
+        # the horizontal-text proxy style + a ChildAdded filter that
+        # restyles any QTabBar Qt creates later. Since ViewerWindow's
+        # __init__ runs before this ``_build_layout``, the filter is
+        # live by the time we tabify the seven docks below — they get
+        # the sidebar tab strip automatically. The duplicate block
+        # that used to live here was removed (2026-05-16) once
+        # ViewerWindow owned the machinery; see PR #179.
 
         # ── Five docks ──────────────────────────────────────────────
         QDW = QtWidgets.QDockWidget
