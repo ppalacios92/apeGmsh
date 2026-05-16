@@ -370,6 +370,27 @@ class MeshViewer:
             )
             win.add_tab("Browser", self._browser_tab.widget)
 
+        # ── Left-rail outline tree — primary navigation ────────────
+        # ParaView-style alternative to the right-side Browser tab.
+        # Lists Physical Groups + Element Types + Parts with eye-icon
+        # visibility. Browser tab still coexists; future PR may
+        # deprecate one.
+        from .ui._mesh_outline_tree import MeshOutlineTree
+        from .ui._dock_registry import DockSpec
+        parts_reg = getattr(self._parent, 'parts', None)
+        self._outline_tree = MeshOutlineTree(
+            scene=scene,
+            selection=sel,
+            vis_mgr=vis_mgr,
+            parts_registry=parts_reg,
+        )
+        win.add_extension_dock(DockSpec(
+            dock_id="dock_mesh_outline",
+            title="Outline",
+            factory=lambda _p: self._outline_tree.widget,
+            default_area="left",
+        ))
+
         # ── Clipping tab ────────────────────────────────────────────
         from .core.clipping_controller import ClippingController
         from .ui.clipping_tab import ClippingTab
