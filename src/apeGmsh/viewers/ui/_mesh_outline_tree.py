@@ -122,6 +122,7 @@ class MeshOutlineTree:
         on_constraint_kinds_changed: Optional[
             Callable[[set[str]], None]
         ] = None,
+        on_row_focused: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         QtCore, _, QtWidgets = _qt()
         self._scene = scene
@@ -135,6 +136,10 @@ class MeshOutlineTree:
         self._on_load_patterns_changed = on_load_patterns_changed
         self._on_mass_visibility_changed = on_mass_visibility_changed
         self._on_constraint_kinds_changed = on_constraint_kinds_changed
+        # Generic row-focused signal — fires for every selectable row
+        # with ``(kind, payload)``. Viewers map kinds to tab names and
+        # call ``win.focus_tab(...)`` to reveal the property editor.
+        self._on_row_focused = on_row_focused
 
         # ── Outer container + header ────────────────────────────────
         widget = QtWidgets.QWidget()
@@ -475,8 +480,17 @@ class MeshOutlineTree:
         if item is None:
             return
         kind = item.data(0, _ROLE_KIND)
+        payload = item.data(0, _ROLE_PAYLOAD)
         if kind == "group" and self._on_group_activated is not None:
-            self._on_group_activated(item.data(0, _ROLE_PAYLOAD))
+            self._on_group_activated(payload)
+        # Generic row-focus signal — fires for every selectable kind
+        # so the viewer can raise the matching property tab. Header
+        # rows are non-selectable and never reach here.
+        if kind in (
+            "group", "type", "part",
+            "load_pattern", "mass", "constraint_kind",
+        ) and self._on_row_focused:
+            self._on_row_focused(kind, payload)
 
     # ------------------------------------------------------------------
     # Right-click context menu — Hide / Isolate / Reveal-all

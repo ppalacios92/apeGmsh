@@ -384,6 +384,26 @@ class MeshViewer:
         loads_comp = getattr(self._parent, 'loads', None)
         mass_comp = getattr(self._parent, 'masses', None)
         constraints_comp = getattr(self._parent, 'constraints', None)
+
+        # Map outline row kinds to the right-side tab names whose
+        # contents serve as the property editor for that row type.
+        # mesh.viewer's right side is the legacy ``QTabWidget`` (not
+        # tabified extension docks), so we identify tabs by their
+        # text label.
+        _OUTLINE_TAB_MAP = {
+            "group":           "Browser",
+            "type":            "Browser",
+            "part":            "Browser",
+            "load_pattern":    "Loads",
+            "mass":            "Mass",
+            "constraint_kind": "Constraints",
+        }
+
+        def _on_outline_row_focused(kind: str, _payload) -> None:
+            tab_name = _OUTLINE_TAB_MAP.get(kind)
+            if tab_name is not None:
+                win.focus_tab(tab_name)
+
         self._outline_tree = MeshOutlineTree(
             scene=scene,
             selection=sel,
@@ -395,6 +415,7 @@ class MeshViewer:
             on_load_patterns_changed=self._rebuild_loads_overlay,
             on_mass_visibility_changed=self._rebuild_mass_overlay,
             on_constraint_kinds_changed=self._rebuild_constraints_overlay,
+            on_row_focused=_on_outline_row_focused,
         )
         win.add_extension_dock(DockSpec(
             dock_id="dock_mesh_outline",
