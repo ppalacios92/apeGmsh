@@ -74,7 +74,7 @@ def test_hex8_8gp_round_trip_is_exact_for_trilinear_field():
     must reproduce the nodal values exactly (up to floating-point
     noise).
     """
-    from apeGmsh.results._shape_functions import hex8_N
+    from apeGmsh.fem._shape_functions import hex8_N
 
     # f(x, y, z) = a + bx + cy + dz + e*xy + f*yz + g*zx + h*xyz
     coeffs = np.array([1.5, -2.0, 0.7, 3.1, 0.2, -0.5, 0.9, 0.4])
@@ -98,7 +98,7 @@ def test_hex8_8gp_round_trip_is_exact_for_trilinear_field():
 
 
 def test_quad4_4gp_round_trip_is_exact_for_bilinear_field():
-    from apeGmsh.results._shape_functions import quad4_N
+    from apeGmsh.fem._shape_functions import quad4_N
 
     coeffs = np.array([2.0, -1.0, 0.5, 0.3])
     x = _QUAD4_CORNERS[:, 0]
@@ -183,7 +183,7 @@ def test_quad8_falls_back_to_quad4_for_extrapolation():
 
     # Quad4 + 2x2 GPs is the round-trip-exact case from the linear
     # extrapolation tests; should reproduce a bilinear field exactly.
-    from apeGmsh.results._shape_functions import quad4_N
+    from apeGmsh.fem._shape_functions import quad4_N
     coeffs = np.array([1.5, -0.7, 2.0, 0.4])
     corners = np.array([[-1, -1], [+1, -1], [+1, +1], [-1, +1]],
                        dtype=np.float64)
@@ -256,7 +256,7 @@ def _make_gauss_slab(component, values_T, element_index, natural_coords):
 def test_single_hex8_recovers_linear_field_exactly():
     """One hex8 with a known linear nodal field. After extrapolation
     each corner should carry its original value."""
-    from apeGmsh.results._shape_functions import hex8_N
+    from apeGmsh.fem._shape_functions import hex8_N
 
     # Corner node IDs 1..8 placed at the canonical natural-space corners
     nodes = [(i + 1, _HEX8_CORNERS[i].tolist()) for i in range(8)]
@@ -376,7 +376,7 @@ def test_empty_slab_returns_empty_arrays():
 
 def test_time_axis_preserved():
     """T=3 values should produce a (3, N) nodal output."""
-    from apeGmsh.results._shape_functions import hex8_N
+    from apeGmsh.fem._shape_functions import hex8_N
 
     nodes = [(i + 1, _HEX8_CORNERS[i].tolist()) for i in range(8)]
     elements = [(101, 5, [n[0] for n in nodes])]

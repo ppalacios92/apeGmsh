@@ -19,8 +19,8 @@ Two reduction strategies are supported:
   get true off-diagonal coupling, use the element's own ``-cMass``
   flag at the OpenSees level and skip this composite for that region.
   Higher-order-element HRZ row-sum lumping is a planned follow-up
-  that will require sharing the shape function library currently in
-  ``results/_shape_functions.py``.
+  that uses the shared shape function library at
+  :mod:`apeGmsh.fem._shape_functions`.
 """
 from __future__ import annotations
 

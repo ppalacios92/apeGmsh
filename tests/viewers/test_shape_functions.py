@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from apeGmsh.results._shape_functions import (
+from apeGmsh.fem._shape_functions import (
     SHAPE_FUNCTIONS_BY_GMSH_CODE,
     compute_jacobian_dets,
     compute_physical_coords,

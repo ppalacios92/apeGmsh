@@ -60,14 +60,14 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from numpy import ndarray
 
-from ._shape_functions import get_shape_functions
+from ..fem._shape_functions import get_shape_functions
 
 if TYPE_CHECKING:
     from ..mesh.FEMData import FEMData
     from ._slabs import GaussSlab
 
 
-# Parent dim per Gmsh type code — see catalog in _shape_functions.py
+# Parent dim per Gmsh type code — see catalog in apeGmsh.fem._shape_functions
 _PARENT_DIM: dict[int, int] = {
     1: 1,     # Line2
     2: 2,     # Tri3
