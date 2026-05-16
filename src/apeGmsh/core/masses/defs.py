@@ -16,12 +16,22 @@ from dataclasses import dataclass, field
 
 @dataclass
 class MassDef:
-    """Base class for all mass definitions."""
+    """Base class for all mass definitions.
+
+    ``dofs`` masks which translational DOFs (subset of ``{1, 2, 3}``)
+    receive the resolved mass.  ``None`` (default) applies mass to all
+    three translational components.  Rotational DOFs (4, 5, 6) are
+    controlled separately via ``rotational=(Ixx, Iyy, Izz)`` on the
+    individual def subclasses — ``dofs`` deliberately does not cover
+    them because ``density × volume`` (and the line / area analogues)
+    cannot derive rotational inertia without element-shape awareness.
+    """
     kind: str
     target: object              # part label, PG name, label name, mesh selection, or DimTag list
     name: str | None = None
     reduction: str = "lumped"   # "lumped" | "consistent"
     target_source: str = "auto" # "auto" | "pg" | "label"
+    dofs: list[int] | None = None   # None → translational (1, 2, 3)
 
 
 @dataclass
@@ -44,9 +54,17 @@ class LineMassDef(MassDef):
     ``linear_density`` is in mass per unit length (e.g. kg/m).  The
     total mass per curve is ``linear_density × curve_length`` and is
     distributed to the curve's mesh nodes.
+
+    ``rotational`` (optional) attaches a fixed rotational inertia
+    triple ``(Ixx, Iyy, Izz)`` to **every** node receiving mass from
+    this def.  apeGmsh does not derive rotational inertia from
+    ``linear_density`` — the user supplies the value.  Useful when an
+    ndf=6 model needs rotational inertia along an edge (e.g. cable
+    with cross-sectional moment of inertia).
     """
     kind: str = field(init=False, default="line")
     linear_density: float = 0.0
+    rotational: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -56,9 +74,15 @@ class SurfaceMassDef(MassDef):
     ``areal_density`` is in mass per unit area (e.g. kg/m²).  The
     total mass per face is ``areal_density × face_area`` distributed
     to the face's mesh nodes.
+
+    ``rotational`` (optional) attaches a fixed rotational inertia
+    triple ``(Ixx, Iyy, Izz)`` to **every** node receiving mass from
+    this def.  apeGmsh does not derive rotational inertia from
+    ``areal_density`` — the user supplies the value.
     """
     kind: str = field(init=False, default="surface")
     areal_density: float = 0.0
+    rotational: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -69,6 +93,14 @@ class VolumeMassDef(MassDef):
     mass per element is ``density × element_volume`` distributed to
     the element's nodes.
 
+    ``rotational`` (optional) attaches a fixed rotational inertia
+    triple ``(Ixx, Iyy, Izz)`` to **every** node receiving mass from
+    this def.  apeGmsh does not derive rotational inertia from
+    ``density × volume`` — that would need a moment-of-inertia
+    integration over the element, which is element-shape aware.
+    Until that's implemented, this kwarg lets the user attach a
+    pre-computed rotational inertia uniformly.
+
     Note
     ----
     The user is responsible for setting the OpenSees material's
@@ -78,6 +110,7 @@ class VolumeMassDef(MassDef):
     """
     kind: str = field(init=False, default="volume")
     density: float = 0.0
+    rotational: tuple[float, float, float] | None = None
 
 
 __all__ = [

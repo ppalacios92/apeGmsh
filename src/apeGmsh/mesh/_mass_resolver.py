@@ -8,11 +8,19 @@ here), no solver imports.
 
 Two reduction strategies are supported:
 
-* **lumped** — translational only, equal split per node.
-* **consistent** — full ``∫ρ N N dV`` mass coupling between nodes.
-  For tri3 / quad4 / tet4 / hex8 with constant density, the consistent
-  diagonal-sum matches lumped, so the resolver returns the same
-  records; higher-order types fall through to lumped.
+* **lumped** — equal split per node on the translational DOFs listed
+  in ``defn.dofs`` (default: 1, 2, 3) plus optional fixed rotational
+  inertia from ``defn.rotational``.
+* **consistent** — *currently a no-op label* for surface and volume
+  defs (the line path emits the proper ``ρ_l L / 6 · [[2, 1], [1, 2]]``
+  diagonal-sum, which coincides with lumped for 2-node lines).  The
+  off-diagonal node coupling of a true consistent mass matrix has no
+  destination through ``ops.mass``, which is strictly diagonal — to
+  get true off-diagonal coupling, use the element's own ``-cMass``
+  flag at the OpenSees level and skip this composite for that region.
+  Higher-order-element HRZ row-sum lumping is a planned follow-up
+  that will require sharing the shape function library currently in
+  ``results/_shape_functions.py``.
 """
 from __future__ import annotations
 
@@ -49,6 +57,30 @@ def _accum_to_records(accum: dict[int, ndarray], *, name: str | None) -> list[Ma
             name=name,
         ))
     return out
+
+
+def _build_vec6(
+    m_share: float,
+    dofs: list[int] | tuple[int, ...] | None,
+    rotational: tuple[float, float, float] | None,
+) -> ndarray:
+    """Assemble a length-6 mass vector honoring ``dofs`` + ``rotational``.
+
+    Translational positions are 0,1,2 (1-based DOFs 1,2,3); rotational
+    are 3,4,5 (DOFs 4,5,6).  Composes cleanly: ``dofs=[1,2]`` zeroes the
+    z-translational slot but leaves the rotational tuple alone.
+    """
+    vec = np.zeros(6)
+    if dofs is None:
+        vec[0] = vec[1] = vec[2] = m_share
+    else:
+        for d in dofs:
+            vec[d - 1] = m_share
+    if rotational is not None:
+        vec[3] = float(rotational[0])
+        vec[4] = float(rotational[1])
+        vec[5] = float(rotational[2])
+    return vec
 
 
 # ======================================================================
@@ -133,13 +165,12 @@ class MassResolver:
         defn: PointMassDef,
         node_set: set[int],
     ) -> list[MassRecord]:
-        """Apply the same point mass to every node in *node_set*."""
-        m = float(defn.mass)
-        if defn.rotational is not None:
-            ix, iy, iz = defn.rotational
-            vec = np.array([m, m, m, ix, iy, iz])
-        else:
-            vec = np.array([m, m, m, 0.0, 0.0, 0.0])
+        """Apply the same point mass to every node in *node_set*.
+
+        Honors ``defn.dofs`` (translational mask) and
+        ``defn.rotational`` (rotational inertia tuple).
+        """
+        vec = _build_vec6(float(defn.mass), defn.dofs, defn.rotational)
         accum: dict[int, ndarray] = {}
         for nid in node_set:
             _accumulate(accum, nid, vec)
@@ -153,14 +184,18 @@ class MassResolver:
         """Distribute line mass by tributary length.
 
         Each node receives ``ρₗ × Σ(adjacent_edge_length / 2)`` of
-        translational mass on x, y, z DOFs.  Rotational DOFs zero.
+        translational mass on the DOFs listed in ``defn.dofs``
+        (default: 1, 2, 3).  ``defn.rotational`` (if set) attaches
+        a fixed rotational inertia to every receiving node.
         """
         rho_l = float(defn.linear_density)
+        dofs = defn.dofs
+        rot = defn.rotational
         accum: dict[int, ndarray] = {}
         for n1, n2 in edges:
             half_L = 0.5 * self.edge_length(n1, n2)
             m_share = rho_l * half_L
-            vec = np.array([m_share, m_share, m_share, 0.0, 0.0, 0.0])
+            vec = _build_vec6(m_share, dofs, rot)
             _accumulate(accum, n1, vec)
             _accumulate(accum, n2, vec)
         return _accum_to_records(accum, name=defn.name)
@@ -170,15 +205,21 @@ class MassResolver:
         defn: SurfaceMassDef,
         faces: list[list[int]],
     ) -> list[MassRecord]:
-        """Distribute surface mass by tributary area."""
+        """Distribute surface mass by tributary area.
+
+        Honors ``defn.dofs`` (translational mask) and
+        ``defn.rotational`` (rotational inertia tuple).
+        """
         rho_a = float(defn.areal_density)
+        dofs = defn.dofs
+        rot = defn.rotational
         accum: dict[int, ndarray] = {}
         for face in faces:
             A = self.face_area(face)
             if A <= 0:
                 continue
             m_share = rho_a * A / len(face)
-            vec = np.array([m_share, m_share, m_share, 0.0, 0.0, 0.0])
+            vec = _build_vec6(m_share, dofs, rot)
             for nid in face:
                 _accumulate(accum, int(nid), vec)
         return _accum_to_records(accum, name=defn.name)
@@ -188,15 +229,21 @@ class MassResolver:
         defn: VolumeMassDef,
         elements: list[ndarray],
     ) -> list[MassRecord]:
-        """Distribute volume mass equally to element nodes (lumped)."""
+        """Distribute volume mass equally to element nodes (lumped).
+
+        Honors ``defn.dofs`` (translational mask) and
+        ``defn.rotational`` (rotational inertia tuple).
+        """
         rho = float(defn.density)
+        dofs = defn.dofs
+        rot = defn.rotational
         accum: dict[int, ndarray] = {}
         for conn_row in elements:
             V = self.element_volume(conn_row)
             if V <= 0:
                 continue
             m_share = rho * V / len(conn_row)
-            vec = np.array([m_share, m_share, m_share, 0.0, 0.0, 0.0])
+            vec = _build_vec6(m_share, dofs, rot)
             for nid in conn_row:
                 _accumulate(accum, int(nid), vec)
         return _accum_to_records(accum, name=defn.name)

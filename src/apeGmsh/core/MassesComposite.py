@@ -62,6 +62,45 @@ _DISPATCH: dict[type, dict[str, str]] = {
 _MassT = TypeVar("_MassT", bound=MassDef)
 
 
+def _validate_translational_dofs(dofs):
+    """Normalise + validate a translational DOF mask.
+
+    Returns ``None`` (default, all three translational DOFs) or a
+    fresh list of ints drawn from {1, 2, 3}.  Rejects empty lists and
+    any DOF outside {1, 2, 3} with a clear message pointing the user
+    at ``rotational=`` for the rotational side.
+    """
+    if dofs is None:
+        return None
+    dofs = list(dofs)
+    if not dofs:
+        raise ValueError(
+            "dofs= must be non-empty; omit the kwarg for default "
+            "translational [1, 2, 3]."
+        )
+    bad = [d for d in dofs if d not in (1, 2, 3)]
+    if bad:
+        raise ValueError(
+            f"dofs= only masks translational DOFs from {{1, 2, 3}}; "
+            f"got {bad}. For rotational inertia, pass "
+            f"rotational=(Ixx, Iyy, Izz) instead."
+        )
+    return [int(d) for d in dofs]
+
+
+def _validate_rotational(rot):
+    """Normalise + validate a rotational inertia triple."""
+    if rot is None:
+        return None
+    rot = tuple(rot)
+    if len(rot) != 3:
+        raise ValueError(
+            f"rotational= must be a length-3 tuple (Ixx, Iyy, Izz); "
+            f"got length {len(rot)}."
+        )
+    return tuple(float(v) for v in rot)
+
+
 class MassesComposite:
     """Solver-agnostic nodal-mass composite — declare on geometry,
     accumulate per-node mass after meshing.
@@ -176,6 +215,7 @@ class MassesComposite:
         pg=None, label=None, tag=None,
         mass: float,
         rotational: tuple | None = None,
+        dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
     ) -> PointMassDef:
@@ -204,6 +244,13 @@ class MassesComposite:
             Rotational inertia triple. Required for ``ndf >= 4``
             models that carry rotational DOFs. Default ``None``
             stores zero rotational inertia.
+        dofs : list[int], optional
+            Translational DOF mask (subset of ``{1, 2, 3}``). The
+            scalar ``mass`` is applied only to the listed DOFs; the
+            others receive zero translational mass. Default ``None``
+            applies mass to all three (1=ux, 2=uy, 3=uz). Rotational
+            inertia (DOFs 4-6) is independent — set it via
+            ``rotational=``.
         reduction : ``"lumped"`` or ``"consistent"``, default
             ``"lumped"``
             Has no effect for point masses (already lumped) — the
@@ -233,7 +280,8 @@ class MassesComposite:
         t, src = self._coalesce_target(target, pg=pg, label=label, tag=tag)
         return self._add_def(PointMassDef(
             target=t, target_source=src, name=name, reduction=reduction,
-            mass=mass, rotational=rotational,
+            dofs=_validate_translational_dofs(dofs),
+            mass=mass, rotational=_validate_rotational(rotational),
         ))
 
     def line(
@@ -242,6 +290,8 @@ class MassesComposite:
         *,
         pg=None, label=None, tag=None,
         linear_density: float,
+        rotational: tuple | None = None,
+        dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
     ) -> LineMassDef:
@@ -271,6 +321,14 @@ class MassesComposite:
             Explicit-source overrides.
         linear_density : float
             Mass per unit length.
+        rotational : (Ixx, Iyy, Izz), optional
+            Fixed rotational inertia attached to every node receiving
+            mass from this def. apeGmsh does not derive rotational
+            inertia from ``linear_density`` — the user supplies it.
+            Default ``None`` (no rotational mass).
+        dofs : list[int], optional
+            Translational DOF mask (subset of ``{1, 2, 3}``). Default
+            ``None`` applies to all three.
         reduction : ``"lumped"`` or ``"consistent"``, default
             ``"lumped"``
             Lumping scheme.
@@ -295,7 +353,9 @@ class MassesComposite:
         t, src = self._coalesce_target(target, pg=pg, label=label, tag=tag)
         return self._add_def(LineMassDef(
             target=t, target_source=src, name=name, reduction=reduction,
+            dofs=_validate_translational_dofs(dofs),
             linear_density=linear_density,
+            rotational=_validate_rotational(rotational),
         ))
 
     def surface(
@@ -304,6 +364,8 @@ class MassesComposite:
         *,
         pg=None, label=None, tag=None,
         areal_density: float,
+        rotational: tuple | None = None,
+        dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
     ) -> SurfaceMassDef:
@@ -334,6 +396,14 @@ class MassesComposite:
         areal_density : float
             Mass per unit area. For a shell of constant thickness
             ``t`` and material density ``ρ``, pass ``ρ * t``.
+        rotational : (Ixx, Iyy, Izz), optional
+            Fixed rotational inertia attached to every node receiving
+            mass from this def. apeGmsh does not derive rotational
+            inertia from ``areal_density`` — the user supplies it.
+            Default ``None`` (no rotational mass).
+        dofs : list[int], optional
+            Translational DOF mask (subset of ``{1, 2, 3}``). Default
+            ``None`` applies to all three.
         reduction : ``"lumped"`` or ``"consistent"``, default
             ``"lumped"``
             Lumping scheme.
@@ -356,7 +426,9 @@ class MassesComposite:
         t, src = self._coalesce_target(target, pg=pg, label=label, tag=tag)
         return self._add_def(SurfaceMassDef(
             target=t, target_source=src, name=name, reduction=reduction,
+            dofs=_validate_translational_dofs(dofs),
             areal_density=areal_density,
+            rotational=_validate_rotational(rotational),
         ))
 
     def volume(
@@ -365,6 +437,8 @@ class MassesComposite:
         *,
         pg=None, label=None, tag=None,
         density: float,
+        rotational: tuple | None = None,
+        dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
     ) -> VolumeMassDef:
@@ -396,6 +470,15 @@ class MassesComposite:
             Explicit-source overrides.
         density : float
             Material density (mass per unit volume).
+        rotational : (Ixx, Iyy, Izz), optional
+            Fixed rotational inertia attached to every node receiving
+            mass from this def. apeGmsh does not derive rotational
+            inertia from ``density × volume`` — the user supplies it
+            (deriving it properly would need a moment-of-inertia
+            integration over the element). Default ``None``.
+        dofs : list[int], optional
+            Translational DOF mask (subset of ``{1, 2, 3}``). Default
+            ``None`` applies to all three (1=ux, 2=uy, 3=uz).
         reduction : ``"lumped"`` or ``"consistent"``, default
             ``"lumped"``
             Lumping scheme.
@@ -419,7 +502,9 @@ class MassesComposite:
         t, src = self._coalesce_target(target, pg=pg, label=label, tag=tag)
         return self._add_def(VolumeMassDef(
             target=t, target_source=src, name=name, reduction=reduction,
+            dofs=_validate_translational_dofs(dofs),
             density=density,
+            rotational=_validate_rotational(rotational),
         ))
 
     @staticmethod
