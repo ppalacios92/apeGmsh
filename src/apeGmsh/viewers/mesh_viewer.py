@@ -654,7 +654,14 @@ class MeshViewer:
             lambda: open_theme_editor(win.window)
         )
         prefs.widget.layout().addWidget(_btn_theme)
-        win.add_tab("Session", prefs.widget)
+        # Wrap in a scroll area so the (tall) Session panel never
+        # forces a minimum size on the shared tab group — it scrolls
+        # instead of stretching its neighbours (same as model.viewer).
+        _sess_scroll = _QtW.QScrollArea()
+        _sess_scroll.setWidgetResizable(True)
+        _sess_scroll.setFrameShape(_QtW.QFrame.NoFrame)
+        _sess_scroll.setWidget(prefs.widget)
+        win.add_tab("Session", _sess_scroll)
 
     # ==================================================================
     # Display callbacks (Display tab)
