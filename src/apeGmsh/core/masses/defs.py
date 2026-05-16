@@ -83,6 +83,7 @@ class SurfaceMassDef(MassDef):
     kind: str = field(init=False, default="surface")
     areal_density: float = 0.0
     rotational: tuple[float, float, float] | None = None
+    derive_rotational: bool = False
 
 
 @dataclass
@@ -101,6 +102,17 @@ class VolumeMassDef(MassDef):
     Until that's implemented, this kwarg lets the user attach a
     pre-computed rotational inertia uniformly.
 
+    ``derive_rotational`` (optional, default ``False``) instead
+    *computes* per-node rotational inertia from the element shape
+    functions: ``I_xx^(I) = ∫ρ N_I (y²+z²) dV − M_I (y_I²+z_I²)``
+    (and cyclic), the about-node parallel-axis form whose assembled
+    sum reproduces the continuum rigid-rotation kinetic energy
+    exactly.  Requires ``reduction='consistent'`` and is mutually
+    exclusive with a fixed ``rotational=`` tuple.  Per-node emitted
+    values may be negative (they are parallel-axis corrections, not
+    standalone inertias); the physical guarantee is on the assembled
+    total.
+
     Note
     ----
     The user is responsible for setting the OpenSees material's
@@ -111,6 +123,7 @@ class VolumeMassDef(MassDef):
     kind: str = field(init=False, default="volume")
     density: float = 0.0
     rotational: tuple[float, float, float] | None = None
+    derive_rotational: bool = False
 
 
 __all__ = [

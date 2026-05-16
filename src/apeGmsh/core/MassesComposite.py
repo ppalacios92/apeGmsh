@@ -101,6 +101,31 @@ def _validate_rotational(rot):
     return tuple(float(v) for v in rot)
 
 
+def _validate_derive_rotational(derive, *, rotational, reduction):
+    """Guard the derive_rotational opt-in.
+
+    derive_rotational *computes* per-node rotational inertia from the
+    element shape functions; it is mutually exclusive with a fixed
+    ``rotational=`` tuple and requires the integrating
+    ``reduction='consistent'`` path.
+    """
+    if not derive:
+        return False
+    if rotational is not None:
+        raise ValueError(
+            "derive_rotational=True computes rotational inertia from "
+            "the element; it is mutually exclusive with an explicit "
+            "rotational=(Ixx, Iyy, Izz). Pass one or the other."
+        )
+    if reduction != "consistent":
+        raise ValueError(
+            "derive_rotational=True requires reduction='consistent' "
+            f"(the shape-function integration path); got "
+            f"reduction={reduction!r}."
+        )
+    return True
+
+
 class MassesComposite:
     """Solver-agnostic nodal-mass composite — declare on geometry,
     accumulate per-node mass after meshing.
@@ -365,6 +390,7 @@ class MassesComposite:
         pg=None, label=None, tag=None,
         areal_density: float,
         rotational: tuple | None = None,
+        derive_rotational: bool = False,
         dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
@@ -429,6 +455,10 @@ class MassesComposite:
             dofs=_validate_translational_dofs(dofs),
             areal_density=areal_density,
             rotational=_validate_rotational(rotational),
+            derive_rotational=_validate_derive_rotational(
+                derive_rotational, rotational=rotational,
+                reduction=reduction,
+            ),
         ))
 
     def volume(
@@ -438,6 +468,7 @@ class MassesComposite:
         pg=None, label=None, tag=None,
         density: float,
         rotational: tuple | None = None,
+        derive_rotational: bool = False,
         dofs: list[int] | None = None,
         reduction: str = "lumped",
         name: str | None = None,
@@ -505,6 +536,10 @@ class MassesComposite:
             dofs=_validate_translational_dofs(dofs),
             density=density,
             rotational=_validate_rotational(rotational),
+            derive_rotational=_validate_derive_rotational(
+                derive_rotational, rotational=rotational,
+                reduction=reduction,
+            ),
         ))
 
     @staticmethod

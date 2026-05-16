@@ -366,6 +366,89 @@ class MassResolver:
         for w, nid in zip(weights, conn):
             _accumulate(accum, int(nid), _build_vec6(m_elem * w, dofs, rot))
 
+    def _hrz_distribute_derived(
+        self,
+        accum: dict[int, ndarray],
+        conn,
+        rho: float,
+        m_elem: float,
+        gmsh_code: "int | None",
+        dofs,
+    ) -> None:
+        """HRZ translational split + shape-function-derived rotational.
+
+        Translational mass is HRZ-distributed exactly as
+        :meth:`_hrz_distribute`.  In addition, each node gets the
+        about-node parallel-axis rotational inertia
+
+            I_xx^(I) = ρ ∫ N_I (y²+z²) dΩ − M_I (y_I²+z_I²)   (cyclic)
+
+        where ``M_I = m_elem · w_I`` is the node's HRZ translational
+        share.  Summing this over all nodes/elements reproduces the
+        continuum rigid-rotation kinetic energy exactly (the ∫ N_I
+        terms telescope via partition of unity, leaving
+        ρ∫r⊥² dΩ − Σ M_I r⊥,I²).
+
+        Per-node emitted Ixx/Iyy/Izz may be **negative** — they are
+        parallel-axis corrections, not standalone inertias.  The
+        physical guarantee is on the assembled total, not per node.
+
+        If ``gmsh_code`` is unknown (element type not in the catalog)
+        the rotational integral cannot be evaluated; the node gets
+        HRZ translational mass with zero rotational inertia.
+        """
+        n = len(conn)
+        coords = np.array(
+            [self.coords_of(int(nid)) for nid in conn], dtype=float,
+        )
+        catalog = (
+            get_shape_functions(gmsh_code)
+            if gmsh_code is not None else None
+        )
+        if catalog is None:
+            # No shape functions — equal-share translational, no
+            # derived rotational.
+            for nid in conn:
+                _accumulate(
+                    accum, int(nid),
+                    _build_vec6(m_elem / n, dofs, None),
+                )
+            return
+
+        N_fn, dN_fn, geom_kind, _ = catalog
+        weights = hrz_weights(gmsh_code)
+        if len(weights) != n:
+            weights = [1.0 / n] * n
+        weights = np.asarray(weights, dtype=float)
+
+        qp, qw = reference_quadrature(gmsh_code)
+        N = N_fn(qp)                                   # (nq, n)
+        detJ = compute_jacobian_dets(
+            qp, coords[None, :, :], dN_fn, geom_kind,
+        )[0]                                            # (nq,)
+        xq = N @ coords                                 # (nq, 3) phys IP
+        wJ = qw * detJ                                  # (nq,)
+
+        # Second moments  S_ii^(I) = ρ ∫ N_I r_⊥² dΩ
+        rxx = xq[:, 1] ** 2 + xq[:, 2] ** 2             # for Ixx (y²+z²)
+        ryy = xq[:, 0] ** 2 + xq[:, 2] ** 2             # for Iyy (x²+z²)
+        rzz = xq[:, 0] ** 2 + xq[:, 1] ** 2             # for Izz (x²+y²)
+        Sxx = rho * (N * (wJ * rxx)[:, None]).sum(axis=0)   # (n,)
+        Syy = rho * (N * (wJ * ryy)[:, None]).sum(axis=0)
+        Szz = rho * (N * (wJ * rzz)[:, None]).sum(axis=0)
+
+        m_node = m_elem * weights                       # (n,) HRZ trans.
+        Ixx = Sxx - m_node * (coords[:, 1] ** 2 + coords[:, 2] ** 2)
+        Iyy = Syy - m_node * (coords[:, 0] ** 2 + coords[:, 2] ** 2)
+        Izz = Szz - m_node * (coords[:, 0] ** 2 + coords[:, 1] ** 2)
+
+        for i, nid in enumerate(conn):
+            vec = _build_vec6(float(m_node[i]), dofs, None)
+            vec[3] = float(Ixx[i])
+            vec[4] = float(Iyy[i])
+            vec[5] = float(Izz[i])
+            _accumulate(accum, int(nid), vec)
+
     def resolve_surface_consistent(
         self,
         defn: SurfaceMassDef,
@@ -381,14 +464,21 @@ class MassResolver:
         rho_a = float(defn.areal_density)
         dofs = defn.dofs
         rot = defn.rotational
+        derive = getattr(defn, "derive_rotational", False)
         accum: dict[int, ndarray] = {}
         for face in faces:
             A = self.face_area(face)
             if A <= 0:
                 continue
-            self._hrz_distribute(
-                accum, face, rho_a * A, surface_code(len(face)), dofs, rot,
-            )
+            code = surface_code(len(face))
+            if derive:
+                self._hrz_distribute_derived(
+                    accum, face, rho_a, rho_a * A, code, dofs,
+                )
+            else:
+                self._hrz_distribute(
+                    accum, face, rho_a * A, code, dofs, rot,
+                )
         return _accum_to_records(accum, name=defn.name)
 
     def resolve_volume_consistent(
@@ -412,15 +502,21 @@ class MassResolver:
         rho = float(defn.density)
         dofs = defn.dofs
         rot = defn.rotational
+        derive = getattr(defn, "derive_rotational", False)
         accum: dict[int, ndarray] = {}
         for conn_row in elements:
             V = self.element_volume(conn_row)
             if V <= 0:
                 continue
-            self._hrz_distribute(
-                accum, conn_row, rho * V,
-                volume_code(len(conn_row)), dofs, rot,
-            )
+            code = volume_code(len(conn_row))
+            if derive:
+                self._hrz_distribute_derived(
+                    accum, conn_row, rho, rho * V, code, dofs,
+                )
+            else:
+                self._hrz_distribute(
+                    accum, conn_row, rho * V, code, dofs, rot,
+                )
         return _accum_to_records(accum, name=defn.name)
 
 
