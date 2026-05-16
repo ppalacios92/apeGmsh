@@ -85,13 +85,22 @@ class PhysicalGroups(_HasLogging):
                String references are resolved via ``g.labels`` first,
                then ``g.physical``.
         name : human-readable name.  If a PG with this name already
-               exists at *dim*, the new entities are appended.
+               exists at *dim*, the new entities are appended.  A
+               physical-group name maps to exactly one dimension —
+               reusing *name* at a different dim raises ``ValueError``.
         tag  : requested physical-group tag (``-1`` = auto-assign).
                Ignored when appending to an existing named PG.
 
         Returns
         -------
         Tag  the physical-group tag (existing or newly created)
+
+        Raises
+        ------
+        ValueError
+            If *name* is already used by a physical group at a
+            different dimension.  Multi-dimensional physical groups
+            are not supported — pick a distinct name per dimension.
         """
         from typing import cast
         from apeGmsh.core._helpers import resolve_to_tags
@@ -107,6 +116,18 @@ class PhysicalGroups(_HasLogging):
 
         # Upsert: if a PG with this name already exists, merge
         if name:
+            conflict = [
+                d for d in (0, 1, 2, 3)
+                if d != dim and self.get_tag(d, name) is not None
+            ]
+            if conflict:
+                raise ValueError(
+                    f"Physical group {name!r} already exists at "
+                    f"dim={conflict[0]}.  A physical-group name maps to "
+                    f"a single dimension — use a distinct name for the "
+                    f"dim={dim} entities (multi-dimensional physical "
+                    f"groups are not supported)."
+                )
             existing_tag = self.get_tag(dim, name)
             if existing_tag is not None:
                 old_ents = list(
@@ -341,10 +362,10 @@ class PhysicalGroups(_HasLogging):
             Physical group name, or the raw PG tag (``dim`` required).
         dim : int | None, optional
             Dimension to search.  If omitted and *name_or_tag* is a string,
-            all dimensions are searched.  **Raises if the name exists at
-            multiple dims** — pass ``dim=`` to disambiguate, or call
-            :meth:`dim_tags` to get all entities across dims as
-            ``(dim, tag)`` pairs.
+            all dimensions are searched.  A physical-group name maps to a
+            single dimension; if a legacy model nonetheless carries the
+            name at multiple dims this **raises** — pass ``dim=`` to read
+            one slice.
 
         Returns
         -------
@@ -376,10 +397,10 @@ class PhysicalGroups(_HasLogging):
                     )
                 if len(matches) > 1:
                     raise ValueError(
-                        f"Physical group {name_or_tag!r} spans multiple "
-                        f"dimensions {matches}. Pass `dim=` to pick one, "
-                        f"or call g.physical.dim_tags({name_or_tag!r}) for "
-                        f"all entities across dims as (dim, tag) pairs."
+                        f"Physical group {name_or_tag!r} exists at "
+                        f"multiple dimensions {matches}. Multi-dimensional "
+                        f"physical groups are not supported; pass `dim=` "
+                        f"to read one slice."
                     )
                 d = matches[0]
                 pg_tag = self.get_tag(d, name_or_tag)
@@ -399,32 +420,6 @@ class PhysicalGroups(_HasLogging):
                 "entities(): when passing a raw PG tag, `dim` must be given"
             )
         return list(gmsh.model.getEntitiesForPhysicalGroup(dim, int(name_or_tag)))
-
-    def dim_tags(self, name: str) -> list[DimTag]:
-        """Return every model entity in PG *name* as ``(dim, tag)`` pairs.
-
-        Unlike :meth:`entities`, handles PGs that span multiple
-        dimensions — returns the union across all dims the name exists
-        at.  Use this when a single PG name covers a mixed-dim
-        selection (e.g. a volume + its bounding faces).
-
-        Raises
-        ------
-        KeyError
-            If no physical group with *name* exists at any dimension.
-        """
-        out: list[DimTag] = []
-        for d in (0, 1, 2, 3):
-            pg_tag = self.get_tag(d, name)
-            if pg_tag is None:
-                continue
-            for t in gmsh.model.getEntitiesForPhysicalGroup(d, pg_tag):
-                out.append((d, int(t)))
-        if not out:
-            raise KeyError(
-                f"No physical group named {name!r} at any dimension."
-            )
-        return out
 
     def get_groups_for_entity(self, dim: int, tag: Tag) -> list[Tag]:
         """

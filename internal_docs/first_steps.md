@@ -416,33 +416,30 @@ data. One group = one kind of thing to do.
 
 ### 4.6  Querying — labels vs physical groups
 
-The query APIs are almost parallel, with one extra method on the PG
-side to handle the multi-dim case:
+The query APIs are parallel.  A **label** (Tier 1) may span several
+dimensions; a **physical group** (Tier 2) maps to exactly one.
 
 | Operation | Labels | Physical groups |
 |---|---|---|
 | Entity tags at a specific dim | `g.labels.entities("shaft", dim=3)` | `g.physical.entities("Body", dim=3)` |
-| Entity tags with inferred dim | `g.labels.entities("shaft")` *(raises if multi-dim)* | `g.physical.entities("Body")` *(raises if multi-dim)* |
-| `(dim, tag)` pairs across all dims | *n/a — pick a dim* | `g.physical.dim_tags("Body")` |
+| Entity tags with inferred dim | `g.labels.entities("shaft")` *(raises if multi-dim)* | `g.physical.entities("Body")` |
 | List all names | `g.labels.all_names()` | `g.physical.get_all(dim=-1)` |
 | Reverse lookup: names for an entity | `g.labels.names_for(dim, tag)` | `g.physical.get_groups_for_entity(dim, tag)` |
 | Summary table | — | `g.physical.summary()` *(returns a DataFrame)* |
 
-Concrete multi-dim example:
+A physical-group name maps to a single dimension — reusing one name
+across dims is rejected at creation:
 
 ```python
 g.physical.add_volume(vol_tags,   name="col_A")
-g.physical.add_surface(face_tags, name="col_A")
+g.physical.add_surface(face_tags, name="col_A")   # raises ValueError
 
-g.physical.entities("col_A", dim=3)  # [vol tags]
-g.physical.entities("col_A", dim=2)  # [face tags]
-g.physical.entities("col_A")         # raises ValueError — multi-dim
-g.physical.dim_tags("col_A")         # [(3, v1), (2, f1), (2, f2), ...]
+g.physical.entities("col_A")          # [vol tags] — unambiguous
+g.physical.entities("col_A", dim=3)   # [vol tags]
 ```
 
-That last call is the honest cross-dim query — a flat list of
-`(dim, tag)` pairs that can be handed straight to any Gmsh API or
-to `g.parts.register(name, dimtags=...)`.
+If you need a region addressed across dimensions, use a **label**
+(`g.labels`) — labels are allowed to span dims.
 
 ---
 
@@ -1170,9 +1167,9 @@ g.physical.summary()                     # DataFrame
 # Exists? (returns tag or None)
 pg_tag = g.physical.get_tag(3, "Body")
 
-# Get entities
+# Get entities (a PG name maps to a single dimension)
+g.physical.entities("Body")              # list[tag]
 g.physical.entities("Body", dim=3)       # list[tag]
-g.physical.dim_tags("Body")              # list[(dim, tag)] — cross-dim
 
 # Reverse lookup
 g.physical.get_groups_for_entity(3, 5)   # list[pg_tag]

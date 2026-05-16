@@ -279,8 +279,24 @@ class PartsRegistry(_PartsFragmentationMixin):
                     resolved = [(d, int(t)) for t in d_tags]
                     break
         elif pg is not None:
-            resolved = [(int(d), int(t))
-                        for d, t in self._parent.physical.dim_tags(pg)]
+            physical = self._parent.physical
+            resolved = []
+            for d in range(4):
+                pg_tag = physical.get_tag(d, pg)
+                if pg_tag is None:
+                    continue
+                resolved.extend(
+                    (d, int(t)) for t in physical.get_entities(d, pg_tag)
+                )
+            if not resolved:
+                raise KeyError(f"No physical group named {pg!r}.")
+            pg_dims = {d for d, _ in resolved}
+            if len(pg_dims) > 1:
+                raise ValueError(
+                    f"Physical group {pg!r} exists at multiple "
+                    f"dimensions {sorted(pg_dims)}. Multi-dimensional "
+                    f"physical groups are not supported."
+                )
         else:
             resolved = [(int(d), int(t)) for d, t in dimtags]
 

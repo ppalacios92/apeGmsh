@@ -79,9 +79,10 @@ class NamedGroupSet:
 
     def _build_name_index(self) -> dict[str, list[tuple[int, int]]]:
         """Map each group name to the list of ``(dim, tag)`` keys that
-        carry it (sorted by dim, then tag).  A PG that spans multiple
-        dimensions — e.g. a named selection covering both a volume and
-        its bounding faces — yields multiple keys under one name.
+        carry it (sorted by dim, then tag).  Physical groups map to a
+        single dimension, so a PG name yields exactly one key; a
+        multi-dim *label* (Tier 1, :class:`LabelSet`) — e.g. one
+        covering a volume and its bounding faces — yields several.
         """
         if self._name_index is None:
             idx: dict[str, list[tuple[int, int]]] = {}
@@ -95,12 +96,14 @@ class NamedGroupSet:
 
     @staticmethod
     def _merge_infos(name: str, infos: list[dict]) -> dict:
-        """Union node/element data from multiple same-name PGs.
+        """Union node/element data from a multi-dim group.
 
-        Mesh nodes and elements have a global ID space (independent of
-        geometric dimension), so it is meaningful to take the union.
-        Duplicates are kept only once.  Coordinates are reindexed to
-        match the deduplicated node IDs.
+        Only multi-dim *labels* reach this path — physical groups map
+        to a single dimension by construction.  Mesh nodes and
+        elements have a global ID space (independent of geometric
+        dimension), so it is meaningful to take the union.  Duplicates
+        are kept only once.  Coordinates are reindexed to match the
+        deduplicated node IDs.
         """
         node_ids_concat = np.concatenate(
             [np.asarray(i['node_ids'], dtype=np.int64) for i in infos])
@@ -144,10 +147,9 @@ class NamedGroupSet:
         """Resolve *target* (str name, int tag, or (dim, tag) tuple)
         to an info dict.
 
-        For a string matching multiple dims, returns a merged view
-        (union of node/element data). Pass ``dim=N`` to restrict the
-        lookup to a single dimension — useful when the same name
-        exists at more than one dim and you want just one.
+        Physical-group names resolve to a single key.  A multi-dim
+        *label* matching several dims returns a merged view (union of
+        node/element data); pass ``dim=N`` to restrict to one slice.
 
         Raises KeyError on miss.
         """

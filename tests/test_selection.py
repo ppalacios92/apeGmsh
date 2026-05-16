@@ -229,7 +229,7 @@ class TestSelectionRegister:
         sel = g.model.queries.select(faces, on={'z': 10}).to_physical('Top')
         assert _is_selection(sel)
         # downstream API can reach it by PG name
-        assert g.physical.dim_tags('Top')
+        assert g.physical.entities('Top')
 
     def test_chained_register_then_select_again(self, g):
         v = g.model.geometry.add_box(0, 0, 0, 5, 5, 10)

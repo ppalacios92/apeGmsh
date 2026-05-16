@@ -61,11 +61,23 @@ def _delete_group_by_name(name: str) -> None:
 
 
 def _write_group(name: str, members: list["DimTag"]) -> None:
-    """Write a physical group to Gmsh (replaces existing with same name)."""
-    _delete_group_by_name(name)
+    """Write a physical group to Gmsh (replaces existing with same name).
+
+    A physical-group name maps to a single dimension.  Members
+    spanning more than one dimension are rejected — multi-dimensional
+    physical groups are not supported.
+    """
     by_dim: dict[int, list[int]] = {}
     for dim, tag in members:
         by_dim.setdefault(dim, []).append(tag)
+    if len(by_dim) > 1:
+        raise ValueError(
+            f"Physical group {name!r} would span dimensions "
+            f"{sorted(by_dim)}.  Pick entities of a single dimension "
+            f"per group — multi-dimensional physical groups are not "
+            f"supported."
+        )
+    _delete_group_by_name(name)
     for dim, tags in by_dim.items():
         pg_tag = gmsh.model.addPhysicalGroup(dim, tags)
         gmsh.model.setPhysicalName(dim, pg_tag, name)

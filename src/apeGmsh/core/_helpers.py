@@ -238,8 +238,10 @@ def _resolve_string_to_dimtags(
     """Resolve a string ref to dimtags — label first, then user PG.
 
     Mirrors :func:`_resolve_string`'s order (label Tier 1, then PG
-    Tier 2) but emits ``(dim, tag)`` and handles multi-dim names by
-    enumerating all dims the name exists at.
+    Tier 2) and emits ``(dim, tag)``.  Multi-dim *labels* are
+    enumerated across every dim they occupy; a physical group maps
+    to a single dimension and raises ``ValueError`` if a legacy
+    model carries one PG name at several dims.
     """
     labels_comp = getattr(session, 'labels', None)
     if labels_comp is not None:
@@ -255,11 +257,24 @@ def _resolve_string_to_dimtags(
 
     physical_comp = getattr(session, 'physical', None)
     if physical_comp is not None:
-        try:
-            return [(int(d), int(t))
-                    for d, t in physical_comp.dim_tags(name)]
-        except (KeyError, TypeError):
-            pass
+        pg_hits: list[DimTag] = []
+        for d in range(4):
+            pg_tag = physical_comp.get_tag(d, name)
+            if pg_tag is None:
+                continue
+            pg_hits.extend(
+                (d, int(t))
+                for t in physical_comp.get_entities(d, pg_tag)
+            )
+        if pg_hits:
+            pg_dims = {d for d, _ in pg_hits}
+            if len(pg_dims) > 1:
+                raise ValueError(
+                    f"Physical group {name!r} exists at multiple "
+                    f"dimensions {sorted(pg_dims)}. Multi-dimensional "
+                    f"physical groups are not supported."
+                )
+            return pg_hits
 
     available_labels: list[str] = []
     available_pgs: list[str] = []
