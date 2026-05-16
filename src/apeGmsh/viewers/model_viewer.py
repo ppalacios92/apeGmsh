@@ -921,6 +921,74 @@ class ModelViewer:
         _act_model_info = _info_menu.addAction("Model info…")
         _act_model_info.triggered.connect(_open_model_info)
 
+        # Scene rebuild after any geometry mutation (parts fuse,
+        # boolean ops, transforms). Hoisted to show() scope so it
+        # exists even without a parts registry.
+        def _rebuild_scene():
+            """Tear down VTK actors and rebuild from current Gmsh state.
+
+            Mutates ``registry`` in-place so all closures over it
+            (color_mgr, vis_mgr, pick_engine) keep working.
+            """
+            # Save camera state
+            cam = plotter.renderer.GetActiveCamera()
+            cam_pos = cam.GetPosition()
+            cam_fp = cam.GetFocalPoint()
+            cam_up = cam.GetViewUp()
+            cam_clip = cam.GetClippingRange()
+
+            # Remove old actors
+            for actor in list(registry.dim_actors.values()):
+                try:
+                    plotter.remove_actor(actor)
+                except Exception:
+                    pass
+
+            # Build fresh scene
+            fresh = build_brep_scene(
+                plotter, self._dims,
+                point_size=self._point_size,
+                line_width=self._line_width,
+                surface_opacity=self._surface_opacity,
+                show_surface_edges=self._show_surface_edges,
+                verbose=_verbose,
+            )
+
+            # Mutate existing registry in place — preserves closures
+            for slot in registry.__slots__:
+                setattr(registry, slot, getattr(fresh, slot))
+
+            # Re-sync origin markers with the fresh registry's shift
+            origin_overlay.set_origin_shift(registry.origin_shift)
+            tn_overlay.set_model_diagonal(_compute_model_diagonal())
+            tn_overlay.set_origin_shift(registry.origin_shift)
+
+            # Clear stale selection / active group
+            sel.clear()
+
+            # Refresh UI panels
+            if parts_tree is not None:
+                parts_tree.refresh()
+            outline.refresh()
+            sel_tree.update(sel.picks)
+            info_panel.refresh()
+
+            # Re-bind the clip plane to the fresh mappers + new bbox
+            clip_overlay.set_origin_shift(registry.origin_shift)
+            clip_overlay.rebind()
+            clip_panel.refresh_bbox(_world_bbox())
+
+            # Stored centroids are stale after a rebuild
+            measure_overlay.reset()
+            _push_measure_status()
+
+            # Restore camera
+            cam.SetPosition(*cam_pos)
+            cam.SetFocalPoint(*cam_fp)
+            cam.SetViewUp(*cam_up)
+            cam.SetClippingRange(*cam_clip)
+            plotter.render()
+
         parts_tree = None
         if parts_reg is not None:
             def _parts_select_only(dts):
@@ -963,71 +1031,6 @@ class ModelViewer:
             def _parts_delete(label):
                 parts_reg.delete(label)
                 parts_tree.refresh()
-
-            def _rebuild_scene():
-                """Tear down VTK actors and rebuild from current Gmsh state.
-
-                Mutates ``registry`` in-place so all closures over it
-                (color_mgr, vis_mgr, pick_engine) keep working.
-                """
-                # Save camera state
-                cam = plotter.renderer.GetActiveCamera()
-                cam_pos = cam.GetPosition()
-                cam_fp = cam.GetFocalPoint()
-                cam_up = cam.GetViewUp()
-                cam_clip = cam.GetClippingRange()
-
-                # Remove old actors
-                for actor in list(registry.dim_actors.values()):
-                    try:
-                        plotter.remove_actor(actor)
-                    except Exception:
-                        pass
-
-                # Build fresh scene
-                fresh = build_brep_scene(
-                    plotter, self._dims,
-                    point_size=self._point_size,
-                    line_width=self._line_width,
-                    surface_opacity=self._surface_opacity,
-                    show_surface_edges=self._show_surface_edges,
-                    verbose=_verbose,
-                )
-
-                # Mutate existing registry in place — preserves closures
-                for slot in registry.__slots__:
-                    setattr(registry, slot, getattr(fresh, slot))
-
-                # Re-sync origin markers with the fresh registry's shift
-                origin_overlay.set_origin_shift(registry.origin_shift)
-                tn_overlay.set_model_diagonal(_compute_model_diagonal())
-                tn_overlay.set_origin_shift(registry.origin_shift)
-
-                # Clear stale selection / active group
-                sel.clear()
-
-                # Refresh UI panels
-                if parts_tree is not None:
-                    parts_tree.refresh()
-                outline.refresh()
-                sel_tree.update(sel.picks)
-                info_panel.refresh()
-
-                # Re-bind the clip plane to the fresh mappers + new bbox
-                clip_overlay.set_origin_shift(registry.origin_shift)
-                clip_overlay.rebind()
-                clip_panel.refresh_bbox(_world_bbox())
-
-                # Stored centroids are stale after a rebuild
-                measure_overlay.reset()
-                _push_measure_status()
-
-                # Restore camera
-                cam.SetPosition(*cam_pos)
-                cam.SetFocalPoint(*cam_fp)
-                cam.SetViewUp(*cam_up)
-                cam.SetClippingRange(*cam_clip)
-                plotter.render()
 
             def _parts_fuse(labels, new_label):
                 from qtpy.QtWidgets import QMessageBox
@@ -1142,6 +1145,158 @@ class ModelViewer:
                 win.set_status("Box select: 0 entities", 2000)
 
         pick_engine.on_box_select = _on_box
+
+        # ── Boolean / Transform panels (live OCC editing) ───────────
+        # Pure-UI panels; these callbacks own the library call +
+        # _rebuild_scene (mirrors _parts_fuse). The selection feeds
+        # operands; OCC renumbers after each op, so captured operands
+        # are dropped and the rebuild clears the selection.
+        import math as _math
+        from .ui._boolean_panel import BooleanPanel
+        from .ui._transform_panel import TransformPanel
+
+        def _on_boolean(op, objects, tools, opts):
+            from qtpy import QtWidgets
+            if not objects:
+                _boolean_panel.set_hint(
+                    "Set the Objects slot from a selection first."
+                )
+                return
+            if op in ("fuse", "cut", "intersect") and not tools:
+                _boolean_panel.set_hint(
+                    f"{op} needs both Objects and Tools."
+                )
+                return
+            bx = self._model.boolean
+            try:
+                if op == "fragment":
+                    res = bx.fragment(
+                        objects, tools,
+                        remove_object=opts["remove_object"],
+                        remove_tool=opts["remove_tool"],
+                        cleanup_free=opts["cleanup_free"],
+                    )
+                else:
+                    kw = dict(
+                        remove_object=opts["remove_object"],
+                        remove_tool=opts["remove_tool"],
+                    )
+                    if opts["label"]:
+                        kw["label"] = opts["label"]
+                    res = getattr(bx, op)(objects, tools, **kw)
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    win.window, f"Boolean: {op}", str(exc)
+                )
+                _boolean_panel.set_hint(f"{op} failed: {exc}")
+                return
+            _boolean_panel.clear_operands()
+            _rebuild_scene()
+            n = len(res) if res else 0
+            _boolean_panel.set_hint(f"{op} OK → {n} result(s)")
+            win.set_status(f"Boolean {op}: {n} result(s)")
+
+        def _on_transform(op, params, duplicate):
+            from qtpy import QtWidgets
+            tags = list(sel.picks)
+            tx = self._model.transforms
+            geo = self._model.geometry
+            if op != "thru_sections" and not tags:
+                _transform_panel.set_hint("Select entities first.")
+                return
+            try:
+                if op in ("translate", "rotate", "scale", "mirror"):
+                    if duplicate:
+                        dims = {d for d, _ in tags}
+                        if len(dims) != 1:
+                            _transform_panel.set_hint(
+                                "'Keep original' needs a single-"
+                                "dimension selection."
+                            )
+                            return
+                        dim0 = dims.pop()
+                        target = [(dim0, t) for t in tx.copy(tags)]
+                    else:
+                        target = tags
+                    if op == "translate":
+                        tx.translate(target, params["dx"],
+                                     params["dy"], params["dz"])
+                    elif op == "rotate":
+                        tx.rotate(
+                            target, _math.radians(params["angle"]),
+                            ax=params["ax"], ay=params["ay"],
+                            az=params["az"], cx=params["cx"],
+                            cy=params["cy"], cz=params["cz"],
+                        )
+                    elif op == "scale":
+                        tx.scale(
+                            target, params["sx"], params["sy"],
+                            params["sz"], cx=params["cx"],
+                            cy=params["cy"], cz=params["cz"],
+                        )
+                    else:  # mirror
+                        tx.mirror(target, params["a"], params["b"],
+                                  params["c"], params["d"])
+                elif op == "copy":
+                    tx.copy(tags)
+                elif op == "extrude":
+                    ne = [params["layers"]] if params["layers"] else None
+                    tx.extrude(tags, params["dx"], params["dy"],
+                               params["dz"], num_elements=ne,
+                               recombine=params["recombine"])
+                elif op == "revolve":
+                    ne = [params["layers"]] if params["layers"] else None
+                    tx.revolve(
+                        tags, _math.radians(params["angle"]),
+                        x=params["x"], y=params["y"], z=params["z"],
+                        ax=params["ax"], ay=params["ay"],
+                        az=params["az"], num_elements=ne,
+                        recombine=params["recombine"],
+                    )
+                elif op == "sweep":
+                    pc = params.get("path_curves") or []
+                    if not pc:
+                        _transform_panel.set_hint(
+                            "Set the sweep path from selected curves."
+                        )
+                        return
+                    wire = geo.add_wire(pc)
+                    tx.sweep(tags, wire, trihedron=params["trihedron"])
+                elif op == "thru_sections":
+                    secs = params.get("sections") or []
+                    if len(secs) < 2:
+                        _transform_panel.set_hint(
+                            "Add at least 2 sections."
+                        )
+                        return
+                    wires = [geo.add_wire(c) for c in secs]
+                    tx.thru_sections(
+                        wires, make_solid=params["make_solid"],
+                        make_ruled=params["make_ruled"],
+                    )
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    win.window, f"Transform: {op}", str(exc)
+                )
+                _transform_panel.set_hint(f"{op} failed: {exc}")
+                return
+            _transform_panel.reset_captures()
+            _rebuild_scene()
+            _transform_panel.set_hint(f"{op} OK")
+            win.set_status(f"Transform {op} applied")
+
+        _boolean_panel = BooleanPanel(
+            get_selection=lambda: list(sel.picks),
+            on_apply=_on_boolean,
+        )
+        _transform_panel = TransformPanel(
+            get_selection=lambda: list(sel.picks),
+            on_apply=_on_transform,
+        )
+        _add_panel("dock_model_boolean", "Boolean", _boolean_panel.widget)
+        _add_panel(
+            "dock_model_transform", "Transform", _transform_panel.widget
+        )
 
         # ── Navigation ──────────────────────────────────────────────
         install_navigation(
