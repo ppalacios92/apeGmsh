@@ -739,6 +739,11 @@ class ModelViewer:
         # ── Core modules ────────────────────────────────────────────
         color_mgr = ColorManager(registry)
         vis_mgr = VisibilityManager(registry, color_mgr, sel, plotter, verbose=_verbose)
+        # Late-bind the eye-icon delegate on the Browser tab now that
+        # the visibility manager exists. (Browser is constructed early
+        # in show(); the manager needs the registry + plotter built
+        # below it.)
+        browser.bind_vis_mgr(vis_mgr)
         from .ui.preferences_manager import PREFERENCES as _PREF_DT
         pick_engine = PickEngine(
             plotter, registry, drag_threshold=_PREF_DT.current.drag_threshold,
