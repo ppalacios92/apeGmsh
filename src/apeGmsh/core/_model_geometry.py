@@ -6,7 +6,7 @@ import gmsh
 import numpy as np
 from numpy import ndarray
 
-from ._helpers import DimTag, Tag
+from ._helpers import DimTag, EntityRef, Tag
 from .Labels import pg_preserved, cleanup_label_pgs
 
 if TYPE_CHECKING:
@@ -29,6 +29,52 @@ class _Geometry:
 
     def __init__(self, model: "Model") -> None:
         self._model = model
+
+    # ------------------------------------------------------------------
+    # Shared input resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_entity_tag(
+        self,
+        ref: EntityRef,
+        *,
+        dim: int,
+        what: str,
+        allow_sign: bool = False,
+    ) -> int:
+        """Resolve a single point/curve reference to a bare Gmsh tag.
+
+        Lets every builder accept the same flexible reference shapes the
+        rest of the library does — raw tag, label name, physical-group
+        name, part label, or ``(dim, tag)`` — instead of integer tags
+        only.
+
+        * ``int`` — passed through **verbatim** (explicit user intent;
+          negative tags preserved for orientation, never validated).
+        * ``str`` — resolved via the standard contract
+          (:func:`resolve_to_single_dimtag`): label (Tier 1) → physical
+          group (Tier 2) → part (Tier 3), scoped to *dim*.  Must
+          identify exactly one entity or it raises ``ValueError``.
+        * ``(dim, tag)`` — tag extracted.
+
+        When ``allow_sign`` is set (curve loops / wires), a leading
+        ``'-'`` on a string label requests reversed orientation,
+        mirroring the negative-integer-tag convention — e.g.
+        ``'-col_right'`` resolves ``'col_right'`` then negates the tag.
+        """
+        sign = 1
+        if allow_sign and isinstance(ref, str) and ref.startswith('-'):
+            sign, ref = -1, ref[1:]
+        if isinstance(ref, int) and not isinstance(ref, bool):
+            return ref
+        from ._helpers import resolve_to_single_dimtag
+        _, tag = resolve_to_single_dimtag(
+            ref,
+            default_dim=dim,
+            session=self._model._parent,
+            what=what,
+        )
+        return sign * int(tag)
 
     # ------------------------------------------------------------------
     # Points  (dim = 0)
@@ -70,8 +116,8 @@ class _Geometry:
 
     def add_line(
         self,
-        start: Tag,
-        end  : Tag,
+        start: EntityRef,
+        end  : EntityRef,
         *,
         label: str | None = None,
         sync : bool       = True,
@@ -81,8 +127,12 @@ class _Geometry:
 
         Parameters
         ----------
-        start, end : point tags
+        start, end : point references — raw tag, label name, physical
+            group, part label, or ``(dim, tag)``.  Each must resolve to
+            exactly one point.
         """
+        start = self._resolve_entity_tag(start, dim=0, what="point")
+        end   = self._resolve_entity_tag(end,   dim=0, what="point")
         tag = gmsh.model.occ.addLine(start, end)
         if sync:
             gmsh.model.occ.synchronize()
@@ -91,8 +141,8 @@ class _Geometry:
 
     def add_imperfect_line(
         self,
-        start: Tag,
-        end  : Tag,
+        start: EntityRef,
+        end  : EntityRef,
         *,
         magnitude : float = 0.0,
         direction : tuple[float, float, float],
@@ -199,6 +249,10 @@ class _Geometry:
                 n_segments=24,
             )
         """
+        # ── Resolve endpoint references to point tags ───────────
+        start = self._resolve_entity_tag(start, dim=0, what="point")
+        end   = self._resolve_entity_tag(end,   dim=0, what="point")
+
         # ── Resolve endpoint coordinates ────────────────────────
         p0 = np.asarray(
             gmsh.model.getValue(0, int(start), []), dtype=float)
@@ -688,9 +742,9 @@ class _Geometry:
 
     def add_arc(
         self,
-        start : Tag,
-        center: Tag,
-        end   : Tag,
+        start : EntityRef,
+        center: EntityRef,
+        end   : EntityRef,
         *,
         label : str | None = None,
         sync  : bool       = True,
@@ -700,9 +754,12 @@ class _Geometry:
 
         Parameters
         ----------
-        start  : point tag — start of the arc
-        center : point tag — centre of the circle (not on the arc)
-        end    : point tag — end of the arc
+        start  : point reference — start of the arc
+        center : point reference — centre of the circle (not on the arc)
+        end    : point reference — end of the arc
+
+        Each accepts a raw tag, label name, physical group, part label,
+        or ``(dim, tag)`` and must resolve to exactly one point.
 
         Note
         ----
@@ -710,6 +767,9 @@ class _Geometry:
         The arc is the *shorter* of the two possible arcs unless you reverse
         the start/end order.
         """
+        start  = self._resolve_entity_tag(start,  dim=0, what="point")
+        center = self._resolve_entity_tag(center, dim=0, what="point")
+        end    = self._resolve_entity_tag(end,    dim=0, what="point")
         tag = gmsh.model.occ.addCircleArc(start, center, end)
         if sync:
             gmsh.model.occ.synchronize()
@@ -781,7 +841,7 @@ class _Geometry:
 
     def add_spline(
         self,
-        point_tags: list[Tag],
+        point_tags: list[EntityRef],
         *,
         label: str | None = None,
         sync : bool       = True,
@@ -792,9 +852,11 @@ class _Geometry:
 
         Parameters
         ----------
-        point_tags : ordered list of point tags the spline passes through.
-                     Minimum 2 points; for a closed spline repeat the first
-                     tag at the end.
+        point_tags : ordered list of point references the spline passes
+                     through (raw tag, label, PG, part, or ``(dim, tag)``;
+                     each must resolve to one point).  Minimum 2 points;
+                     for a closed spline repeat the first reference at the
+                     end.
 
         Example
         -------
@@ -807,6 +869,10 @@ class _Geometry:
         """
         if len(point_tags) < 2:
             raise ValueError("add_spline requires at least 2 point tags.")
+        point_tags = [
+            self._resolve_entity_tag(p, dim=0, what="point")
+            for p in point_tags
+        ]
         tag = gmsh.model.occ.addSpline(point_tags)
         if sync:
             gmsh.model.occ.synchronize()
@@ -815,7 +881,7 @@ class _Geometry:
 
     def add_bspline(
         self,
-        point_tags   : list[Tag],
+        point_tags   : list[EntityRef],
         *,
         degree        : int         = 3,
         weights       : list[float] | None = None,
@@ -841,6 +907,10 @@ class _Geometry:
         """
         if len(point_tags) < 2:
             raise ValueError("add_bspline requires at least 2 point tags.")
+        point_tags = [
+            self._resolve_entity_tag(p, dim=0, what="point")
+            for p in point_tags
+        ]
         tag = gmsh.model.occ.addBSpline(
             point_tags,
             degree=degree,
@@ -855,7 +925,7 @@ class _Geometry:
 
     def add_bezier(
         self,
-        point_tags: list[Tag],
+        point_tags: list[EntityRef],
         *,
         label: str | None = None,
         sync : bool       = True,
@@ -871,6 +941,10 @@ class _Geometry:
         """
         if len(point_tags) < 2:
             raise ValueError("add_bezier requires at least 2 point tags.")
+        point_tags = [
+            self._resolve_entity_tag(p, dim=0, what="point")
+            for p in point_tags
+        ]
         tag = gmsh.model.occ.addBezier(point_tags)
         if sync:
             gmsh.model.occ.synchronize()
@@ -883,7 +957,7 @@ class _Geometry:
 
     def add_wire(
         self,
-        curve_tags: list[Tag],
+        curve_tags: list[EntityRef],
         *,
         check_closed: bool       = False,
         label       : str | None = None,
@@ -900,7 +974,10 @@ class _Geometry:
 
         Parameters
         ----------
-        curve_tags : ordered curve tags.  Curves must be connected
+        curve_tags : ordered curve references (raw tag, label, PG, part,
+            or ``(dim, tag)``; each must resolve to one curve).  A
+            leading ``'-'`` on a label name — or a negative tag —
+            reverses that curve's orientation.  Curves must be connected
             end-to-end but may share only geometrically identical
             endpoints (OCC allows topologically distinct but coincident
             points).
@@ -925,6 +1002,10 @@ class _Geometry:
             l3 = g.model.geometry.add_line(p2, p3, sync=False)
             path = g.model.geometry.add_wire([l1, l2, l3], label="sweep_path")
         """
+        curve_tags = [
+            self._resolve_entity_tag(c, dim=1, what="curve", allow_sign=True)
+            for c in curve_tags
+        ]
         tag = gmsh.model.occ.addWire(curve_tags, checkClosed=check_closed)
         if sync:
             gmsh.model.occ.synchronize()
@@ -933,20 +1014,23 @@ class _Geometry:
 
     def add_curve_loop(
         self,
-        curve_tags: list[Tag],
+        curve_tags: list[EntityRef],
         *,
         label: str | None = None,
         sync : bool       = True,
     ) -> Tag:
         """
-        Assemble an ordered list of curve tags into a closed wire (curve
-        loop).  The result is used as input to ``add_plane_surface`` or
-        ``add_surface_filling``.
+        Assemble an ordered list of curve references into a closed wire
+        (curve loop).  The result is used as input to
+        ``add_plane_surface`` or ``add_surface_filling``.
 
         Parameters
         ----------
-        curve_tags : ordered curve tags forming a closed loop.
-                     Use negative tags to reverse orientation of a curve.
+        curve_tags : ordered curve references forming a closed loop
+                     (raw tag, label, PG, part, or ``(dim, tag)``; each
+                     must resolve to one curve).  Reverse a curve's
+                     orientation with a negative tag **or** a leading
+                     ``'-'`` on its label name, e.g. ``'-col_right'``.
 
         Example
         -------
@@ -954,7 +1038,15 @@ class _Geometry:
 
             loop = g.model.geometry.add_curve_loop([l1, l2, l3, l4])
             surf = g.model.geometry.add_plane_surface(loop)
+
+            # by label, with one reversed curve
+            loop = g.model.geometry.add_curve_loop(
+                ['col_left', 'arch', '-col_right'])
         """
+        curve_tags = [
+            self._resolve_entity_tag(c, dim=1, what="curve", allow_sign=True)
+            for c in curve_tags
+        ]
         tag = gmsh.model.occ.addCurveLoop(curve_tags)
         if sync:
             gmsh.model.occ.synchronize()
@@ -963,7 +1055,7 @@ class _Geometry:
 
     def add_plane_surface(
         self,
-        wire_tags: Tag | list[Tag],
+        wire_tags: EntityRef | list[EntityRef],
         *,
         label: str | None = None,
         sync : bool       = True,
@@ -973,8 +1065,10 @@ class _Geometry:
 
         Parameters
         ----------
-        wire_tags : tag (or list of tags) of curve loops.  The first loop
-                    is the outer boundary; any additional loops define holes.
+        wire_tags : reference (or list of references) to curve loops —
+                    raw tag, label, PG, part, or ``(dim, tag)``; each
+                    must resolve to one curve loop.  The first loop is
+                    the outer boundary; any additional loops define holes.
 
         Example
         -------
@@ -984,8 +1078,12 @@ class _Geometry:
             hole  = g.model.geometry.add_curve_loop([h1, h2, h3, h4])
             surf  = g.model.geometry.add_plane_surface([outer, hole])
         """
-        if isinstance(wire_tags, int):
+        if not isinstance(wire_tags, list):
             wire_tags = [wire_tags]
+        wire_tags = [
+            self._resolve_entity_tag(w, dim=1, what="curve loop")
+            for w in wire_tags
+        ]
         tag = gmsh.model.occ.addPlaneSurface(wire_tags)
         if sync:
             gmsh.model.occ.synchronize()
@@ -994,7 +1092,7 @@ class _Geometry:
 
     def add_surface_filling(
         self,
-        wire_tag: Tag,
+        wire_tag: EntityRef,
         *,
         label: str | None = None,
         sync : bool       = True,
@@ -1005,8 +1103,12 @@ class _Geometry:
 
         Parameters
         ----------
-        wire_tag : tag of the bounding curve loop
+        wire_tag : reference to the bounding curve loop — raw tag,
+                   label, PG, part, or ``(dim, tag)``; must resolve to
+                   one curve loop.
         """
+        wire_tag = self._resolve_entity_tag(
+            wire_tag, dim=1, what="curve loop")
         tag = gmsh.model.occ.addSurfaceFilling(wire_tag)
         if sync:
             gmsh.model.occ.synchronize()

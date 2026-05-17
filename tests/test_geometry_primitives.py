@@ -345,3 +345,62 @@ def test_add_wedge(g):
     assert xmax - xmin == pytest.approx(4.0, abs=1e-6)
     assert ymax - ymin == pytest.approx(3.0, abs=1e-6)
     assert zmax - zmin == pytest.approx(2.0, abs=1e-6)
+
+
+# =====================================================================
+# Flexible reference resolution on builders
+# (int / str-label / (dim, tag) / signed '-label' — same contract the
+#  rest of the library honours; raw int tags stay backward compatible)
+# =====================================================================
+
+def test_add_line_accepts_label_strings(g):
+    g.model.geometry.add_point(0, 0, 0, label="a")
+    g.model.geometry.add_point(1, 0, 0, label="b")
+    tag = g.model.geometry.add_line("a", "b")
+    assert g.model._metadata[(1, tag)]['kind'] == 'line'
+
+
+def test_add_line_accepts_dimtag_and_int(g):
+    p1 = g.model.geometry.add_point(0, 0, 0)
+    p2 = g.model.geometry.add_point(1, 0, 0)
+    assert g.model.geometry.add_line(p1, p2) > 0          # int (compat)
+    assert g.model.geometry.add_line((0, p1), (0, p2)) > 0  # (dim, tag)
+
+
+def test_add_arc_accepts_label_strings(g):
+    g.model.geometry.add_point(1, 0, 0, label="s")
+    g.model.geometry.add_point(0, 0, 0, label="c")
+    g.model.geometry.add_point(0, 1, 0, label="e")
+    tag = g.model.geometry.add_arc("s", "c", "e")
+    assert g.model._metadata[(1, tag)]['kind'] == 'arc'
+
+
+def test_add_curve_loop_signed_label_reversal(g):
+    """A leading '-' on a label reverses that curve so the loop closes."""
+    gm = g.model.geometry
+    gm.add_point(0, 0, 0, label="p1")
+    gm.add_point(1, 0, 0, label="p2")
+    gm.add_point(1, 1, 0, label="p3")
+    gm.add_point(0, 1, 0, label="p4")
+    gm.add_line("p1", "p2", label="bottom")
+    gm.add_line("p2", "p3", label="right")
+    gm.add_line("p3", "p4", label="top")
+    gm.add_line("p1", "p4", label="left")   # defined p1->p4; must reverse
+    loop = gm.add_curve_loop(["bottom", "right", "top", "-left"], label="q")
+    assert g.model._metadata[(1, loop)]['kind'] == 'curve_loop'
+    surf = gm.add_plane_surface("q")        # curve loop by label
+    assert g.model._metadata[(2, surf)]['kind'] == 'plane_surface'
+
+
+def test_add_line_unknown_label_fails_loud(g):
+    g.model.geometry.add_point(0, 0, 0, label="known")
+    with pytest.raises(KeyError, match="not found as a label"):
+        g.model.geometry.add_line("missing", "known")
+
+
+def test_add_line_ambiguous_label_fails_loud(g):
+    g.model.geometry.add_point(0, 0, 0, label="dup")
+    g.model.geometry.add_point(1, 1, 0, label="dup")
+    g.model.geometry.add_point(2, 0, 0, label="solo")
+    with pytest.raises(ValueError, match="[Aa]mbiguous"):
+        g.model.geometry.add_line("dup", "solo")

@@ -12,7 +12,7 @@ import gmsh
 if TYPE_CHECKING:
     from apeGmsh._session import _SessionBase
 
-from apeGmsh._types import DimTag, Tag, TagsLike, EntityRefs  # noqa: F401  — ``Tag``, ``DimTag``, ``TagsLike`` are re-exported from this module by every ``_model_*`` sibling.
+from apeGmsh._types import DimTag, Tag, TagsLike, EntityRef, EntityRefs  # noqa: F401  — ``Tag``, ``DimTag``, ``TagsLike``, ``EntityRef`` are re-exported from this module by every ``_model_*`` sibling.
 
 
 def resolve_dim(tag: int, default_dim: int) -> int:
