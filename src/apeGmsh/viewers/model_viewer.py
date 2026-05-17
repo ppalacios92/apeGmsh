@@ -1205,6 +1205,16 @@ class ModelViewer:
                 except Exception:
                     pass
 
+            # Silhouettes are separate actors that ``remove_actor(fill)``
+            # does NOT take down (same pyvista quirk the visibility
+            # rebuild handles explicitly). Without this the pre-transform
+            # outline lingers as a ghost while the fresh geometry moves.
+            for sil in list(registry.dim_silhouette_actors.values()):
+                try:
+                    plotter.remove_actor(sil)
+                except Exception:
+                    pass
+
             # Build fresh scene
             fresh = build_brep_scene(
                 plotter, self._dims,
