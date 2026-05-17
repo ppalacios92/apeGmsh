@@ -1,6 +1,6 @@
 # Selection / Resolution Unification — Hardened Plan
 
-Status: **S3 DONE (S3a–S3e landed); S5 pending**
+Status: **S3 DONE (S3a–S3e + S3f landed); S5 pending**
 
 Phase ledger (commit hashes):
 
@@ -16,6 +16,7 @@ Phase ledger (commit hashes):
 | S3c   | DONE   | `02aaf21` |
 | S3d   | DONE   | `26c507f` |
 | S3e   | DONE (pending commit) | _this change_ |
+| S3f   | DONE   | _this change_ |
 | S5    | pending | — |
 Author: design + 4-wave red/blue adversarial exercise (Opus)
 Scope: unify selection / parsing / resolution across the four levels —
@@ -353,13 +354,31 @@ legacy terminals byte-unchanged. Three items were consciously deferred
    store, round-trips via HDF5) vs leave the broker/results levels
    query-only (named persistence stays a pre-mesh `g.mesh_selection`
    author-time concern).
-2. **Results sub-composites `.select()`.** `results.nodes`/`elements`
-   have `.select()`; the five element sub-composites
-   (`gauss`/`fibers`/`layers`/`line_stations`/`springs`) do not — each
-   has a distinct reader/slab and `fibers`/`layers` carry extra
-   terminal kwargs (`gp_indices=`/`layer_indices=`). The pattern is
-   uniform/extensible; it needs per-terminal kwarg forwarding. Decide:
-   a follow-on sub-phase (S3f) vs a tracked task.
+2. **Results sub-composites `.select()` — DONE (sub-phase S3f).**
+   Decision resolved as the follow-on sub-phase. All five element
+   sub-composites (`gauss`/`fibers`/`layers`/`line_stations`/`springs`)
+   expose `.select(...)` returning the **reused** `ResultChain` (no new
+   `SelectionChain` subclass; `engine_for` per-composite singleton so
+   base `SelectionChain._compatible` set-algebra identity holds).
+   Implemented **once** on the shared `_ElementGeometryMixin` the five
+   already inherit (mirrors how `in_box`/`nearest_to` are factored);
+   `results.elements.select` keeps its own byte-unchanged S3c impl
+   (defined on the class → wins MRO). Seed resolution delegates
+   verbatim to the existing `_combine_candidates` →
+   `_resolve_element_ids` (locked resolution contract, **not**
+   re-implemented). Per-terminal kwarg forwarding is a generic
+   `ResultChain.get(**extra)` passthrough — `fibers` forwards
+   `gp_indices=`, `layers` forwards `gp_indices=`/`layer_indices=`;
+   `ResultChain` never names a sub-composite kwarg, so the host
+   sub-composite's own `.get` signature stays the single source of
+   truth (an unknown kwarg fails loud there, never silently dropped).
+   `_chain.py` mixin + legacy `.get()/.in_box()/.nearest_to()`
+   byte-unchanged; `results` still runtime-clean of `core`/`mesh`
+   (`tests/test_import_dag_polarity.py` baseline unchanged). Locked by
+   `tests/test_result_chain_subcomposites.py` (id/pg/spatial-daisy-chain
+   parity for all five vs `results.elements.<sub>.get(ids=<equiv>)`,
+   extra-kwarg forwarding + fail-loud, resolver-delegation spy,
+   engine-singleton set-algebra).
 3. **`g.mesh_selection.select()` name-seed — DONE for the one clean
    surface; PG/label direct-seed reported, not reimplemented.**
    S3d delivered `ids=`/full-universe seeding + spatial daisy-chain.

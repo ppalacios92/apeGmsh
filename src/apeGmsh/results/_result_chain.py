@@ -283,7 +283,7 @@ class ResultChain(SelectionChain):
         return tuple(a for a, k in zip(atoms, dist <= t) if k)
 
     # ── terminal ────────────────────────────────────────────
-    def get(self, *, component: str, time=None, stage=None):
+    def get(self, *, component: str, time=None, stage=None, **extra):
         """Materialise the slab for the chain's selected ids.
 
         Delegates to the spawning composite's **existing**
@@ -293,6 +293,17 @@ class ResultChain(SelectionChain):
         ``results.<level>.get(ids=<equivalent>, component=...)``.  The
         spatial daisy-chain happens *before* this call (the chain's
         atoms are already narrowed); this terminal only reads.
+
+        ``**extra`` forwards each spawning sub-composite's *additional*
+        terminal kwargs verbatim — ``gp_indices=`` for
+        ``results.elements.fibers``; ``gp_indices=`` / ``layer_indices=``
+        for ``results.elements.layers``.  ``ResultChain`` stays generic:
+        it never names a sub-composite kwarg, so the host's own ``.get``
+        signature remains the single source of truth (an unknown kwarg
+        fails loud there, not silently dropped here).  The node /
+        element levels and the uniform sub-composites
+        (``gauss`` / ``line_stations`` / ``springs``) pass nothing
+        extra, so their call is byte-identical to before.
         """
         host = self._engine.host
         return host.get(
@@ -300,6 +311,7 @@ class ResultChain(SelectionChain):
             component=component,
             time=time,
             stage=stage,
+            **extra,
         )
 
     def _materialize(self):
