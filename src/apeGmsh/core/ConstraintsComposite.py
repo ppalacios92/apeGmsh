@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from apeGmsh._core import apeGmsh as _ApeGmshSession
 
 from apeGmsh.core.constraints.defs import (
+    BCDef,
     ConstraintDef,
     DistributingCouplingDef,
     EmbeddedDef,
@@ -228,6 +229,12 @@ class ConstraintsComposite:
         self._parent = parent
         self.constraint_defs: list[ConstraintDef] = []
         self.constraint_records: list[ConstraintRecord] = []
+        # Single-point constraints (BCDef) are kept apart from
+        # constraint_defs: they carry no master/slave, are not in
+        # _DISPATCH, and resolve to fem.nodes.sp (not
+        # fem.nodes.constraints).  Mixing them into constraint_defs
+        # would break _add_def validation and the resolve() dispatch.
+        self._bc_defs: list[BCDef] = []
 
     def _add_def(self, defn: _ConstraintT) -> _ConstraintT:
         """Validate dispatch + labels and store a constraint definition.
@@ -256,6 +263,120 @@ class ConstraintsComposite:
                         )
         self.constraint_defs.append(defn)
         return defn
+
+    # ── Tier 0 — Single-point (fix to ground) ────────────────────────
+    def bc(self, target=None, *, pg=None, label=None, tag=None,
+           dofs=None, name=None) -> BCDef:
+        """Homogeneous single-point constraint — fix a pattern to ground.
+
+        The natural (essential / Dirichlet) boundary condition: every
+        mesh node in the resolved pattern gets ``ops.fix(node, *mask)``
+        downstream. There is **no master and no slave** — unlike every
+        other method on this composite, this is a constraint *to
+        ground*, not between two parts. It resolves into
+        ``fem.nodes.sp`` (homogeneous :class:`SPRecord`\\ s) — the same
+        broker channel as :meth:`g.loads.face_sp` — **not**
+        ``fem.nodes.constraints``.
+
+        Because it is a *permanent* constraint (not a pattern-scoped
+        quantity), it lives here on ``g.constraints`` rather than on
+        ``g.loads``: there is no load-pattern context to accidentally
+        scope it into, and the downstream emitter places it in the
+        ``model → bcs → patterns`` deck order via ``ops.fix``.
+
+        Parameters
+        ----------
+        target : str or list[(dim, tag)]
+            Pattern to fix. Resolved label → physical group → raw
+            tags (or a mesh selection) — the same flexible target
+            model as :meth:`g.loads.face_sp`. Pass ``pg=`` / ``label=``
+            / ``tag=`` instead to force a specific resolution path.
+        dofs : list[int], optional
+            Restraint **mask** (``1`` = constrained, ``0`` = free), in
+            DOF order ``[ux, uy, uz, rx, ry, rz]``. Default
+            ``[1, 1, 1]`` (pin all translations). This is the
+            OpenSees ``ops.fix`` / ``face_sp`` convention — **not**
+            the index-list convention used by
+            :meth:`equal_dof` (``dofs=[1,2,3]``).
+        name : str, optional
+            Friendly name shown in summaries / the viewer.
+
+        Returns
+        -------
+        BCDef
+            The stored definition; the same object is appended to
+            ``self._bc_defs``.
+
+        Warnings
+        --------
+        Resolution is dimension-agnostic — a point, edge, surface, or
+        volume pattern all just contribute their mesh nodes. Pointing
+        a BC at a **volume** physical group therefore fixes *every
+        interior node of the solid*, which is almost never intended;
+        target a boundary surface/edge instead.
+
+        Examples
+        --------
+        ::
+
+            g.constraints.bc("base_face")                  # pin x,y,z
+            g.constraints.bc(pg="Supports", dofs=[1, 1, 0])
+            g.constraints.bc(label="col.base",
+                             dofs=[1, 1, 1, 1, 1, 1])       # full fixity
+        """
+        t, src = self._parent.loads._coalesce_target(
+            target, pg=pg, label=label, tag=tag)
+        defn = BCDef(target=t, target_source=src,
+                     dofs=list(dofs) if dofs is not None else [1, 1, 1],
+                     name=name)
+        self._bc_defs.append(defn)
+        return defn
+
+    def resolve_bcs(self, node_tags, *, node_map=None) -> list:
+        """Resolve every :meth:`bc` def to homogeneous ``SPRecord``\\ s.
+
+        Mirrors the load/SP resolution path: each ``BCDef`` target is
+        run through the loads composite's dimension-agnostic
+        ``_target_nodes`` (label → PG → tag → mesh-selection, any
+        dim), then one ``SPRecord(value=0.0, is_homogeneous=True)`` is
+        emitted per restrained DOF per node.
+
+        Fails loud — consistent with :meth:`_resolve_nodes` and the
+        resolver contract — if a pattern resolves to zero mesh nodes:
+        a BC that silently binds nothing is worse than one that errors.
+        """
+        from apeGmsh.mesh.records._loads import SPRecord
+
+        if not self._bc_defs:
+            return []
+
+        loads = self._parent.loads
+        all_nodes = {int(t) for t in node_tags}
+        out: list = []
+        for defn in self._bc_defs:
+            nodes = loads._target_nodes(
+                defn.target, node_map or {}, all_nodes,
+                source=defn.target_source, expected_dim=None,
+            )
+            if not nodes:
+                raise ValueError(
+                    f"bc: target {defn.target!r} (source="
+                    f"{defn.target_source!r}) resolved to zero mesh "
+                    f"nodes — check it is meshed and names a real "
+                    f"label / physical group / entity. Refusing to "
+                    f"emit an empty boundary condition.")
+            for nid in sorted(nodes):
+                for d_idx, mask in enumerate(defn.dofs):
+                    if mask != 1:
+                        continue
+                    out.append(SPRecord(
+                        name=defn.name,
+                        node_id=int(nid),
+                        dof=d_idx + 1,
+                        value=0.0,
+                        is_homogeneous=True,
+                    ))
+        return out
 
     # ── Tier 1 — Node-to-Node ────────────────────────────────────────
     def equal_dof(self, master_label, slave_label, *, master_entities=None,

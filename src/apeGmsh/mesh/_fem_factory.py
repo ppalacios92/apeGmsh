@@ -311,6 +311,17 @@ def _from_gmsh(
                 node_ids, node_coords_all, **resolve_kw)
             nodal_loads, element_loads, sp_records = _split_loads(all_loads)
 
+        # Single-point constraints declared via g.constraints.bc().
+        # Kept separate from constraints_comp.resolve() above: BCDefs
+        # have no master/slave and resolve to homogeneous SPRecords in
+        # fem.nodes.sp, not to fem.nodes.constraints.  Independent of
+        # the constraint_defs guard so a BC-only model still resolves.
+        if (constraints_comp is not None
+                and getattr(constraints_comp, "_bc_defs", None)):
+            sp_records.extend(
+                constraints_comp.resolve_bcs(
+                    node_ids, node_map=node_map))
+
         masses_comp = getattr(session, "masses", None)
         if (masses_comp is not None
                 and getattr(masses_comp, "mass_defs", None)):

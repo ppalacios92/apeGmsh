@@ -26,6 +26,46 @@ class ConstraintDef:
     name: str | None = None    # optional user name
 
 
+# ── Single-point constraint (no master/slave) ────────────────────────
+
+@dataclass
+class BCDef:
+    """Homogeneous single-point constraint — fix a pattern to ground.
+
+    Deliberately **not** a :class:`ConstraintDef` subclass: a boundary
+    condition is an *essential* (Dirichlet) constraint with no master
+    and no slave, so the master/slave contract every other constraint
+    obeys does not apply.  After meshing it resolves — via the same
+    dimension-agnostic target→nodes path the load/SP family uses — to
+    one homogeneous :class:`~apeGmsh.mesh.records._loads.SPRecord`
+    (``value=0.0, is_homogeneous=True``) per restrained DOF per node,
+    landing in ``fem.nodes.sp`` (the same channel as
+    ``g.loads.face_sp``), **not** ``fem.nodes.constraints``.
+
+    Parameters
+    ----------
+    target : str or list[(dim, tag)]
+        Pattern to fix.  Resolved label → physical group → raw tags
+        (or a mesh selection), exactly like ``g.loads.face_sp``.
+    target_source : str
+        ``"label"`` / ``"pg"`` / ``"tag"`` / ``"auto"`` — produced by
+        ``LoadsComposite._coalesce_target``; selects the resolution
+        path at mesh time.
+    dofs : list[int]
+        Restraint **mask** (``1`` = constrained, ``0`` = free), in
+        DOF order ``[ux, uy, uz, rx, ry, rz]``.  Default ``[1, 1, 1]``.
+        This is the OpenSees ``ops.fix`` / ``face_sp`` convention —
+        *not* the index-list convention of ``equal_dof(dofs=...)``.
+    name : str or None
+        Friendly name shown in summaries / the viewer.
+    """
+    target: str | list[tuple[int, int]]
+    target_source: str = "auto"
+    dofs: list[int] = field(default_factory=lambda: [1, 1, 1])
+    name: str | None = None
+    kind: str = field(init=False, default="bc")
+
+
 # ── Level 1: Node-to-Node ────────────────────────────────────────────
 
 @dataclass
@@ -450,6 +490,7 @@ class MortarDef(ConstraintDef):
 
 __all__ = [
     "ConstraintDef",
+    "BCDef",
     "EqualDOFDef",
     "RigidLinkDef",
     "PenaltyDef",

@@ -10,6 +10,7 @@ the machinery that translates defs into records lives in
 from __future__ import annotations
 
 from .defs import (
+    BCDef,
     ConstraintDef,
     DistributingCouplingDef,
     EmbeddedDef,
@@ -29,6 +30,7 @@ from .defs import (
 
 __all__ = [
     "ConstraintDef",
+    "BCDef",
     "EqualDOFDef",
     "RigidLinkDef",
     "PenaltyDef",
