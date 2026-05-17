@@ -163,15 +163,10 @@ def _select_impl(dimtags: Iterable[DimTag], *, on=None, crossing=None,
              [('on', on), ('crossing', crossing),
               ('not_on', not_on), ('not_crossing', not_crossing)]
              if val is not None]
-    if len(given) > 1:
+    if len(given) != 1:
         raise ValueError(
-            "Pass at most one of on=, crossing=, not_on=, not_crossing=."
+            "Pass exactly one of on=, crossing=, not_on=, not_crossing=."
         )
-    if not given:
-        # No predicate — return the resolved entities unfiltered.  Lets
-        # callers use queries.select("name", dim=N) as a "resolve only"
-        # entry point that returns a chainable Selection.
-        return Selection(list(dimtags), _queries=_queries)
     label, spec = given[0]
     primitive   = _parse_primitive(spec)
     base_mode   = 'on' if 'on' in label else 'crossing'
