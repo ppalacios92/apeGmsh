@@ -429,12 +429,29 @@ class MeshViewer:
             on_constraint_kinds_changed=self._rebuild_constraints_overlay,
             on_row_focused=_on_outline_row_focused,
         )
-        win.add_extension_dock(DockSpec(
+        outline_dock = win.add_extension_dock(DockSpec(
             dock_id="dock_mesh_outline",
             title="Outline",
             factory=lambda _p: self._outline_tree.widget,
             default_area="left",
         ))
+        # The outline dock is added here, *after* ViewerWindow.__init__
+        # already ran _restore_layout(). A QDockWidget created after
+        # QMainWindow.restoreState() is not placed by the restored
+        # layout (documented Qt behaviour) and Qt leaves it floating —
+        # which a stale persisted MeshViewer layout then re-saves every
+        # launch. restoreDockWidget() is Qt's remedy for a late-added
+        # dock; if there is no valid saved placement (or it was saved
+        # floating from this bug) force it back into the left area.
+        # Mirrors the explicit post-add re-dock model.viewer performs
+        # via splitDockWidget().
+        from qtpy import QtCore as _QtC_dock
+        win.window.restoreDockWidget(outline_dock)
+        if outline_dock.isFloating():
+            outline_dock.setFloating(False)
+            win.window.addDockWidget(
+                _QtC_dock.Qt.LeftDockWidgetArea, outline_dock,
+            )
 
         # ── Clipping tab ────────────────────────────────────────────
         from .core.clipping_controller import ClippingController
