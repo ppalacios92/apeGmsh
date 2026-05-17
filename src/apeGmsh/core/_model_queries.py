@@ -749,15 +749,22 @@ class _Queries:
             # bare tags for downstream calls
             m.mesh.structured.set_transfinite_curve(bottom.tags(), n=11)
         """
-        # Normalise input to list of dimtags
+        # Normalise input to list of dimtags.  ``is_name_ref`` records
+        # whether the user passed a name reference (a label / PG string,
+        # or a list containing strings) rather than concrete geometry —
+        # only the name-ref form may be called with no predicate, as a
+        # "resolve only" entry point that returns a chainable Selection.
+        is_name_ref = False
         if isinstance(tags, Selection):
             dimtags = list(tags)
         elif isinstance(tags, str):
+            is_name_ref = True
             dimtags = self._string_ref_to_dimtags(tags, dim)
         elif (
             isinstance(tags, (list, tuple))
             and any(isinstance(t, str) for t in tags)
         ):
+            is_name_ref = True
             # Mixed / label-string list — resolve each ref independently
             # (same int / label / PG / dimtag contract honoured by
             # boundary() and the geometry builders).
@@ -770,6 +777,17 @@ class _Queries:
             dimtags = list(dict.fromkeys(dimtags))
         else:
             dimtags = self._model._as_dimtags(tags)
+
+        if (
+            is_name_ref
+            and on is None and crossing is None
+            and not_on is None and not_crossing is None
+        ):
+            # Resolve-only: a name ref with no predicate is the natural
+            # entry point for the method-style filters (parallel_to,
+            # normal_along) and set algebra — return a chainable
+            # Selection without requiring a dummy predicate.
+            return Selection(dimtags, _queries=self)
 
         return _select_impl(dimtags, on=on, crossing=crossing,
                             not_on=not_on, not_crossing=not_crossing,
