@@ -641,6 +641,31 @@ class _Queries:
         """Every volume (dim=3) in the model, as a chainable Selection."""
         return self._select_all(3)
 
+    def _string_ref_to_dimtags(
+        self, name: str, dim: int | None,
+    ) -> list[DimTag]:
+        """Resolve one label / PG name to dimtags, walking down to *dim*.
+
+        Shared by :meth:`select` for both a single string ref and each
+        element of a label-string list.
+        """
+        from ._helpers import _resolve_string_to_dimtags
+        owners = _resolve_string_to_dimtags(
+            name, default_dim=dim or 3, session=self._model._parent,
+        )
+        if dim is None or all(d == dim for d, _ in owners):
+            return owners
+        if dim == 0:
+            return self.boundary_points(owners)
+        if dim == 1:
+            return self.boundary_curves(owners)
+        if dim == 2:
+            # 3-D owners → faces (single-step boundary).
+            return list(dict.fromkeys(
+                self.boundary(owners, oriented=False)
+            ))
+        return owners
+
     def select(
         self,
         tags: "TagsLike | Selection | str",
@@ -659,7 +684,11 @@ class _Queries:
         ----------
         tags :
             A dimtag list, a ``Selection``, or anything accepted by
-            ``boundary()`` — e.g. a label string or bare integer with ``dim``.
+            ``boundary()`` — e.g. a label string or bare integer with
+            ``dim``.  A **list** may mix bare tags, ``(dim, tag)``
+            pairs, and label / PG / part name strings; each element is
+            resolved independently (e.g.
+            ``select(['col_left', 'arch', 'col_rigth'])``).
         on :
             Keep entities that lie **entirely on** the primitive
             (all bounding-box corners within ``tol``).
@@ -724,24 +753,21 @@ class _Queries:
         if isinstance(tags, Selection):
             dimtags = list(tags)
         elif isinstance(tags, str):
-            # Resolve a label or PG name, then walk down to *dim* if requested.
-            from ._helpers import _resolve_string_to_dimtags
-            owners = _resolve_string_to_dimtags(
-                tags, default_dim=dim or 3, session=self._model._parent,
-            )
-            if dim is None or all(d == dim for d, _ in owners):
-                dimtags = owners
-            elif dim == 0:
-                dimtags = self.boundary_points(owners)
-            elif dim == 1:
-                dimtags = self.boundary_curves(owners)
-            elif dim == 2:
-                # 3-D owners → faces (single-step boundary).
-                dimtags = list(dict.fromkeys(
-                    self.boundary(owners, oriented=False)
-                ))
-            else:
-                dimtags = owners
+            dimtags = self._string_ref_to_dimtags(tags, dim)
+        elif (
+            isinstance(tags, (list, tuple))
+            and any(isinstance(t, str) for t in tags)
+        ):
+            # Mixed / label-string list — resolve each ref independently
+            # (same int / label / PG / dimtag contract honoured by
+            # boundary() and the geometry builders).
+            dimtags = []
+            for ref in tags:
+                if isinstance(ref, str):
+                    dimtags.extend(self._string_ref_to_dimtags(ref, dim))
+                else:
+                    dimtags.extend(self._model._as_dimtags(ref))
+            dimtags = list(dict.fromkeys(dimtags))
         else:
             dimtags = self._model._as_dimtags(tags)
 
