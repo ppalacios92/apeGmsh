@@ -361,7 +361,7 @@ class _Transforms:
         ::
 
             section = g.model.geometry.add_plane_surface(loop, label="I_section")
-            path    = g.model.geometry.add_wire([arc1, line1, arc2], label="beam_path")
+            path    = g.model.geometry.add_wire([arc1, line1, arc2])
             out     = g.model.transforms.sweep(section, path, label="curved_beam")
         """
         dt = self._resolve_dt(profiles, dim)

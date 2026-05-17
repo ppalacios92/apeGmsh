@@ -304,6 +304,30 @@ class TestSelectFromLabel:
         # 4 corner points on the left face
         assert len(g.model.queries.select('box', dim=0, on={'x': 0})) == 4
 
+    def test_label_string_list(self, g):
+        """select() resolves a *list* of label strings, not just one."""
+        gm = g.model.geometry
+        gm.add_point(0, 0, 0, label='a')
+        gm.add_point(0, 0, 1, label='b')
+        gm.add_point(1, 0, 0, label='c')
+        gm.add_point(1, 0, 1, label='d')
+        c1 = gm.add_line('a', 'b', label='col_left')
+        c2 = gm.add_line('c', 'd', label='col_right')
+        c3 = gm.add_line('a', 'c', label='arch')
+
+        sel = g.model.queries.select(['col_left', 'arch', 'col_right'])
+        assert sorted(t for _, t in sel) == sorted([c1, c2, c3])
+
+        # mixed list: bare tag + label strings resolve independently
+        mixed = g.model.queries.select([c1, 'arch', 'col_right'])
+        assert sorted(t for _, t in mixed) == sorted([c1, c2, c3])
+
+        # flows into to_physical -> all 3 entities (the original footgun)
+        g.model.queries.select(
+            ['col_left', 'arch', 'col_right']).to_physical('frames')
+        assert sorted(int(x) for x in g.physical.entities('frames', dim=1)) \
+            == sorted([c1, c2, c3])
+
 
 class TestMixedDimLabelNoWarning:
     """Mixed-dim Selection.to_label should not warn about dim collision."""

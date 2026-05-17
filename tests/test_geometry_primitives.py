@@ -426,3 +426,31 @@ def test_add_line_ambiguous_label_fails_loud(g):
     g.model.geometry.add_point(2, 0, 0, label="solo")
     with pytest.raises(ValueError, match="[Aa]mbiguous"):
         g.model.geometry.add_line("dup", "solo")
+
+
+# =====================================================================
+# Wire — fail-loud on label=, and no curve-registry corruption
+# (an OCC wire is a transient construction object whose tag aliases
+#  the curve tag-space; labeling/registering it would silently shadow
+#  an unrelated curve)
+# =====================================================================
+
+def test_add_wire_rejects_label(g):
+    gm = g.model.geometry
+    gm.add_point(0, 0, 0, label="p1")
+    gm.add_point(1, 0, 0, label="p2")
+    gm.add_line("p1", "p2", label="e1")
+    with pytest.raises(ValueError, match="does not accept label"):
+        gm.add_wire(["e1"], label="structure")
+
+
+def test_add_wire_does_not_corrupt_curve_registry(g):
+    gm = g.model.geometry
+    gm.add_point(0, 0, 0, label="p1")
+    gm.add_point(1, 0, 0, label="p2")
+    c1 = gm.add_line("p1", "p2", label="e1")
+    w = gm.add_wire(["e1"])                 # wire tag aliases c1's tag
+    assert isinstance(w, int)
+    # the constituent curve's metadata + label must be intact
+    assert g.model._metadata[(1, c1)]["kind"] == "line"
+    assert c1 in g.labels.entities("e1", dim=1)

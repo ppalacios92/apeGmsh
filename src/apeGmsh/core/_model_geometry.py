@@ -1001,11 +1001,27 @@ class _Geometry:
             points).
         check_closed : if True, the underlying OCC call verifies that
             the wire forms a closed loop and raises otherwise.
-        label : registry label (for later resolution by name).
+        label : **not supported** — passing a non-None value raises
+            ``ValueError`` (see Note).
 
         Returns
         -------
-        int tag of the new wire (a dim-1 entity).
+        int tag of the new OCC wire.  This is **not** a persistent,
+        meshable model entity — use it immediately as the ``path``
+        argument to :meth:`sweep` or an element of ``wires`` for
+        :meth:`thru_sections`.
+
+        Note
+        ----
+        An OpenCASCADE wire is a transient construction object, not a
+        model entity.  Its tag is allocated in the curve tag-space and,
+        after ``synchronize()``, it does **not** appear as its own
+        ``dim=1`` entity — the tag instead aliases one of the member
+        curves.  Consequently the wire is **not** added to the entity
+        registry, and ``label=`` is rejected: a label would silently
+        attach the name to an unrelated curve.  To name the member
+        curves as a group, group the curves themselves, e.g.
+        ``queries.select([c1, c2, c3]).to_physical(name=...)``.
 
         Example
         -------
@@ -1018,8 +1034,24 @@ class _Geometry:
             l1 = g.model.geometry.add_line(p0, p1, sync=False)
             l2 = g.model.geometry.add_line(p1, p2, sync=False)
             l3 = g.model.geometry.add_line(p2, p3, sync=False)
-            path = g.model.geometry.add_wire([l1, l2, l3], label="sweep_path")
+            path = g.model.geometry.add_wire([l1, l2, l3])
+            g.model.transforms.sweep(section, path)
         """
+        if label is not None:
+            raise ValueError(
+                "add_wire does not accept label=: an OpenCASCADE wire "
+                "is a transient construction object, not a persistent "
+                "model entity. Its tag is allocated in the curve "
+                "tag-space and after synchronize() aliases an existing "
+                "curve, so a label would silently attach the name to "
+                "that unrelated curve.\n"
+                "  - To use the wire as a sweep / thru_sections path, "
+                "pass the returned tag directly: "
+                "path = add_wire([...]); sweep(profile, path)\n"
+                "  - To name the member curves as a group, group the "
+                "curves themselves: "
+                "queries.select([c1, c2, ...]).to_physical(name=...)"
+            )
         curve_tags = [
             self._resolve_entity_tag(c, dim=1, what="curve", allow_sign=True)
             for c in curve_tags
@@ -1027,8 +1059,9 @@ class _Geometry:
         tag = gmsh.model.occ.addWire(curve_tags, checkClosed=check_closed)
         if sync:
             gmsh.model.occ.synchronize()
-        self._model._log(f"add_wire({curve_tags}, closed={check_closed}) -> tag {tag}")
-        return self._model._register(1, tag, label, 'wire')
+        self._model._log(
+            f"add_wire({curve_tags}, closed={check_closed}) -> tag {tag}")
+        return tag
 
     def add_curve_loop(
         self,
