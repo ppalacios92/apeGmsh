@@ -360,8 +360,34 @@ legacy terminals byte-unchanged. Three items were consciously deferred
    terminal kwargs (`gp_indices=`/`layer_indices=`). The pattern is
    uniform/extensible; it needs per-terminal kwarg forwarding. Decide:
    a follow-on sub-phase (S3f) vs a tracked task.
-3. **`g.mesh_selection.select()` name-seed.** S3d delivers `ids=`/
-   full-universe seeding + spatial daisy-chain; seeding by an existing
-   set name / gmsh PG / label was *not* delivered (would require
-   reimplementing resolution, which the contract forbids). Tied to (1)
-   and a shared resolver decision.
+3. **`g.mesh_selection.select()` name-seed — DONE for the one clean
+   surface; PG/label direct-seed reported, not reimplemented.**
+   S3d delivered `ids=`/full-universe seeding + spatial daisy-chain.
+   The name-seed follow-on adds `select(name=N)` for an **existing**
+   `g.mesh_selection` set: it **delegates verbatim** to the surfaces
+   already on `MeshSelectionSet` — `get_tag` (the `_sets` name→tag
+   lookup) + `get_nodes`/`get_elements` — via the private
+   `_seed_ids_by_name`; **no new resolver**, and `name=` only *reads*
+   `_sets` (the locked no-registration invariant still holds, now
+   covered for the name path too). `select(name=N).<spatial>` is
+   id-for-id `filter_set` over set `N`, proven for an `add_nodes`-built
+   set **and** a `from_physical`-built set in
+   `tests/test_mesh_selection_chain_name_seed.py`. An unknown name (or
+   a node-set name asked at the element level) fails loud — never a
+   silent empty / full-universe seed (resolution-contract Rule 6);
+   `ids=`+`name=` together raises.
+
+   Seeding *directly* from a raw gmsh PG name or an apeGmsh label was
+   investigated and **consciously reported, not reimplemented**:
+   `MeshSelectionSet` has no non-registering, non-reimplementing
+   resolver for either. Its only PG bridge, `from_physical`,
+   *registers* a set + allocates a tag (which `select()` must not do)
+   and is node-only; label/geometry resolution lives off
+   `MeshSelectionSet` entirely, and
+   `tests/test_resolution_contract.py::test_meshselection_name_is_not_a_helpers_tier`
+   locks that a mesh-selection name is deliberately *not* a
+   geometry-resolver tier. The supported existing-surface route for
+   those is the two-step `from_physical(dim, "PG", ms_name="foo")` /
+   `from_geometric(sel, name="foo")` **then** `select(name="foo")`.
+   Persistence (`.save_as` / round-trip as `selection=`) stays tied
+   to (1) and remains out of scope.
