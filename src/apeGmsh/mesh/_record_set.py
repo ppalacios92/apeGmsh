@@ -20,7 +20,7 @@ for linter-friendly kind comparisons (no magic strings).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
 
 import numpy as np
 
@@ -29,6 +29,22 @@ import numpy as np
 from .records._kinds import ConstraintKind, LoadKind  # noqa: F401
 
 _R = TypeVar('_R')
+
+
+def _perp_dirn(normal: Any) -> int:
+    """Map a diaphragm plane normal to an OpenSees ``perpDirn`` (1|2|3).
+
+    ``perpDirn`` is the global axis the rigid plane is perpendicular
+    to — i.e. the axis the plane *normal* is most aligned with.  A
+    missing/degenerate normal falls back to ``3`` (the historical
+    horizontal-floor assumption).
+    """
+    if normal is None:
+        return 3
+    n = np.abs(np.asarray(normal, dtype=float).reshape(-1))
+    if n.size < 3 or not np.any(np.isfinite(n)) or not np.any(n):
+        return 3
+    return int(np.argmax(n[:3])) + 1
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -171,9 +187,11 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
     ---------------------------------------------------
     ::
 
-        # OpenSees rigidDiaphragm takes a list of slaves natively
-        for master, slaves in fem.nodes.constraints.rigid_diaphragms():
-            ops.rigidDiaphragm(3, master, *slaves)
+        # OpenSees rigidDiaphragm takes a list of slaves natively;
+        # perp_dirn comes from the resolved plane normal (not a
+        # hardcoded 3) so non-horizontal diaphragms are correct.
+        for perp, master, slaves in fem.nodes.constraints.rigid_diaphragms():
+            ops.rigidDiaphragm(perp, master, *slaves)
 
     Filtering
     ---------
@@ -254,8 +272,11 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
 
         - ``NodePairRecord(kind='rigid_beam' | 'rigid_rod')``
           → one slave per master
-        - ``NodeGroupRecord(kind='rigid_diaphragm' | 'rigid_body')``
-          → many slaves per master
+        - ``NodeGroupRecord(kind='rigid_body')`` → many slaves per
+          master.  ``rigid_diaphragm`` is **excluded** (use
+          :meth:`rigid_diaphragms`, which carries the correct
+          ``perpDirn``); ``kinematic_coupling`` is **excluded** (it
+          is DOF-selective — consume it via :meth:`pairs`).
         - ``NodeToSurfaceRecord.rigid_link_records``
           → many phantom slaves per master
 
@@ -291,9 +312,19 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
                 if rec.kind in _RIGID_KINDS:
                     _add(rec.master_node, rec.slave_node)
             elif isinstance(rec, NodeGroupRecord):
-                # rigid_diaphragm, rigid_body, kinematic_coupling
-                for sn in rec.slave_nodes:
-                    _add(rec.master_node, sn)
+                # Only rigid_body is a genuine 6-DOF rigid-link group.
+                #
+                # rigid_diaphragm is emitted via rigid_diaphragms()
+                # (native rigidDiaphragm with the correct perpDirn);
+                # including it here too would DOUBLE-constrain.
+                #
+                # kinematic_coupling is DOF-selective (rec.dofs) —
+                # collapsing it to a full 6-DOF rigidLink silently
+                # over-constrains.  It is consumed via pairs()
+                # (KINEMATIC_COUPLING kind carries its dofs).
+                if rec.kind == ConstraintKind.RIGID_BODY:
+                    for sn in rec.slave_nodes:
+                        _add(rec.master_node, sn)
             elif isinstance(rec, NodeToSurfaceRecord):
                 # master → each phantom (6-DOF rigid link). Skip pairs
                 # that the spring variant of node_to_surface generated —
@@ -357,26 +388,32 @@ class NodeConstraintSet(_RecordSetBase["ConstraintRecord"]):
 
     def rigid_diaphragms(
         self,
-    ) -> Iterator[tuple[int, list[int]]]:
-        """Yield ``(master, slaves)`` only for rigid_diaphragm records.
+    ) -> Iterator[tuple[int, int, list[int]]]:
+        """Yield ``(perp_dirn, master, slaves)`` for rigid_diaphragm records.
 
-        Useful for OpenSees's native multi-slave command::
+        ``perp_dirn`` (1|2|3) is derived from the resolved plane
+        normal (:func:`_perp_dirn`), so a non-horizontal diaphragm
+        (wall, sloped) emits with the correct ``perpDirn`` instead of
+        a hardcoded ``3``::
 
-            for master, slaves in fem.nodes.constraints.rigid_diaphragms():
-                ops.rigidDiaphragm(3, master, *slaves)
+            for perp, master, slaves in fem.nodes.constraints.rigid_diaphragms():
+                ops.rigidDiaphragm(perp, master, *slaves)
 
         Yields
         ------
-        (int, list[int])
-            ``(master_node, [slave_node, ...])``
+        (int, int, list[int])
+            ``(perp_dirn, master_node, [slave_node, ...])``
         """
         from apeGmsh.mesh.records._constraints import NodeGroupRecord
 
         for rec in self._records:
             if (isinstance(rec, NodeGroupRecord)
                     and rec.kind == ConstraintKind.RIGID_DIAPHRAGM):
-                yield int(rec.master_node), [
-                    int(s) for s in rec.slave_nodes]
+                yield (
+                    _perp_dirn(rec.plane_normal),
+                    int(rec.master_node),
+                    [int(s) for s in rec.slave_nodes],
+                )
 
     def equal_dofs(self) -> Iterator["NodePairRecord"]:
         """Yield equal_dof pairs — flat iteration.

@@ -1969,8 +1969,8 @@ for master, slaves in fem.nodes.constraints.rigid_link_groups():
     for slave in slaves:
         ops.rigidLink("beam", master, slave)
 
-for master, slaves in fem.nodes.constraints.rigid_diaphragms():
-    ops.rigidDiaphragm(3, master, *slaves)
+for perp, master, slaves in fem.nodes.constraints.rigid_diaphragms():
+    ops.rigidDiaphragm(perp, master, *slaves)  # perp from plane normal
 
 # Typed iteration — just equal_dof records
 for pair in fem.nodes.constraints.equal_dofs():
@@ -2041,8 +2041,8 @@ for pair in fem.nodes.constraints.equal_dofs():
     ops.equalDOF(pair.master_node, pair.slave_node, *pair.dofs)
 
 # 4. Rigid diaphragms
-for master, slaves in fem.nodes.constraints.rigid_diaphragms():
-    ops.rigidDiaphragm(3, master, *slaves)
+for perp, master, slaves in fem.nodes.constraints.rigid_diaphragms():
+    ops.rigidDiaphragm(perp, master, *slaves)  # perp from plane normal
 
 # 5. Surface constraints
 for interp in fem.elements.constraints.interpolations():
