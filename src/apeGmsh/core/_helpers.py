@@ -8,11 +8,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import gmsh
+import numpy as np
 
 if TYPE_CHECKING:
     from apeGmsh._session import _SessionBase
 
 from apeGmsh._types import DimTag, Tag, TagsLike, EntityRef, EntityRefs  # noqa: F401  — ``Tag``, ``DimTag``, ``TagsLike``, ``EntityRef`` are re-exported from this module by every ``_model_*`` sibling.
+
+#: Integer-tag acceptance predicate.  A numpy integer scalar (np.int64
+#: from any ``np.asarray`` of tags) IS a valid Gmsh tag — accepted
+#: identically to a Python ``int``, mirroring the broker's already-
+#: ratified ``NodeComposite._is_dimtag_tuple`` (commit 2e85abd, "5
+#: library issues flagged during curriculum authoring", issue #4).
+#: ``np.integer`` excludes ``np.bool_``, and every ``ref``/``tags``
+#: numeric gate that needs bool-rejection already has an explicit
+#: ``isinstance(_, bool)`` guard ahead of it, so widening here adds no
+#: bool regression.
+_INT = (int, np.integer)
 
 
 def resolve_dim(tag: int, default_dim: int) -> int:
@@ -46,20 +58,20 @@ def as_dimtags(
     def _dim(t: int) -> int:
         return resolve_dim(t, default_dim)
 
-    if isinstance(tags, int):
+    if isinstance(tags, _INT):
         return [(_dim(tags), tags)]
 
     # Single (dim, tag) tuple
     if (
         isinstance(tags, tuple)
         and len(tags) == 2
-        and all(isinstance(x, int) for x in tags)
+        and all(isinstance(x, _INT) for x in tags)
     ):
         return [tags]
 
     out: list[DimTag] = []
     for item in tags:
-        if isinstance(item, int):
+        if isinstance(item, _INT):
             out.append((_dim(item), item))
         elif isinstance(item, (tuple, list)) and len(item) == 2:
             out.append((int(item[0]), int(item[1])))
@@ -150,7 +162,7 @@ def resolve_to_tags(
             "resolve_to_tags: expected int, str, or (dim, tag); got bool."
         )
 
-    if isinstance(ref, int):
+    if isinstance(ref, _INT):
         return [int(ref)]
 
     if isinstance(ref, str):
@@ -215,7 +227,7 @@ def resolve_to_dimtags(
             "resolve_to_dimtags: expected int, str, or (dim, tag); got bool."
         )
 
-    if isinstance(ref, int):
+    if isinstance(ref, _INT):
         return [(resolve_dim(int(ref), default_dim), int(ref))]
 
     if isinstance(ref, str):
@@ -364,8 +376,8 @@ def _is_dimtag_tuple(val) -> bool:
     return (
         isinstance(val, tuple)
         and len(val) == 2
-        and isinstance(val[0], int)
-        and isinstance(val[1], int)
+        and isinstance(val[0], _INT)
+        and isinstance(val[1], _INT)
     )
 
 
