@@ -343,15 +343,23 @@ original methods did) — so it does not perturb the FP-1 baseline.
 
 ---
 
-## 8. The fail-loud centroid contract (S5.3)
+## 8. The fail-loud centroid contract (S5.3 — already merged)
 
-There is **one** centroid fail-loud message/pattern, now shared by
+> [!note] Attribution
+> The end-state described here — one shared centroid fail-loud
+> contract — is what is true on `main`. **S5.3 (the
+> `_element_centroids` fix) merged independently, ahead of this
+> docs change; it is not introduced here.** Of the three S5 paths,
+> only **S5.2** (the loads/masses `__ms__` consumer, below) is the
+> code behavior shipping alongside these docs.
+
+There is **one** centroid fail-loud message/pattern, shared by
 the chain centroids and the formerly-silent legacy helper:
 
 - **Chain side** — `mesh/_elem_chain.py` (`_centroid_map`, see
   `:45`) and `results/_result_chain.py` build centroids and were
   fail-loud from the start.
-- **Legacy side (the S5.3 fix)** —
+- **Legacy side (the already-merged S5.3 fix)** —
   `results/_composites.py:123` `_element_centroids` previously used
   `np.clip` to silently map a missing connectivity node id to the
   last node (corrupting that element's centroid). It now **raises
@@ -365,24 +373,30 @@ the chain centroids and the formerly-silent legacy helper:
   same contract and message as the chain-side `_centroid_map`.
 
 `_element_centroids` backs the **existing legacy**
-`results.elements.in_box / nearest_to / on_plane` helpers — so S5.3
-makes those legacy helpers fail loud too, not just the new chain.
+`results.elements.in_box / nearest_to / on_plane` helpers — so the
+already-merged S5.3 fix makes those legacy helpers fail loud too,
+not just the new chain.
 
-The other two S5 fail-loud flips (for completeness — full detail in
+The other two S5 fail-loud paths (for completeness — full detail in
 `docs/plans/selection-unification.md` §5):
 
-1. **Results `selection=` on import-origin fem** —
-   `from_msh`/MPCO/native produce `mesh_selection=None`;
-   `results/_composites.py` `_resolve_node_ids` /
-   `_resolve_element_ids` now raise `RuntimeError`
+1. **Results `selection=` on import-origin fem (S5.1 — already
+   loud, locked)** — `from_msh`/MPCO/native produce
+   `mesh_selection=None`; `results/_composites.py` `_resolve_node_ids`
+   / `_resolve_element_ids` raise `RuntimeError`
    (`:313-314`, `:333-336`, `:367-368`, `:387-388`) instead of
-   silently resolving to an empty set.
-2. **Loads `__ms__` consumer** —
+   silently resolving to an empty set. This path was already loud on
+   `main`; a characterization pin locks it — it is **not** flipped by
+   this work.
+2. **Loads `__ms__` consumer (S5.2 — ships with these docs)** —
    `core/LoadsComposite.py:933` `_target_nodes` did
    `if info is None: return set()` (silently binding a load to
-   nothing). It now **raises `KeyError`** (`:950-955`). This guard is
-   in the `__ms__` *consumer*, distinct from the S1
-   `core/_resolution.py` resolver.
+   nothing). It now **raises `KeyError`** (`:950-955`); the
+   `MassesComposite` counterpart matches. This guard is in the
+   `__ms__` *consumer*, distinct from the S1
+   `core/_resolution.py` resolver. **This is the one S5 code change
+   shipping alongside this documentation** (with a flipped
+   characterization pin + `tests/test_s5_loads_ms_failloud.py`).
 
 ---
 
@@ -417,10 +431,13 @@ it, but the deferred-import discipline is on you.
    write a new name→entity resolver — the resolution contract forbids
    it (FP-4 / §7). Delegate to the exact method `.get()` already uses
    (e.g. `_resolve_nodes`), so `select(...).result()` is id-for-id
-   identical to `get(...)`. (This is why `g.mesh_selection.select()`
-   ships `ids=`/universe seeding but **defers** name-seeding — see
-   `mesh/MeshSelectionSet.py:726-731`; name-seed must reuse a resolver
-   and is a tracked follow-on, not a re-implementation.)
+   identical to `get(...)`. (This is exactly how
+   `g.mesh_selection.select(name=N)` works — it **delegates verbatim**
+   to the existing `get_tag`/`get_nodes`/`get_elements` surface via
+   the private `_seed_ids_by_name`, writes **no** new resolver, only
+   *reads* `_sets`, and fails loud on an unknown name — see
+   `mesh/MeshSelectionSet.py` `select()` docstring and
+   `tests/test_mesh_selection_chain_name_seed.py`.)
 
 5. **Materialise to the existing terminal type.** Reuse the legacy
    result type via a deferred import inside `_materialize` (cf.
@@ -453,11 +470,11 @@ it, but the deferred-import discipline is on you.
 
 ---
 
-## 10. Deferred / not-yet (track, don't claim "available")
+## 10. Dispositions (resolved vs still-deferred)
 
-These were consciously deferred (flagged, never silently skipped).
 Post-S3 dispositions are ratified in
-`docs/plans/selection-unification.md` §9:
+`docs/plans/selection-unification.md` §9. One item remains genuinely
+deferred; the other two are resolved.
 
 1. **Persistence — RESOLVED query-only.** Chained selections are
    intentionally **ephemeral query objects**. There is **no**
@@ -465,16 +482,30 @@ Post-S3 dispositions are ratified in
    pre-mesh author-time path (`g.mesh_selection.add_nodes(...,
    name=...)` → FEMData snapshot → `selection=`), which already works
    and is unchanged.
-2. **Results sub-composites `.select()` — DEFERRED** (tracked chip).
+2. **Results sub-composites `.select()` — STILL DEFERRED** (the only
+   genuinely not-yet item; track, don't claim "available").
    `results.nodes` / `results.elements` have `.select()`; the five
    element sub-composites (`gauss` / `fibers` / `layers` /
    `line_stations` / `springs`) need per-terminal kwarg forwarding
    and are a follow-on.
-3. **`g.mesh_selection.select()` name-seed — DEFERRED** (tracked
-   chip). Ships `ids=`/full-universe seeding + spatial daisy-chain;
-   name-seed (existing set / gmsh PG / label) must reuse an existing
-   resolver and is independent of the (query-only) persistence
-   decision.
+3. **`g.mesh_selection.select()` name-seed — RESOLVED, shipped.**
+   `select(*, level="node", dim=2, ids=None, name=None)`: beyond
+   `ids=`/full-universe seeding, `name=` seeds id-for-id from an
+   **existing** `g.mesh_selection` set (node ids for `level="node"`,
+   element ids for `level="element"`). It **delegates verbatim** to
+   the existing `get_tag`/`get_nodes`/`get_elements` surface via the
+   private `_seed_ids_by_name` (**no** new resolver), only *reads*
+   `_sets` (no registration, no tag allocation), and fails loud on an
+   unknown name or a node-set name asked at the element level;
+   `ids=`+`name=` together raises. `select(name=N).<spatial>` is
+   id-for-id `filter_set` over set `N`, proven for an
+   `add_nodes`-built set **and** a `from_physical`-built set in
+   `tests/test_mesh_selection_chain_name_seed.py`. Seeding *directly*
+   from a raw gmsh PG name / apeGmsh label is **not** a `select()`
+   parameter (no non-registering resolver exists on
+   `MeshSelectionSet`); the supported route is the two-step
+   `from_physical(...)` / `from_geometric(...)` **then**
+   `select(name=...)`.
 
 ---
 
@@ -492,13 +523,14 @@ Post-S3 dispositions are ratified in
 | NodeChain / ElementChain | `mesh/_node_chain.py`, `mesh/_elem_chain.py` | `tests/test_fem_chain.py` |
 | ResultChain | `results/_result_chain.py:135` | `tests/test_result_chain.py` |
 | MeshSelectionChain | `mesh/_mesh_selection_chain.py:158` | `tests/test_mesh_selection_chain.py` |
+| `select(name=)` name-seed (shipped) | `mesh/MeshSelectionSet.py` `select()` (`_seed_ids_by_name`; delegates to `get_tag`/`get_nodes`/`get_elements`) | `tests/test_mesh_selection_chain_name_seed.py` |
 | Host hooks (deferred import) | `core/Model.py:153`, `mesh/FEMData.py:338/976`, `results/_composites.py:601`, `mesh/MeshSelectionSet.py:733` | — |
 | FP-4 swallow asymmetry | node `mesh/FEMData.py:456`/`:480`/`:485` (`KeyError`) ; elem `:851`/`:869`/`:873` (`KeyError,ValueError`) | `test_resolution_contract.py`, `test_target_resolution.py` |
 | S1 shared resolver (Loads+Masses only) | `core/_resolution.py:33` | `test_resolution_contract.py`, `test_target_resolution.py` |
 | S2 box → half-open + `inclusive=` | `mesh/_mesh_filters.py:46-83`; entry `MeshSelectionSet.py` `add_nodes` `:210` / `add_elements` `:268` / `filter_set` `:598` | (S0b pins, same commit) |
-| S5.1 results `selection=` loud | `results/_composites.py:313-314/333-336/367-368/387-388` | (S5 regression test) |
-| S5.2 Loads `__ms__` consumer loud | `core/LoadsComposite.py:950-955` | (S5 regression test) |
-| S5.3 centroid fail-loud | `results/_composites.py:123` (`:157`/`:177` raise; `:168` clip is post-validation only) | (S5 regression test) |
+| S5.1 results `selection=` loud (already loud on main, locked) | `results/_composites.py:313-314/333-336/367-368/387-388` | characterization pin |
+| S5.2 Loads/Masses `__ms__` consumer loud (**ships with these docs**) | `core/LoadsComposite.py:950-955` (+ `MassesComposite` counterpart) | `tests/test_s5_loads_ms_failloud.py` (+ flipped char pin) |
+| S5.3 centroid fail-loud (already merged separately, not this PR) | `results/_composites.py:123` (`:157`/`:177` raise; `:168` clip is post-validation only) | (merged ahead of these docs) |
 
 ---
 

@@ -715,9 +715,12 @@ parts. The auto-mapping collapsed this richness.
 
 The selection-unification work added a new fluent `.select()` idiom
 **additively** — no existing selection method was renamed or removed,
-and there is nothing to find/replace for it. But it carries **four
-deliberate behavioural changes** you must know about: one breaking box
-default (S2) and three formerly-silent paths that now fail loud (S5).
+and there is nothing to find/replace for it. The behavioural changes
+you must know about: one breaking box default (S2), and a fail-loud
+end-state on three formerly-silent paths (S5) that you may now hit at
+runtime. Only one of the three S5 paths (the loads/masses `__ms__`
+consumer) is a behavior change landing *with* this release; the other
+two were already loud / merged ahead of it (attributed below).
 
 ### S2 — `g.mesh_selection` box default: closed → half-open (BREAKING)
 
@@ -747,13 +750,18 @@ The new `g.mesh_selection.select(...).in_box(lo, hi)` chain follows
 the same half-open default, with `.in_box(lo, hi, inclusive=True)`
 for the closed variant.
 
-### S5 — three formerly-silent paths now raise
+### S5 — fail-loud end-state on three formerly-silent paths
 
 Each of these used to silently produce a wrong (usually empty or
-corrupted) result; they now fail loud with a directive message.
+corrupted) result; they now fail loud with a directive message. The
+end-state below is what is true on `main`. **Only path 2 (the
+loads/masses `__ms__` consumer) is the behavior change landing with
+this release** — paths 1 and 3 were already loud / merged ahead of
+it and are shown for the complete picture.
 
 ```diff
- # 1. Results selection= against an import-origin FEMData
+ # 1. Results selection= against an import-origin FEMData (ALREADY
+ #    LOUD on main, locked by a characterization pin — NOT this release)
  #    (from_msh / MPCO / native — these have mesh_selection=None)
  results = Results.from_native("run.h5", fem=fem_from_msh)
 -results.nodes.get(selection="my_set")   # silently → empty slab
@@ -763,7 +771,7 @@ corrupted) result; they now fail loud with a directive message.
 
 ```diff
  # 2. A load bound to a mesh-selection name whose set is missing
- #    (the __ms__ consumer in LoadsComposite)
+ #    (the __ms__ consumer in LoadsComposite — THE CHANGE IN THIS RELEASE)
 -g.loads.point("missing_ms_name", force_xyz=(0,0,-1))  # silently bound to 0 nodes
 +g.loads.point("missing_ms_name", force_xyz=(0,0,-1))  # KeyError: the mesh-
 +                                                      # selection set is empty/missing
@@ -771,8 +779,9 @@ corrupted) result; they now fail loud with a directive message.
 
 ```diff
  # 3. Element centroid with a connectivity id absent from the node set
- #    (backs results.elements.in_box / nearest_to / on_plane AND the
- #     new results.elements.select(...) chain)
+ #    (ALREADY MERGED SEPARATELY, ahead of this release — NOT introduced
+ #     here; backs results.elements.in_box / nearest_to / on_plane AND
+ #     the results.elements.select(...) chain)
 -results.elements.in_box(lo, hi, component="stress_xx")  # silent corrupted centroid
 +results.elements.in_box(lo, hi, component="stress_xx")  # KeyError: element N
 +                                                        # references node M not

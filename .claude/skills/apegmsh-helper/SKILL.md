@@ -204,7 +204,7 @@ algebra:
 | `fem.nodes.select(...)` | `NodeChain` | point | `.result()` → `NodeResult` |
 | `fem.elements.select(...)` | `ElementChain` | point | `.result()` → `GroupResult` |
 | `results.nodes.select(...)` / `results.elements.select(...)` | `ResultChain` | point | `.get(component=, time=, stage=)` → slab |
-| `g.mesh_selection.select(*, level=, dim=, ids=)` | `MeshSelectionChain` | point | `.result()` / `.ids` |
+| `g.mesh_selection.select(*, level=, dim=, ids=, name=)` | `MeshSelectionChain` | point | `.result()` / `.ids` |
 
 **Refining verbs** (identical on every chain), each returns a new
 chain of the same type so they compose:
@@ -232,8 +232,12 @@ nodes = sel.result()                          # the existing NodeResult
   same selectors as `.get` (`target`/`pg`/`label`/`tag`/`dim`/
   `partition`, `element_type=` for elements) plus `ids=`; no-arg seeds
   the whole domain. Results chains take `pg=`/`label=`/`selection=`/
-  `ids=`. `g.model.select` resolves strings through the same
-  label→PG→part tier as everything else.
+  `ids=`. `g.mesh_selection.select` takes `ids=` **or** `name=` (an
+  **existing** `g.mesh_selection` set, seeded id-for-id — delegates
+  verbatim to the existing `get_tag`/`get_nodes`/`get_elements`,
+  no new resolver, read-only, fail-loud on an unknown name); no-arg
+  seeds the full live-mesh universe. `g.model.select` resolves
+  strings through the same label→PG→part tier as everything else.
 - **Results terminal differs** — a results selection needs a
   component, so it ends in `.get(...)`, not `.result()`:
   ```python
@@ -273,11 +277,18 @@ code. `GeometryChain.result()` returns the *same* legacy `Selection`
 FEMData snapshot and round-trips as `results(selection=...)`
 (unchanged).
 
-**Not yet available** (don't reach for these): results sub-composite
+**Mesh-selection name-seed is available**: `g.mesh_selection.select(
+name="my_set")` seeds id-for-id from an **existing**
+`g.mesh_selection` set (node ids for `level="node"`, element ids for
+`level="element"`), then narrow with the usual spatial verbs — the
+fluent equivalent of `filter_set` over that set. Seeding *directly*
+from a raw gmsh PG name / apeGmsh label is **not** a `select()`
+parameter; use the two-step `from_physical(...)` / `from_geometric(
+...)` **then** `select(name=...)`.
+
+**Not yet available** (don't reach for this): results sub-composite
 `.select()` (`gauss`/`fibers`/`layers`/`line_stations`/`springs` —
-use the existing `results.elements.<sub>.in_box/...` helpers);
-`g.mesh_selection.select()` name-seed (today only `ids=` or
-full-universe; use `add_nodes(name=...)` for a named set).
+use the existing `results.elements.<sub>.in_box/...` helpers).
 
 ---
 
@@ -677,14 +688,15 @@ canonical chain (§1.4): `fem.nodes.select(pg=...).in_box(...)
 .on_plane(...)`, set algebra with `| & - ^`. The old single-shot
 `.get/.resolve/.add_nodes` accessors still work for the simple case.
 
-### 8.7  ❌ `results.elements.gauss.select(...)` / mesh-selection name-seed
+### 8.7  ❌ `results.elements.gauss.select(...)`
 Not shipped yet. Results sub-composites (`gauss`/`fibers`/`layers`/
 `line_stations`/`springs`) have **no** `.select()` — use their
 existing `.in_box/.nearest_to/.on_plane` helpers.
-`g.mesh_selection.select()` cannot seed from a name/PG/label yet
-(only `ids=` / full universe) — use
-`g.mesh_selection.add_nodes(..., name=...)` for a named set (it also
-round-trips as `results(selection=...)`).
+(Mesh-selection name-seed, by contrast, **is** shipped:
+`g.mesh_selection.select(name="my_set")` seeds id-for-id from an
+existing set — see §1.4. Seeding directly from a raw gmsh PG name /
+label is still not a `select()` parameter; use the two-step
+`from_physical(...)`/`from_geometric(...)` then `select(name=...)`.)
 
 ---
 

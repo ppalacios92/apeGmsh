@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.6.0 — Unified `.select()` fluent selection · half-open mesh box · fail-loud sweep
+## v1.6.0 — Unified `.select()` fluent selection · half-open mesh box · loads/masses fail-loud
 
 Selection / resolution unification. A single **daisy-chainable
 `.select()` idiom** is added at all four levels — geometry, the live
@@ -18,7 +18,10 @@ a replacement or a facade over them.
 Two behavior changes ride along. The `g.mesh_selection` box filter
 moves **closed → half-open** by default to match the results side
 (**breaking** — see below; `inclusive=True` restores the old closed
-box). And three formerly-silent wrong-result paths now **fail loud**.
+box). And the loads/masses `__ms__` consumer now **fails loud**
+instead of silently binding to zero nodes — the one remaining member
+of a three-path fail-loud end-state whose other two paths landed
+earlier (see below).
 
 This release is selection plumbing only — no viewer or solver-bridge
 surface changed.
@@ -34,7 +37,7 @@ returning a chain that composes fluently:
 | `fem.nodes.select(...)` | `NodeChain` | point | `.result()` → `NodeResult` (same as `fem.nodes.get(...)`) |
 | `fem.elements.select(...)` | `ElementChain` | point | `.result()` → `GroupResult` (same as `fem.elements.get(...)`) |
 | `results.nodes.select(...)` / `results.elements.select(...)` | `ResultChain` | point | `.get(component=, time=, stage=)` → slab (same as `results.<level>.get(...)`) |
-| `g.mesh_selection.select(*, level=, dim=, ids=)` | `MeshSelectionChain` | point | `.result()` → same dict as `get_nodes/get_elements`; `.ids` |
+| `g.mesh_selection.select(*, level=, dim=, ids=, name=)` | `MeshSelectionChain` | point | `.result()` → same dict as `get_nodes/get_elements`; `.ids` |
 
 - **Refining verbs** (identical names on every chain): `.in_box(lo,
   hi, *, inclusive=False)`, `.in_sphere(center, radius)`,
@@ -58,8 +61,13 @@ returning a chain that composes fluently:
   (`target` / `pg` / `label` / `tag` / `dim` / `partition`,
   `element_type` for elements) plus `ids=`; no-arg seeds the whole
   domain. Results chains take `pg=` / `label=` / `selection=` /
-  `ids=`. `g.model.select` delegates string resolution to the same
-  label → PG → part tier as everywhere else.
+  `ids=`. `g.mesh_selection.select` takes `ids=` or `name=` (an
+  **existing** `g.mesh_selection` set, seeded id-for-id by delegating
+  verbatim to the existing `get_tag`/`get_nodes`/`get_elements`
+  surface — no new resolver, read-only, fail-loud on an unknown
+  name); no-arg seeds the full live-mesh universe. `g.model.select`
+  delegates string resolution to the same label → PG → part tier as
+  everywhere else.
 - **Two spatial families, honestly different — not interchangeable:**
   - **point family** (`fem.*`, `results.*`, `g.mesh_selection`):
     `.in_box` is half-open `[lo, hi)` by default; `inclusive=True`
@@ -122,38 +130,46 @@ Audit any `g.mesh_selection` box query that intentionally relied on
 catching on-the-upper-face nodes; pad the upper corner outward or pass
 `inclusive=True`. Pure-interior boxes are unaffected.
 
-### CHANGED — Three silent-wrong paths now fail loud
+### CHANGED — Loads/masses `__ms__` now fails loud (completing a three-path end-state)
 
-Three paths that previously returned a quietly-wrong result now
-raise. Each is safer: a wrong answer that looked plausible becomes an
-explicit, located error.
+Three paths that once returned a quietly-wrong result now raise; each
+is safer (a plausible-looking wrong answer becomes an explicit,
+located error). **This release ships only path 2.** Paths 1 and 3
+were already loud / merged ahead of it and are described here for the
+complete end-state:
 
-1. **`results(...)` `selection=` on an import-origin FEM.** A
-   `FEMData` built from `from_msh` / MPCO / native input has no
-   `mesh_selection` (it is `None`). Passing `selection=` against such
-   a FEM now raises `RuntimeError` (`"selection= requires
-   fem.mesh_selection to be present."`) on both the node and element
-   resolution arms instead of resolving to an empty set. Build the
-   selection on the session (`g.mesh_selection`) so it travels into
-   the snapshot.
-2. **Loads / masses `__ms__` consumer binding to zero nodes.**
-   `LoadsComposite._target_nodes` (and the `MassesComposite`
-   counterpart) hit a `if info is None: return set()` arm that
-   **silently bound a load/mass to zero nodes** when a named mesh
-   selection it referenced was gone or the store was inconsistent. It
-   now raises `KeyError` (`"... Refusing to silently bind this load
-   to zero nodes (fail loud)."`). A load/mass that resolves to
-   nothing is a model error, not a no-op.
-3. **`results._element_centroids` corrupting a centroid.** This
-   routine used `np.clip` to map a connectivity node id that is
-   absent from the FEM node set to the *last* node — silently
-   corrupting that element's centroid. It now raises `KeyError`
-   (detecting both past-the-end and in-range-wrong-id, strictly
-   stronger than the old clip). This also makes the legacy
-   `results.elements.in_box` / `nearest_to` / `on_plane` helpers
-   fail loud on a broken connectivity instead of returning
-   garbage-located elements. The new chain centroids were already
-   fail-loud; this brings the legacy helper to parity.
+1. **`results(...)` `selection=` on an import-origin FEM (already
+   loud — locked).** A `FEMData` built from `from_msh` / MPCO /
+   native input has no `mesh_selection` (it is `None`). Passing
+   `selection=` against such a FEM raises `RuntimeError`
+   (`"selection= requires fem.mesh_selection to be present."`) on
+   both the node and element resolution arms instead of resolving to
+   an empty set. This path was already loud; it is held by a
+   characterization pin and is **not** changed by this release. Build
+   the selection on the session (`g.mesh_selection`) so it travels
+   into the snapshot.
+2. **Loads / masses `__ms__` consumer binding to zero nodes (the
+   change in this release).** `LoadsComposite._target_nodes` (and the
+   `MassesComposite` counterpart) hit a `if info is None: return
+   set()` arm that **silently bound a load/mass to zero nodes** when
+   a named mesh selection it referenced was gone or the store was
+   inconsistent. It now raises `KeyError` (`"... Refusing to silently
+   bind this load to zero nodes (fail loud)."`). A load/mass that
+   resolves to nothing is a model error, not a no-op. This is the one
+   code behavior shipping with this release (with a flipped
+   characterization pin and a dedicated regression test).
+3. **`results._element_centroids` corrupting a centroid (already
+   merged separately — not this release).** This routine used
+   `np.clip` to map a connectivity node id that is absent from the
+   FEM node set to the *last* node — silently corrupting that
+   element's centroid. It now raises `KeyError` (detecting both
+   past-the-end and in-range-wrong-id, strictly stronger than the old
+   clip), which also makes the legacy `results.elements.in_box` /
+   `nearest_to` / `on_plane` helpers fail loud on a broken
+   connectivity instead of returning garbage-located elements. The
+   new chain centroids were already fail-loud; this brought the
+   legacy helper to parity. This fix **merged independently, ahead
+   of this release** — it is not introduced here.
 
 ### INTERNAL — deduped Loads/Masses target resolver
 
@@ -175,9 +191,9 @@ available surface:
   have `.select()`; the five element sub-composites
   (`gauss` / `fibers` / `layers` / `line_stations` / `springs`) do
   **not** yet (they need per-terminal kwarg forwarding).
-- `g.mesh_selection.select()` name-seed — today it seeds from `ids=`
-  or the full live-mesh universe; seeding from an existing named set
-  / gmsh PG / label is deferred (must reuse an existing resolver).
+
+(The `g.mesh_selection.select()` name-seed that previously sat here
+has **shipped** — see the `.select()` ADDED section above.)
 
 ## v1.5.0 — Applied loads + reactions diagrams · geometry-scoped gate
 

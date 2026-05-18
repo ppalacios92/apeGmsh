@@ -179,11 +179,24 @@ node_set = (g.mesh_selection.select()                  # node level
 hexes = (g.mesh_selection.select(level="element", dim=3)
     .in_box((0, 0, 0), (1, 1, 1), inclusive=True)      # closed box
     .ids)
+
+# Seed from an existing g.mesh_selection set by name, then narrow
+g.mesh_selection.add_nodes(in_box=(0, 0, 0, 1, 1, 1), name="base")
+shell = (g.mesh_selection.select(name="base")          # id-for-id the set
+    .in_sphere((0.5, 0.5, 0.5), 0.4)
+    .result())
 ```
 
-`select(*, level="node", dim=2, ids=None)` — `level="element"` uses
-`dim`; `ids=` seeds an explicit list, otherwise the full live-mesh
-universe. This is the fluent equivalent of
+`select(*, level="node", dim=2, ids=None, name=None)` —
+`level="element"` uses `dim`; `ids=` seeds an explicit list. `name=`
+seeds id-for-id from an **existing** `g.mesh_selection` set (its node
+ids for `level="node"`, its element ids for `level="element"`) — the
+fluent equivalent of `filter_set` over that set; it delegates verbatim
+to the existing `get_tag`/`get_nodes`/`get_elements` surface, only
+*reads* the set store (no registration, no tag allocation), and an
+unknown name fails loud. `ids=` and `name=` are mutually exclusive;
+with neither, the full live-mesh universe is seeded. The bare form is
+the fluent equivalent of
 `g.mesh_selection.add_nodes(in_box=..., on_plane=...)`.
 
 ### FEM broker — `fem.nodes.select()` / `fem.elements.select()`
@@ -265,30 +278,33 @@ this work. Brief notes here; the full migration text is in the
     `results`' box was already half-open and is unchanged. See the
     [changelog](../changelog.md) for the migration note.
 
-!!! warning "S5 — three formerly-silent paths now raise"
-    Three paths that previously bound to an empty/wrong set now fail
-    loud: `results` with `selection=` on an import-origin
-    (`from_msh`/MPCO/native) `FEMData` raises `RuntimeError`; a
-    loads/masses `__ms__` target with no info raises `KeyError`
-    (instead of silently binding to zero nodes); and `results`
-    element-centroid computation raises `KeyError` on an unknown
-    connectivity node — which also makes the legacy
-    `results.elements.in_box`/`nearest_to`/`on_plane` helpers fail
-    loud. See the [changelog](../changelog.md).
+!!! warning "S5 — three formerly-silent paths fail loud"
+    Three paths that once bound to an empty/wrong set now fail loud.
+    Their **end state** is what matters here:
+
+    - `results` with `selection=` on an import-origin
+      (`from_msh`/MPCO/native) `FEMData` raises `RuntimeError`
+      (already loud on main; locked by a characterization pin).
+    - `results` element-centroid computation raises `KeyError` on an
+      unknown connectivity node — which also makes the legacy
+      `results.elements.in_box`/`nearest_to`/`on_plane` helpers fail
+      loud. This fix already merged separately (it is **not**
+      introduced by this docs change).
+    - A loads/masses `__ms__` target with no info raises `KeyError`
+      instead of silently binding to zero nodes. **This** is the only
+      code behavior shipping alongside these docs.
+
+    See the [changelog](../changelog.md).
 
 ## Planned / not yet available
 
-Tracked follow-ups — **not** yet shipped; do not rely on them:
+Tracked follow-up — **not** yet shipped; do not rely on it:
 
 - **Results sub-composite `.select()`** — `results.nodes` and
   `results.elements` have `.select()`, but the five element
   sub-composites (`gauss`, `fibers`, `layers`, `line_stations`,
   `springs`) do **not** yet. Planned as a uniform per-terminal
   kwarg-forwarding follow-on.
-- **`g.mesh_selection.select()` name-seed** — today only `ids=` (or
-  the full universe) seeds a live-mesh chain. Seeding by an existing
-  set name / gmsh PG / label is planned (it must reuse the locked
-  resolver, never re-implement it).
 
 !!! note "Chained selections are query-only by design"
     There is **no** `.save_as(name)` on any chain. Chained selections
