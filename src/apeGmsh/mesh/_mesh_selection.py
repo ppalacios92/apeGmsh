@@ -1,8 +1,10 @@
 """``MeshSelection`` — the v2 point-family terminal over FEM ids.
 
 selection-unification-v2 P2-I (``docs/plans/selection-unification-v2.md``
-§4/§5 R-v2-2, §6 P2-I, §6.1 STOP-2).  This is the **chain==terminal**
-point-family type the *four* point host hooks return from P2-I onward:
+§4/§5 R-v2-2, §6 P2-I, §6.1 STOP-2) + **P3-K** (§6.2 P3-K +
+``selection-unification-v2-p3k-execmap.md``).  This is the
+**chain==terminal** point-family type the *four* point host hooks
+return from P2-I onward:
 
 * ``fem.nodes.select(...)``        (broker node — was ``NodeChain``)
 * ``fem.elements.select(...)``     (broker element — was ``ElementChain``)
@@ -13,35 +15,47 @@ point-family type the *four* point host hooks return from P2-I onward:
   ``MeshSelectionChain``)
 
 It is a **new leaf** (mirrors ``mesh/_node_chain.py`` exactly): the only
-module-top import is the package-root leaf
-``from .._kernel.chain import SelectionChain`` (+ numpy / stdlib).
-``_kernel.payloads`` and the four legacy chains are imported **deferred**
-inside ``_materialize`` / ``__iter__`` / the engine-delegate factory
-(mirrors ``_node_chain.py:107``), so this module adds exactly **one**
-downward ``("mesh","_kernel","mesh/_mesh_selection.py")`` BASELINE triple
-— the same polarity already frozen, no ``core↔mesh`` edge, no
-deferred→eager flip (``tests/test_import_dag_polarity.py``).
+module-top ``apeGmsh`` imports are the package-root leaves
+``from .._kernel.chain import SelectionChain`` and the pure
+``from .._kernel import spatial`` (``_kernel.payloads`` is imported
+**deferred** inside ``_materialize`` to avoid the
+``FEMData``↔``_mesh_selection`` load cycle, mirroring
+``_node_chain.py:107``).  ``mesh/_mesh_selection.py`` already carries the
+frozen ``("mesh","_kernel","mesh/_mesh_selection.py")`` import-DAG
+BASELINE triple, so the extra ``_kernel.spatial`` edge is the *same
+polarity already frozen* — **no new BASELINE triple**, no ``core↔mesh``
+edge, no deferred→eager flip (``tests/test_import_dag_polarity.py``).
 
-Engine-polymorphism
--------------------
+Engine-polymorphism (P3-K: self-contained, no delegation)
+---------------------------------------------------------
 ``MeshSelection`` is **engine-polymorphic**: it serves the four host
 contexts above and in each behaves *identically* to the legacy chain
-that host previously returned.  Rather than re-implement four copies of
-the per-engine coordinate / centroid / materialise logic (which would
-risk semantic drift), the engine-specific hooks are delegated to a
-freshly-constructed instance of the **matching legacy chain**
+that host previously returned.  Through P2-I this was done by
+delegating each per-engine hook to a freshly-constructed legacy chain
 (``NodeChain`` / ``ElementChain`` / ``ResultChain`` /
-``MeshSelectionChain``), built from the *same* ``(_items, _engine)``.
-Those legacy chains stay defined-and-importable through P2-I (P3 deletes
-them — ``docs/plans/selection-unification-v2.md`` §6 P3).  This makes
-the per-engine behaviour **byte-faithful by construction** (it literally
-calls the legacy code) while ``MeshSelection`` owns the *unified*
-surface: the ratified pair-view ``__iter__`` (HT8 / R3-C, §6.1
-STOP-2(b) Option (i)), the ``.ids`` / ``.coords`` / ``.connectivity`` /
-``.groups()`` accessors, the ``.values(...)`` results read, the
-``.result()`` identity alias, and ``.save_as(name)``.
+``MeshSelectionChain``).  **P3-K collapsed that delegation**: the
+per-engine ``_coords_of`` / centroid / ``_materialize`` bodies are now
+**relocated verbatim into this class** (dispatched on
+:func:`_engine_kind`), and the box / sphere / plane coordinate-mask math
+— which was a *byte-identical* copy in all four chains — lives once in
+the pure :mod:`apeGmsh._kernel.spatial` kernel.  The relocation is a
+**behaviour-INVISIBLE** pure move (cache-attribute names, iteration
+order, fail-loud messages, deferred imports and dtypes are preserved
+character-for-character from the chains), proven by the legacy chains'
+own tests + every ``select(...)`` parity test staying green and the
+four proof files staying byte-unchanged.  The four legacy chain modules
+are left **defined-but-dead** through P3-K (P3-R deletes them — Phase-0
+deferral, ``…-p3k-execmap.md``); ``MeshSelection`` no longer constructs
+or imports them.
 
-Set-algebra is **unaffected** by the pair-view: it is inherited from
+``MeshSelection`` owns the *unified* surface: the ratified pair-view
+``__iter__`` (HT8 / R3-C, §6.1 STOP-2(b) Option (i)), the ``.ids`` /
+``.coords`` / ``.connectivity`` / ``.groups()`` accessors, the
+``.values(...)`` results read (now calling the **retained** spawning
+sub-composite ``host.get(...)`` directly — SC-2), the ``.result()``
+identity alias, and ``.save_as(name)``.
+
+Set-algebra is **unaffected**: it is inherited from
 :class:`~apeGmsh._kernel.chain.SelectionChain` and operates on the
 ``_items`` atoms (node ids / element ids), not on ``__iter__``.
 ``_compatible`` gates by ``type(self)`` (now ``MeshSelection``) and
@@ -55,13 +69,13 @@ Engine dispatch (most-specific attribute first; unambiguous — verified
 at source):
 
 * ``_LiveMeshEngine``   — has ``.ms`` (the ``MeshSelectionSet``)
-  → live-mesh, delegate :class:`MeshSelectionChain`.
+  → live-mesh.
 * ``_ResultChainEngine`` — has ``.host`` + ``.results`` (no ``.ms``)
-  → results, delegate :class:`ResultChain`.
+  → results.
 * ``ElementComposite``  — has ``._groups`` (per-type dict; no
-  ``.ms``/``.host``) → broker element, delegate :class:`ElementChain`.
+  ``.ms``/``.host``) → broker element.
 * ``NodeComposite``     — has ``.coords`` / ``.ids`` (no ``._groups`` /
-  ``.host`` / ``.ms``) → broker node, delegate :class:`NodeChain`.
+  ``.host`` / ``.ms``) → broker node.
 """
 
 from __future__ import annotations
@@ -71,6 +85,14 @@ from typing import Any, Iterator
 import numpy as np
 
 from .._kernel.chain import SelectionChain
+from .._kernel import spatial
+
+#: Engine attribute carrying the sibling ``NodeComposite`` on an
+#: ``ElementComposite`` (set by ``FEMData.__init__``).  Relocated
+#: verbatim from the (now-dead) ``mesh/_elem_chain.py:42`` so the
+#: broker-element centroid wiring point and consumer agree on one
+#: private contract (P3-K invisible relocation).
+NODES_REF_ATTR = "_apegmsh_nodes_ref"
 
 
 # Engine "kind" discriminators (no import of the engine classes — duck
@@ -91,15 +113,26 @@ def _engine_kind(engine: Any) -> str:
     return "node"
 
 
+def _no_engine() -> "RuntimeError":
+    return RuntimeError(
+        "MeshSelection has _engine=None (constructed standalone) — "
+        "it has no host engine to resolve coordinates / a terminal "
+        "against. Build it via fem.nodes.select(...) / "
+        "fem.elements.select(...) / results.<...>.select(...) / "
+        "g.mesh_selection.select(...)."
+    )
+
+
 class MeshSelection(SelectionChain):
     """Daisy-chainable + terminal point-family selection (FEM ids).
 
     Engine-polymorphic across the four point host contexts (broker
-    node / broker element / results / live mesh); behaviour for the
-    engine-specific hooks is delegated verbatim to the matching legacy
-    chain so it is byte-faithful per context (the
-    selection-unification-v2 P2-I invisibility contract).  The
-    *unified* surface (pair-view ``__iter__``,
+    node / broker element / results / live mesh); the engine-specific
+    bodies are relocated verbatim from the four legacy chains (P3-K),
+    so behaviour per context is byte-faithful (the
+    selection-unification-v2 P2-I invisibility contract, carried
+    through the P3-K collapse).  The *unified* surface (pair-view
+    ``__iter__``,
     ``.ids``/``.coords``/``.connectivity``/``.groups()``/``.values()``/
     ``.result()``/``.save_as``) lives here.
     """
@@ -107,60 +140,6 @@ class MeshSelection(SelectionChain):
     FAMILY = "point"
 
     __slots__ = ()
-
-    # ── engine-delegate factory (DEFERRED legacy-chain imports) ──
-    def _delegate(self) -> "SelectionChain":
-        """A fresh legacy chain of the engine-appropriate class.
-
-        Constructed on-demand from this selection's *own*
-        ``(_items, _engine)`` and **never stored** — it exists only to
-        run the legacy per-engine ``_coords_of`` / ``_spatial_*`` /
-        ``_materialize`` / ``.get`` so behaviour is byte-faithful per
-        context.  Imports are **deferred** here (not at module top) so
-        the new leaf keeps its single downward ``_kernel`` edge — the
-        legacy chain modules each import only ``_kernel.chain`` + numpy
-        at load, identical to this module
-        (``tests/test_import_dag_polarity.py`` baseline unchanged).
-        """
-        kind = _engine_kind(self._engine)
-        if kind == "live":
-            from ._mesh_selection_chain import MeshSelectionChain
-            return MeshSelectionChain(self._items, _engine=self._engine)
-        if kind == "result":
-            from ..results._result_chain import ResultChain
-            return ResultChain(self._items, _engine=self._engine)
-        if kind == "element":
-            from ._elem_chain import ElementChain
-            return ElementChain(self._items, _engine=self._engine)
-        if kind == "node":
-            from ._node_chain import NodeChain
-            return NodeChain(self._items, _engine=self._engine)
-        raise RuntimeError(
-            "MeshSelection has _engine=None (constructed standalone) — "
-            "it has no host engine to resolve coordinates / a terminal "
-            "against. Build it via fem.nodes.select(...) / "
-            "fem.elements.select(...) / results.<...>.select(...) / "
-            "g.mesh_selection.select(...)."
-        )
-
-    # ── abstract per-domain hooks → delegate verbatim ───────
-    def _coords_of(self, atoms: tuple) -> np.ndarray:
-        # Delegate must see exactly `atoms` (the chain may call this
-        # with a subset, e.g. from `where`/`nearest_to`); build it on
-        # the requested atoms, not on self._items.
-        d = self._delegate()
-        return d._coords_of(atoms)
-
-    def _spatial_box(self, atoms: tuple, lo, hi, *, inclusive: bool) -> tuple:
-        return self._delegate()._spatial_box(
-            atoms, lo, hi, inclusive=inclusive
-        )
-
-    def _spatial_sphere(self, atoms: tuple, center, radius: float) -> tuple:
-        return self._delegate()._spatial_sphere(atoms, center, radius)
-
-    def _spatial_plane(self, atoms: tuple, point, normal, tol: float) -> tuple:
-        return self._delegate()._spatial_plane(atoms, point, normal, tol)
 
     # ── level discriminator (results / live carry it on the engine) ─
     @property
@@ -176,6 +155,272 @@ class MeshSelection(SelectionChain):
         if kind in ("result", "live"):
             return self._engine.level
         return "element" if kind == "element" else "node"
+
+    # ════════════════════════════════════════════════════════
+    #  Per-engine coordinate access — relocated VERBATIM from the
+    #  four legacy chains (P3-K; behaviour-invisible).  Caches use
+    #  the *same* attribute names on the *same* engine objects the
+    #  chains used, so memoisation behaviour is byte-identical.
+    # ════════════════════════════════════════════════════════
+
+    # ── broker node — verbatim mesh/_node_chain.py:31-45 ────
+    def _row_map_node(self) -> dict:
+        cache = getattr(self._engine, "_apegmsh_chain_idrow", None)
+        if cache is None:
+            ids = np.asarray(self._engine.ids)
+            cache = {int(n): i for i, n in enumerate(ids)}
+            setattr(self._engine, "_apegmsh_chain_idrow", cache)
+        return cache
+
+    def _coords_of_node(self, atoms: tuple) -> np.ndarray:
+        coords = np.asarray(self._engine.coords, dtype=np.float64)
+        rm = self._row_map_node()
+        if not atoms:
+            return np.empty((0, 3), dtype=np.float64)
+        rows = [rm[int(a)] for a in atoms]
+        return coords[rows]
+
+    # ── broker element — verbatim mesh/_elem_chain.py:53-117 ─
+    def _centroid_map_element(self) -> dict:
+        cache = getattr(self._engine, "_apegmsh_elem_centroid", None)
+        if cache is not None:
+            return cache
+
+        nodes = getattr(self._engine, NODES_REF_ATTR, None)
+        if nodes is None:
+            raise RuntimeError(
+                "ElementChain centroids require the sibling "
+                "NodeComposite, which FEMData.__init__ wires onto the "
+                "ElementComposite. This engine is missing it — build "
+                "the chain via fem.elements.select(...) on a FEMData."
+            )
+
+        node_ids = np.asarray(nodes.ids, dtype=np.int64)
+        node_xyz = np.asarray(nodes.coords, dtype=np.float64)
+        id_to_idx = {int(n): i for i, n in enumerate(node_ids)}
+
+        cache = {}
+        for grp in self._engine._groups.values():
+            eids = np.asarray(grp.ids, dtype=np.int64)
+            conn = np.asarray(grp.connectivity, dtype=np.int64)
+            if eids.size == 0:
+                continue
+            for row in range(eids.shape[0]):
+                try:
+                    rows = [id_to_idx[int(n)] for n in conn[row]]
+                except KeyError as e:
+                    raise KeyError(
+                        f"element {int(eids[row])} "
+                        f"({grp.type_name}) references node {e.args[0]} "
+                        f"which is not in the FEM node set — refusing "
+                        f"to compute a corrupted centroid (fail loud)."
+                    ) from None
+                cache[int(eids[row])] = node_xyz[rows].mean(axis=0)
+
+        setattr(self._engine, "_apegmsh_elem_centroid", cache)
+        return cache
+
+    def _coords_of_element(self, atoms: tuple) -> np.ndarray:
+        if not atoms:
+            return np.empty((0, 3), dtype=np.float64)
+        cmap = self._centroid_map_element()
+        try:
+            rows = [cmap[int(a)] for a in atoms]
+        except KeyError as e:
+            raise KeyError(
+                f"element id {e.args[0]} is not in this FEM "
+                f"(no centroid)."
+            ) from None
+        return np.asarray(rows, dtype=np.float64)
+
+    # ── results — verbatim results/_result_chain.py:148-240 ─
+    def _fem(self):
+        fem = getattr(self._engine.results, "_fem", None)
+        if fem is None:
+            raise RuntimeError(
+                "ResultChain spatial / coordinate access requires a "
+                "bound FEMData. Pass fem= when constructing Results, or "
+                "call results.bind(fem)."
+            )
+        return fem
+
+    def _node_row_map_result(self) -> dict:
+        cache = self._engine._apegmsh_rc_node_idrow
+        if cache is None:
+            ids = np.asarray(self._fem().nodes.ids, dtype=np.int64)
+            cache = {int(n): i for i, n in enumerate(ids)}
+            self._engine._apegmsh_rc_node_idrow = cache
+        return cache
+
+    def _centroid_map_result(self) -> dict:
+        cache = self._engine._apegmsh_rc_elem_centroid
+        if cache is not None:
+            return cache
+
+        fem = self._fem()
+        node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)
+        node_xyz = np.asarray(fem.nodes.coords, dtype=np.float64)
+        id_to_idx = {int(n): i for i, n in enumerate(node_ids)}
+
+        cache: dict = {}
+        for type_info in fem.elements.types:
+            ids, conn = fem.elements.resolve(element_type=type_info.name)
+            ids = np.asarray(ids, dtype=np.int64)
+            conn = np.asarray(conn, dtype=np.int64)
+            if ids.size == 0:
+                continue
+            for row in range(ids.shape[0]):
+                try:
+                    rows = [id_to_idx[int(n)] for n in conn[row]]
+                except KeyError as e:
+                    raise KeyError(
+                        f"element {int(ids[row])} ({type_info.name}) "
+                        f"references node {e.args[0]} which is not in "
+                        f"the FEM node set — refusing to compute a "
+                        f"corrupted centroid (fail loud)."
+                    ) from None
+                cache[int(ids[row])] = node_xyz[rows].mean(axis=0)
+
+        self._engine._apegmsh_rc_elem_centroid = cache
+        return cache
+
+    def _coords_of_result(self, atoms: tuple) -> np.ndarray:
+        if not atoms:
+            return np.empty((0, 3), dtype=np.float64)
+        if self._level == "node":
+            coords = np.asarray(self._fem().nodes.coords, dtype=np.float64)
+            rm = self._node_row_map_result()
+            try:
+                rows = [rm[int(a)] for a in atoms]
+            except KeyError as e:
+                raise KeyError(
+                    f"node id {e.args[0]} is not in this FEM "
+                    f"(no coordinate)."
+                ) from None
+            return coords[rows]
+        # element level — centroids (fail-loud)
+        cmap = self._centroid_map_result()
+        try:
+            rows = [cmap[int(a)] for a in atoms]
+        except KeyError as e:
+            raise KeyError(
+                f"element id {e.args[0]} is not in this FEM "
+                f"(no centroid)."
+            ) from None
+        return np.asarray(rows, dtype=np.float64)
+
+    # ── live mesh — verbatim mesh/_mesh_selection_chain.py:171-257 ─
+    def _live_nodes(self) -> tuple[np.ndarray, np.ndarray]:
+        return self._engine.ms._get_mesh_nodes()
+
+    def _node_row_map_live(self) -> dict:
+        cache = self._engine._apegmsh_lm_node_idrow
+        if cache is None:
+            ids, _ = self._live_nodes()
+            cache = {int(n): i for i, n in enumerate(ids)}
+            self._engine._apegmsh_lm_node_idrow = cache
+        return cache
+
+    def _centroid_map_live(self) -> dict:
+        cache = self._engine._apegmsh_lm_elem_centroid
+        if cache is not None:
+            return cache
+
+        ms = self._engine.ms
+        dim = self._engine.dim
+        node_ids, node_xyz = ms._get_mesh_nodes()
+        id_to_idx = {int(n): i for i, n in enumerate(node_ids)}
+        elem_ids, conn = ms._get_mesh_elements(dim)
+        elem_ids = np.asarray(elem_ids, dtype=np.int64)
+        conn = np.asarray(conn, dtype=np.int64)
+
+        cache: dict = {}
+        for row in range(elem_ids.shape[0]):
+            try:
+                rows = [id_to_idx[int(n)] for n in conn[row] if n >= 0]
+            except KeyError as e:
+                raise KeyError(
+                    f"element {int(elem_ids[row])} (dim={dim}) "
+                    f"references node {e.args[0]} which is not in the "
+                    f"live mesh node set — refusing to compute a "
+                    f"corrupted centroid (fail loud)."
+                ) from None
+            cache[int(elem_ids[row])] = node_xyz[rows].mean(axis=0)
+
+        self._engine._apegmsh_lm_elem_centroid = cache
+        return cache
+
+    def _coords_of_live(self, atoms: tuple) -> np.ndarray:
+        if not atoms:
+            return np.empty((0, 3), dtype=np.float64)
+        if self._level == "node":
+            _, coords = self._live_nodes()
+            coords = np.asarray(coords, dtype=np.float64)
+            rm = self._node_row_map_live()
+            try:
+                rows = [rm[int(a)] for a in atoms]
+            except KeyError as e:
+                raise KeyError(
+                    f"node id {e.args[0]} is not in the live mesh "
+                    f"(no coordinate)."
+                ) from None
+            return coords[rows]
+        # element level — centroids (fail-loud)
+        cmap = self._centroid_map_live()
+        try:
+            rows = [cmap[int(a)] for a in atoms]
+        except KeyError as e:
+            raise KeyError(
+                f"element id {e.args[0]} is not in the live mesh "
+                f"(dim={self._engine.dim}; no centroid)."
+            ) from None
+        return np.asarray(rows, dtype=np.float64)
+
+    # ── abstract hook: coords of the given atoms (dispatch) ──
+    def _coords_of(self, atoms: tuple) -> np.ndarray:
+        kind = _engine_kind(self._engine)
+        if kind == "node":
+            return self._coords_of_node(atoms)
+        if kind == "element":
+            return self._coords_of_element(atoms)
+        if kind == "result":
+            return self._coords_of_result(atoms)
+        if kind == "live":
+            return self._coords_of_live(atoms)
+        raise _no_engine()
+
+    # ── point-family spatial hooks (one kernel; validation +
+    #    empty-guard order verbatim from the legacy chains) ──
+    def _spatial_box(self, atoms, lo, hi, *, inclusive: bool) -> tuple:
+        if not atoms:
+            return ()
+        c = self._coords_of(atoms)
+        mask = spatial.box_mask(c, lo, hi, inclusive=inclusive)
+        return tuple(a for a, k in zip(atoms, mask) if k)
+
+    def _spatial_sphere(self, atoms, center, radius: float) -> tuple:
+        r = float(radius)
+        if r < 0:
+            raise ValueError(f"radius must be non-negative, got {r}.")
+        if not atoms:
+            return ()
+        c = self._coords_of(atoms)
+        mask = spatial.sphere_mask(c, center, r)
+        return tuple(a for a, k in zip(atoms, mask) if k)
+
+    def _spatial_plane(self, atoms, point, normal, tol: float) -> tuple:
+        t = float(tol)
+        if t < 0:
+            raise ValueError(f"tolerance must be non-negative, got {t}.")
+        n = np.asarray(normal, dtype=np.float64).reshape(3)
+        nn = np.linalg.norm(n)
+        if nn == 0:
+            raise ValueError("normal vector has zero length.")
+        if not atoms:
+            return ()
+        c = self._coords_of(atoms)
+        mask = spatial.plane_mask(c, point, n / nn, t)
+        return tuple(a for a, k in zip(atoms, mask) if k)
 
     # ── unified pair-view __iter__ (HT8 / R3-C; §6.1 STOP-2(b)) ──
     def __iter__(self) -> Iterator[Any]:
@@ -200,15 +445,15 @@ class MeshSelection(SelectionChain):
             for nid, xyz in zip(ids, coords):
                 yield int(nid), xyz
             return
-        # element level — (eid, conn_row).  The legacy element payload
-        # differs by engine and the pair-view follows it byte-faithfully:
+        # element level — (eid, conn_row).  The element payload differs
+        # by engine and the pair-view follows it byte-faithfully:
         #   * broker / results → ``GroupResult`` (iterate its
         #     ``ElementGroup`` blocks, each yielding ``(eid, conn)``);
         #   * live mesh → the flat ``dict`` shape
         #     ``{'element_ids', 'connectivity'}`` (the legacy
         #     ``MeshSelectionChain._materialize`` return) — zip the two
         #     into the same ``(eid, conn_row)`` pair shape.
-        res = self._delegate()._materialize()
+        res = self._materialize()
         if isinstance(res, dict):             # live-mesh element payload
             eids = res["element_ids"]
             conn = res["connectivity"]
@@ -239,7 +484,7 @@ class MeshSelection(SelectionChain):
     def connectivity(self) -> np.ndarray:
         """Connectivity of the selected **elements** (element level).
 
-        Reuses the legacy materialised element payload, so the shape /
+        Reuses the materialised element payload, so the shape /
         homogeneous-vs-mixed behaviour is byte-identical to the legacy
         chain's ``.result()`` for that engine:
 
@@ -253,7 +498,7 @@ class MeshSelection(SelectionChain):
                 "connectivity is element-level only; this selection is "
                 "node-level (use .coords / .ids)."
             )
-        res = self._delegate()._materialize()
+        res = self._materialize()
         if isinstance(res, dict):             # live-mesh element payload
             return np.asarray(res["connectivity"])
         return res.connectivity               # GroupResult.connectivity
@@ -261,11 +506,11 @@ class MeshSelection(SelectionChain):
     def groups(self):
         """The per-type element blocks for an element selection.
 
-        Returns the legacy ``GroupResult`` (broker / results element)
-        — ``list(sel.groups())`` yields the ``ElementGroup`` blocks,
+        Returns the ``GroupResult`` (broker / results element) —
+        ``list(sel.groups())`` yields the ``ElementGroup`` blocks,
         preserving per-type ``element_type`` (needed by the OpenSees
         emitter / beam viewer; R3-B / R-v2-4).  For the live-mesh
-        element engine (whose legacy terminal is a flat dict, not a
+        element engine (whose terminal is a flat dict, not a
         ``GroupResult``) returns that same dict — byte-identical to the
         legacy ``MeshSelectionChain.result()``.
         """
@@ -274,21 +519,24 @@ class MeshSelection(SelectionChain):
                 "groups() is element-level only; this selection is "
                 "node-level."
             )
-        return self._delegate()._materialize()
+        return self._materialize()
 
-    # ── results read — verbatim rename of ResultChain.get ───
+    # ── results read — verbatim ResultChain.get (SC-2: the
+    #    spawning sub-composite reader is RETAINED, not removed) ─
     def values(self, *, component: str, time=None, stage=None, **extra):
         """Read the result slab for the selected ids (results engine).
 
         **Verbatim** behaviour of the legacy ``ResultChain.get`` — it
         forwards ``host.get(ids=list(self._items), component=,
         time=, stage=, **extra)`` to the spawning sub-composite's
-        existing ``.get`` (so the slab type / id-and-value parity is
-        the exact existing reader path).  ``**extra`` is forwarded
-        opaquely (``gp_indices=`` / ``layer_indices=`` for the
-        fibers / layers sub-composites); this method **never names**
-        ``gp_indices`` / ``layer_indices`` — the spawning ``.get``
-        signature stays the single source of truth (R5; the locked
+        **retained** ``.get`` (the typed results reader →
+        ``Results._reader.read_*`` + ``_resolve_*_ids``; SC-2 — only the
+        *chain* ``.values()`` path is the P3-R removal target, the
+        composite reader stays).  ``**extra`` is forwarded opaquely
+        (``gp_indices=`` / ``layer_indices=`` for the fibers / layers
+        sub-composites); this method **never names** ``gp_indices`` /
+        ``layer_indices`` — the spawning ``.get`` signature stays the
+        single source of truth (R5; the locked
         ``test_result_chain_subcomposites`` fail-loud invariant — an
         unknown kwarg fails loud *there*, not silently dropped here).
 
@@ -307,8 +555,13 @@ class MeshSelection(SelectionChain):
                 ".result() / .ids / .coords for the broker / live-mesh "
                 "terminal instead."
             )
-        return self._delegate().get(
-            component=component, time=time, stage=stage, **extra
+        host = self._engine.host
+        return host.get(
+            ids=list(self._items),
+            component=component,
+            time=time,
+            stage=stage,
+            **extra,
         )
 
     # ── persistence — register into the mesh-selection store ─
@@ -357,9 +610,74 @@ class MeshSelection(SelectionChain):
         ms.add(dim, self.ids, name=name)
         return self
 
-    # ── terminal — the level/engine-appropriate legacy payload ─
+    # ── terminal — the level/engine-appropriate payload ─────
     def result(self):
         return self._materialize()
+
+    # ── per-engine _materialize — relocated VERBATIM from the
+    #    four legacy chains' _materialize (P3-K invisible) ───
+    def _materialize_node(self):
+        # verbatim mesh/_node_chain.py:90-112
+        from .FEMData import NodeResult  # deferred — avoids load cycle
+
+        atoms = self._items
+        ids = np.asarray(atoms, dtype=np.int64)
+        coords = self._coords_of(atoms)
+        return NodeResult(ids, coords)
+
+    def _materialize_element(self):
+        # verbatim mesh/_elem_chain.py:166-200 (iterates
+        # self._engine._groups.values() in insertion order — m4)
+        from ._element_types import ElementGroup, GroupResult  # deferred
+
+        keep = set(int(a) for a in self._items)
+        result_groups: list = []
+        for grp in self._engine._groups.values():
+            gids = np.asarray(grp.ids, dtype=np.int64)
+            mask = np.isin(gids, list(keep))
+            if not mask.any():
+                continue
+            result_groups.append(
+                ElementGroup(
+                    element_type=grp.element_type,
+                    ids=grp.ids[mask],
+                    connectivity=grp.connectivity[mask],
+                )
+            )
+        return GroupResult(result_groups)
+
+    def _materialize_result(self):
+        # verbatim results/_result_chain.py:317-330
+        raise RuntimeError(
+            "results selection needs .get(component=...): a ResultChain "
+            "identifies node/element ids but a slab read requires a "
+            "component. Use "
+            "results.<nodes|elements>.select(...).<spatial...>"
+            ".get(component=...) instead of .result()."
+        )
+
+    def _materialize_live(self):
+        # verbatim mesh/_mesh_selection_chain.py:312-348
+        atoms = self._items
+        if self._level == "node":
+            ids = np.asarray(atoms, dtype=np.int64)
+            coords = self._coords_of(atoms)
+            return {
+                "tags": ids.astype(object),
+                "coords": np.asarray(coords, dtype=np.float64),
+            }
+        # element level — mask the live (ids, conn) to the selection,
+        # preserving live-mesh row order (matches add_elements storage).
+        ms = self._engine.ms
+        all_ids, all_conn = ms._get_mesh_elements(self._engine.dim)
+        all_ids = np.asarray(all_ids, dtype=np.int64)
+        all_conn = np.asarray(all_conn, dtype=np.int64)
+        keep = set(int(a) for a in atoms)
+        mask = np.array([int(e) in keep for e in all_ids], dtype=bool)
+        return {
+            "element_ids": all_ids[mask].astype(object),
+            "connectivity": all_conn[mask].astype(object),
+        }
 
     def _materialize(self):
         """Identity alias → the legacy per-engine payload (R-v2-2).
@@ -374,4 +692,13 @@ class MeshSelection(SelectionChain):
           (a results selection needs a component) — exactly as the
           legacy ``ResultChain._materialize`` does today.
         """
-        return self._delegate()._materialize()
+        kind = _engine_kind(self._engine)
+        if kind == "node":
+            return self._materialize_node()
+        if kind == "element":
+            return self._materialize_element()
+        if kind == "result":
+            return self._materialize_result()
+        if kind == "live":
+            return self._materialize_live()
+        raise _no_engine()

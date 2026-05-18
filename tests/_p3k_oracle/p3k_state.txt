@@ -1,0 +1,35 @@
+P3-K oracle — recorded state
+============================
+
+Base (verified P3 base, == origin/main): 63a43127856a8807da769cb37d56bc48e9f83189
+P3-K commit: this commit (the one adding this file); resolvable via the
+             P3-K PR. The P3-K change vs the base is exactly 2 code files:
+               src/apeGmsh/mesh/_mesh_selection.py   (modified — _delegate() collapsed)
+               src/apeGmsh/_kernel/spatial.py        (new — pure box/sphere/plane masks)
+
+P3-K invisibility gate (head-verified, env-trap honoured,
+apeGmsh.__file__ under the worktree):
+  - full suite: 5909 passed / 64 skipped / 0 failed (198.47s)
+      == the 5909/64/0 merged-state baseline — ZERO delta.
+  - the 4 proof files byte-unchanged vs base 63a4312 (git diff empty):
+      tests/test_resolution_contract.py
+      tests/test_target_resolution.py        (frozen here: .P3K.frozen)
+      tests/test_pin_resolution_v2.py         (frozen here: .P3K.frozen)
+      tests/test_pin_spatial_v2.py
+  - tests/test_import_dag_polarity.py green; BASELINE UNCHANGED
+      (no triple added/removed — the new _kernel.spatial import rides
+       the already-frozen mesh/_mesh_selection.py -> _kernel triple).
+  - targeted battery 170 passed / 0 failed (4 proof + import-DAG +
+      test_p2i_parity + test_p2g_parity + test_selection_idiom +
+      the 6 legacy chain-specific test files): legacy chains untouched
+      (defined-but-dead through P3-K) AND the collapsed MeshSelection
+      is behaviour-faithful.
+
+Recorded green for the two P3-R-rewrite targets, at P3-K:
+  pytest tests/test_target_resolution.py tests/test_pin_resolution_v2.py
+  -> PASS (covered by the full-suite + targeted-battery runs above).
+
+P3-R contract: see README.md in this directory. The .P3K.frozen copies
+are the byte-exact legacy-asserting versions; P3-R's rewritten tests
+must assert the same concrete expected literals — only the resolution
+call surface (fem.*.get( -> fem.*.select(...)) may change.
