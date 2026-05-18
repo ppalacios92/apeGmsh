@@ -530,6 +530,79 @@ class _ElementGeometryMixin:
             ids=narrowed, component=component, time=time, stage=stage,
         )
 
+    # ------------------------------------------------------------------
+    # Daisy-chainable selection (point family, element level)
+    # ------------------------------------------------------------------
+
+    def select(
+        self,
+        *,
+        pg: str | Iterable[str] | None = None,
+        label: str | Iterable[str] | None = None,
+        selection: str | Iterable[str] | None = None,
+        ids: Iterable[int] | ndarray | None = None,
+        element_type: str | None = None,
+    ):
+        """Start a daisy-chainable element-result selection.
+
+        Shared by every element-level composite that mixes
+        :class:`_ElementGeometryMixin` in — including the five
+        sub-composites ``results.elements.{gauss,fibers,layers,
+        line_stations,springs}`` (``results.elements`` keeps its own
+        behaviourally-equivalent ``select`` — defined on the class, so
+        it wins MRO and is byte-unchanged vs the prior release).
+        Returns a
+        :class:`~apeGmsh.results._result_chain.ResultChain` (point
+        family, element level; spatial verbs operate on element
+        **centroids**) read with a terminal ``.get(component=...)``::
+
+            (results.elements.fibers.select(pg="Cols")
+                 .in_box(lo, hi)
+                 .get(component="fiber_stress", gp_indices=[0]))
+
+        Accepts the **same selectors** as the spawning sub-composite's
+        :meth:`get` plus ``element_type=`` (the same additive narrowing
+        :meth:`in_box` / :meth:`nearest_to` already accept).  No
+        selector seeds every domain element.  Resolution is **not**
+        re-implemented: the seed ids are obtained by delegating verbatim
+        to :meth:`_combine_candidates` (which itself calls the existing
+        :meth:`_SelectionMixin._resolve_element_ids`) — the exact path
+        the element geometry helpers use — so ``select(...).get(...)``
+        is id-for-id the same selection as ``get(...)`` (locked
+        resolution contract preserved).
+
+        The chain terminal forwards the spawning sub-composite's
+        **extra** ``.get`` kwargs too (e.g. ``gp_indices=`` for
+        ``fibers``; ``gp_indices=`` / ``layer_indices=`` for
+        ``layers``), not just the uniform ``component=`` / ``time=`` /
+        ``stage=`` — the sub-composite's own ``.get`` signature stays
+        the single source of truth (an unknown kwarg fails loud there).
+
+        ``ResultChain`` is imported **deferred** (mirrors
+        ``results.elements.select`` / ``mesh/_elem_chain.py``): only the
+        package-root leaf ``apeGmsh._chain`` + numpy, so ``results``
+        stays runtime-clean of ``core``/``mesh`` and the
+        ``tests/test_import_dag_polarity.py`` baseline is unchanged.
+        Element centroids are computed **fail-loud** in ``ResultChain``
+        (an unknown node id raises; never the ``np.clip`` silent
+        substitution ``_element_centroids`` does).
+        """
+        from ._result_chain import ResultChain, engine_for
+
+        seed = self._combine_candidates(
+            pg=pg, label=label, selection=selection, ids=ids,
+            element_type=element_type,
+        )
+        if seed is None:                 # no selector → every domain element
+            fem = _require_fem(
+                self._r, f"{type(self).__name__}.select(...)",
+            )
+            atoms = [int(e) for e in np.asarray(fem.elements.ids)]
+        else:
+            atoms = [int(e) for e in np.asarray(seed)]
+        engine = engine_for(self._r, self, "element")
+        return ResultChain(atoms, _engine=engine)
+
 
 # =====================================================================
 # Nodes
