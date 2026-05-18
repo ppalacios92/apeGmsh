@@ -10,6 +10,7 @@ docs_dir: docs
 exclude_docs: |
   _hooks.py
   __pycache__/
+  api-flows/_embed.py
 
 hooks:
   - docs/_hooks.py
@@ -180,6 +181,7 @@ nav:
           - "Gmsh — API reference": architecture/gmsh_api_reference.md
   - API Reference:
       - Overview: api/index.md
+      - API Flow Atlas: api-flows/index.md
       - Session (apeGmsh): api/session.md
       - Model: api/model.md
       - Parts: api/parts.md
