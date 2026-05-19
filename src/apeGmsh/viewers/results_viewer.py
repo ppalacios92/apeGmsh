@@ -314,9 +314,24 @@ class ResultsViewer:
         self._director = director
 
         # ── FEM scene ───────────────────────────────────────────────
+        # When an effective ``model_h5`` is available (explicit kwarg
+        # or auto-resolved against ``results._path`` for a from_native
+        # results file carrying the OpenSees orientation zone), build
+        # the snapshot through ``ViewerData.from_h5`` so per-element
+        # ``vecxz`` populates ``view.elements._vecxz_by_eid``.
+        # Otherwise the live ``from_fem`` path runs as before and
+        # diagrams degrade to the structural-default orientation
+        # (ADR 0018 INV-11; vecxz_for graceful-degrade contract).
+        # Producer-agnostic — ``apeSees(fem).h5()`` and
+        # ``ModelData(fem).write()`` produce byte-equivalent zones
+        # (ADR 0018 INV-16) so this seam covers both.
         fem = self._results.fem
         assert fem is not None    # validated in __init__
-        scene = build_fem_scene(ViewerData.from_fem(fem))
+        if self._effective_model_h5 is not None:
+            view = ViewerData.from_h5(str(self._effective_model_h5))
+        else:
+            view = ViewerData.from_fem(fem)
+        scene = build_fem_scene(view)
         self._scene = scene
         # PickEngine actor inventory — set on the scene before any
         # diagram attaches so GaussPointDiagram (and future fiber/etc.)
