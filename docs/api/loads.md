@@ -9,13 +9,13 @@ Solver-agnostic load definitions, records, and resolver. Loads are
 Stage 1 — **declare** before meshing. The factory methods on
 `g.loads` (`point`, `point_closest`, `line`, `surface`, `gravity`,
 `body`, `face_load`, `face_sp`) store
-[`LoadDef`][apeGmsh.core.loads.defs.LoadDef] dataclasses describing
+[`LoadDef`][apeGmsh._kernel.defs.loads.LoadDef] dataclasses describing
 intent at the geometry level. The active
 [`pattern`][apeGmsh.core.LoadsComposite.LoadsComposite.pattern]
 context tags every def created inside it.
 
 Stage 2 — **resolve** after meshing.
-[`LoadResolver`][apeGmsh.mesh._load_resolver.LoadResolver] converts each
+[`LoadResolver`][apeGmsh._kernel.resolvers._load_resolver.LoadResolver] converts each
 def to a list of resolved records. Records land on the FEM broker
 according to type:
 
@@ -114,11 +114,11 @@ with apeGmsh(model_name="frame") as g:
 
 ## Base classes
 
-::: apeGmsh.core.loads.defs.LoadDef
+::: apeGmsh._kernel.defs.loads.LoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.mesh.records._loads.LoadRecord
+::: apeGmsh._kernel.records._loads.LoadRecord
     options:
       heading_level: 3
 
@@ -128,11 +128,11 @@ Concentrated forces and moments — applied either to nodes that
 already exist on a named target, or to the mesh node nearest a
 world coordinate.
 
-::: apeGmsh.core.loads.defs.PointLoadDef
+::: apeGmsh._kernel.defs.loads.PointLoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.loads.defs.PointClosestLoadDef
+::: apeGmsh._kernel.defs.loads.PointClosestLoadDef
     options:
       heading_level: 3
 
@@ -141,19 +141,19 @@ world coordinate.
 Length-, area-, or volume-distributed loads. All four accept the
 `reduction` × `target_form` flags described above.
 
-::: apeGmsh.core.loads.defs.LineLoadDef
+::: apeGmsh._kernel.defs.loads.LineLoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.loads.defs.SurfaceLoadDef
+::: apeGmsh._kernel.defs.loads.SurfaceLoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.loads.defs.GravityLoadDef
+::: apeGmsh._kernel.defs.loads.GravityLoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.loads.defs.BodyLoadDef
+::: apeGmsh._kernel.defs.loads.BodyLoadDef
     options:
       heading_level: 3
 
@@ -163,11 +163,11 @@ Face-centroid versions used when you want to apply a centroidal
 force/moment or prescribed motion to a whole face without
 introducing a reference node and a coupling constraint.
 
-::: apeGmsh.core.loads.defs.FaceLoadDef
+::: apeGmsh._kernel.defs.loads.FaceLoadDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.loads.defs.FaceSPDef
+::: apeGmsh._kernel.defs.loads.FaceSPDef
     options:
       heading_level: 3
 
@@ -175,20 +175,20 @@ introducing a reference node and a coupling constraint.
 
 What ends up on the FEM broker after meshing.
 
-::: apeGmsh.mesh.records._loads.NodalLoadRecord
+::: apeGmsh._kernel.records._loads.NodalLoadRecord
     options:
       heading_level: 3
 
-::: apeGmsh.mesh.records._loads.ElementLoadRecord
+::: apeGmsh._kernel.records._loads.ElementLoadRecord
     options:
       heading_level: 3
 
-::: apeGmsh.mesh.records._loads.SPRecord
+::: apeGmsh._kernel.records._loads.SPRecord
     options:
       heading_level: 3
 
 ## Resolver
 
-::: apeGmsh.mesh._load_resolver.LoadResolver
+::: apeGmsh._kernel.resolvers._load_resolver.LoadResolver
     options:
       heading_level: 3
