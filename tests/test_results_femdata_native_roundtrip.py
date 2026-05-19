@@ -140,6 +140,54 @@ def test_mesh_selection_roundtrips(g, tmp_path: Path) -> None:
         )
 
 
+def test_absent_optional_children_do_not_raise(g, tmp_path: Path) -> None:
+    """Reading a /model that lacks the optional physical_groups /
+    labels / mesh_selection subgroups must yield empty structures, not
+    raise.
+
+    Regression: ``read_fem_from_h5`` probed these optional children
+    with ``h5py.Group.get(name)``. For a *missing* name h5py resolves
+    through ``h5o.open``, whose failure path on the manylinux HDF5
+    build reads an uninitialised buffer and raises a
+    non-deterministic ``UnicodeDecodeError`` (passed on Windows, was
+    intermittently red on Linux CI) instead of the ``KeyError`` that
+    ``get`` swallows. The fix probes with ``name in group``
+    (``H5Lexists``), which never opens the object.
+    """
+    g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="box")
+    g.physical.add_volume("box", name="Body")
+    g.mesh.sizing.set_global_size(2.0)
+    g.mesh.generation.generate(dim=3)
+    fem = g.mesh.queries.get_fem_data(dim=3)
+
+    path = tmp_path / "no_optionals.h5"
+    with NativeWriter(path) as w:
+        w.open(fem=fem)
+
+    # Strip every optional child so the read path takes the
+    # absent-child branch for all five probes.
+    with h5py.File(path, "r+") as f:
+        for sub in (
+            "/model/nodes/physical_groups", "/model/nodes/labels",
+            "/model/elements/physical_groups", "/model/elements/labels",
+        ):
+            if sub in f:
+                del f[sub]
+        assert "/model/mesh_selection" not in f
+
+    with NativeReader(path) as r:
+        fem_back = r.fem()
+
+    assert fem_back is not None
+    assert list(fem_back.nodes.physical.get_all()) == []
+    assert list(fem_back.nodes.labels.get_all()) == []
+    assert list(fem_back.elements.physical.get_all()) == []
+    assert list(fem_back.elements.labels.get_all()) == []
+    assert fem_back.mesh_selection is None
+    # Node payload still reconstructs.
+    assert len(fem_back.nodes.ids) == len(fem.nodes.ids)
+
+
 def test_writer_omits_model_when_no_fem(tmp_path: Path) -> None:
     """Writer can be used without a FEMData (raw inspection use case)."""
     path = tmp_path / "no_model.h5"

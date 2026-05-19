@@ -106,22 +106,22 @@ def read_fem_from_h5(group: "h5py.Group") -> "FEMData":
     # Physical groups & labels — separate dicts for nodes and elements,
     # but they share the same source so we read once per side.
     node_pgs = _read_named_groups(
-        nodes_grp.get("physical_groups"),
+        _optional_child(nodes_grp, "physical_groups"),
         node_ids=node_ids, node_coords=node_coords,
         is_element_side=False,
     )
     node_labels = _read_named_groups(
-        nodes_grp.get("labels"),
+        _optional_child(nodes_grp, "labels"),
         node_ids=node_ids, node_coords=node_coords,
         is_element_side=False,
     )
     elem_pgs = _read_named_groups(
-        elem_grp.get("physical_groups"),
+        _optional_child(elem_grp, "physical_groups"),
         node_ids=node_ids, node_coords=node_coords,
         is_element_side=True,
     )
     elem_labels = _read_named_groups(
-        elem_grp.get("labels"),
+        _optional_child(elem_grp, "labels"),
         node_ids=node_ids, node_coords=node_coords,
         is_element_side=True,
     )
@@ -145,7 +145,9 @@ def read_fem_from_h5(group: "h5py.Group") -> "FEMData":
         types=types_meta,
     )
 
-    mesh_selection = _read_mesh_selection(group.get("mesh_selection"))
+    mesh_selection = _read_mesh_selection(
+        _optional_child(group, "mesh_selection")
+    )
 
     return FEMData(
         nodes=nodes, elements=elements, info=info,
@@ -274,6 +276,21 @@ def _subgroup_names(group) -> list[str]:
     if group is None:
         return []
     return [k for k in group.keys() if hasattr(group[k], "keys")]
+
+
+def _optional_child(group, name: str):
+    """Return child ``name`` if present, else ``None``.
+
+    Probes existence with ``name in group`` (the HDF5 ``H5Lexists``
+    link check) rather than ``group.get(name)``. h5py's ``Group.get``
+    resolves a *missing* name through ``h5o.open``, whose failure path
+    on the manylinux HDF5 build reads an uninitialised name buffer and
+    raises a non-deterministic ``UnicodeDecodeError`` instead of the
+    ``KeyError`` ``get`` would swallow — green on Windows, intermittently
+    red on Linux CI depending on heap state. ``in`` never opens the
+    object, so absent optional children are safe on every platform.
+    """
+    return group[name] if name in group else None
 
 
 def _read_named_groups(
