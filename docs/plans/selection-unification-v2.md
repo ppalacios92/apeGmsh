@@ -630,16 +630,32 @@ touched. **Record the P3-K oracle run** (`tests/_p3k_oracle/`: serialize
 the legacy-surface outputs P3-R proof-rewrites verify against). P3-K
 execution must first re-confirm at source that no chain imports
 `_mesh_filters` (verified Phase-0: only `MeshSelectionSet.py:35`).
-Rollback: revert the 2-file diff. Severs SC-1/SC-2/SC-4/SC-5/SC-6
-runtime entanglement + the structural half of HT7 (the file deletion
-that *closes* them is P3-R).
+Rollback: revert the 2-file diff. Severs SC-1/SC-2/SC-4 runtime
+entanglement (+ the SC-6 collapse + the structural half of HT7); the
+file deletion that *closes* them is P3-R. **SC-5's
+`ElementComposite.select`→`self.get` knot (`FEMData.py:962-973`) is
+NOT severed by P3-K** — P3-K's invisible 2-file scope cannot/should not
+touch `FEMData.py`; SC-5 is **removal-coupled → resolved in P3-R**
+(§6.3 M-STOP-1, head-verified at source).
 
 ### P3-R — full removal + caller migration (BREAKING; gated; own PR)
 
 Gated precondition: P3-K shipped & green; **FRESH zero-PROD-caller
-census re-run** (ripgrep-backed, not `git grep -E` — SC-10); **a
-committed P3-R caller-migration artifact authored** (RED/BLUE m6 — see
-§6.3; the "pre-flight §2 map" is NOT a committed artifact). Hard-remove
+census re-run** (ripgrep-backed, not `git grep -E` — SC-10); **the
+committed P3-R caller-migration contract
+`selection-unification-v2-p3r-callers.md` authored & owner-reviewed**
+(RED/BLUE m6; supersedes the ephemeral "pre-flight §2 map"). That
+contract's **§0 M-STOP-1/2/3 + M-MINOR-a/b + M-CORRECTION are mandatory
+same-commit P3-R actions** the prose below under-specified — in
+particular **M-STOP-1**: factor a private
+`FEMData._filtered_groups(...)` and rewire `ElementComposite.select`'s
+aux-branch (`FEMData.py:962-973`) off `self.get` **before/with** the
+`get` deletion (else `fem.elements.select(element_type=|dim=|partition=)`
+— the migration target — breaks); **M-STOP-2**: delete
+`core/Model.py:89-90` (eager `SelectionComposite` instantiation);
+**M-STOP-3**: rewire all **3** `fem.elements.resolve` sites
+(`_mesh_selection.py:267`, `_composites.py:139,264`) via direct
+per-type group iteration. Hard-remove
 (no shim/alias — R-v2-1): the **public exports** `viz/__init__.py:2,4`
 + `apeGmsh/__init__.py:79,187-188` (the **classes stay defined** —
 `viz.Selection` = retained viewer pick-result type per SC-8;
