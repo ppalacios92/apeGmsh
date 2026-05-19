@@ -12,14 +12,14 @@ Stage 1 — **declare** before meshing. The four factories on
 [`line`][apeGmsh.core.MassesComposite.MassesComposite.line],
 [`surface`][apeGmsh.core.MassesComposite.MassesComposite.surface],
 [`volume`][apeGmsh.core.MassesComposite.MassesComposite.volume])
-store [`MassDef`][apeGmsh.core.masses.defs.MassDef] dataclasses on
+store [`MassDef`][apeGmsh._kernel.defs.masses.MassDef] dataclasses on
 geometric targets.
 
 Stage 2 — **resolve** after meshing.
-[`MassResolver`][apeGmsh.mesh._mass_resolver.MassResolver] converts each
+[`MassResolver`][apeGmsh._kernel.resolvers._mass_resolver.MassResolver] converts each
 def to per-node contributions, then the composite **accumulates**
 contributions across overlapping defs so each node ends up with at
-most one [`MassRecord`][apeGmsh.mesh.records._masses.MassRecord]. Records
+most one [`MassRecord`][apeGmsh._kernel.records._masses.MassRecord]. Records
 land on `fem.nodes.masses` as a `MassSet` (an iterable of
 `MassRecord` with `total_mass()` / `by_node()` helpers — see
 [FEM Broker](fem.md)).
@@ -113,34 +113,34 @@ with apeGmsh(model_name="frame") as g:
 
 ## Definitions
 
-::: apeGmsh.core.masses.defs.MassDef
+::: apeGmsh._kernel.defs.masses.MassDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.masses.defs.PointMassDef
+::: apeGmsh._kernel.defs.masses.PointMassDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.masses.defs.LineMassDef
+::: apeGmsh._kernel.defs.masses.LineMassDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.masses.defs.SurfaceMassDef
+::: apeGmsh._kernel.defs.masses.SurfaceMassDef
     options:
       heading_level: 3
 
-::: apeGmsh.core.masses.defs.VolumeMassDef
+::: apeGmsh._kernel.defs.masses.VolumeMassDef
     options:
       heading_level: 3
 
 ## Resolved record
 
-::: apeGmsh.mesh.records._masses.MassRecord
+::: apeGmsh._kernel.records._masses.MassRecord
     options:
       heading_level: 3
 
 ## Resolver
 
-::: apeGmsh.mesh._mass_resolver.MassResolver
+::: apeGmsh._kernel.resolvers._mass_resolver.MassResolver
     options:
       heading_level: 3
