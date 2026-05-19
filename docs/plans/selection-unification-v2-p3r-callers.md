@@ -212,6 +212,51 @@ them.
   capture+structural-derivation freeze pattern. Cross-ref:
   `test_pin_spatial_v2.py:21-25` (the in-repo P3-S charter);
   `selection-unification-v2.md` §6.2 P3-S note + §7 touch (2026-05-19).
+- **M-CORRECTION-P4 (2026-05-19 — head-resolvable, owner-INFORMED;
+  same class as M-CORRECTION-P3S; NOT owner-re-ratified — every item
+  resolves by the repo's own documented rules).** Read-only pre-flight
+  census + head re-verification at HEAD (P3-R merged + P3-S). The
+  prompt's P4 scope (A–G) is materially under-scoped; corrected
+  worklist + STOP-conditions:
+  - **WORKLIST (F-1, FATAL scope miss):** P4-A is NOT src docstrings
+    only. Also: `docs/api/selection.md` (mkdocs nav `mkdocs.yml:196`;
+    `mkdocstrings:96`) — table `:27-32` has build-breaking dead
+    autorefs into the 5 deleted chain modules; `:14-15` teaches removed
+    APIs as live → **rewrite to the v2 idiom + the migration/gap
+    section**. Sweep the other `docs/api/*.md` (mostly `:::` stubs that
+    inherit the src-docstring rot). Rewrite `internal_docs/
+    guide_selection.md`, `guide_selection_chain.md`, `guide_queries.md`,
+    `MIGRATION_v1.md`. Rewrite `.claude/skills/apegmsh-helper/SKILL.md`
+    selection sections (§1.3/§1.4/§7/§8/§9 + the "old selection methods
+    still work" block — entirely false). `.github/workflows/docs.yml`
+    `mkdocs gh-deploy`s on merge to `main` → fixing the published lie
+    is correctness-mandatory.
+  - **ADR (S-2):** 0015 lives at `src/apeGmsh/opensees/architecture/
+    decisions/0015-…md` (NO `docs/adr/`); Status "Phase P2-I"; stale.
+    `decisions/README.md:7-8` = **append-only**. → add **ADR 0016**
+    (v2-complete; classes RETAINED per R-v2-8/SC-8; both gaps) + a
+    README index row; leave 0015 as history.
+  - **STOP (S-1, sole suite tripwire):** `from_geometric` in
+    `MeshSelectionSet.py` `_seed_ids_by_name` `KeyError` (≈`:498-506`)
+    is pinned by `tests/test_mesh_selection_chain_name_seed.py:227`
+    (head-verified the only such pinned token suite-wide). **Leave
+    `MeshSelectionSet.py` byte-untouched.** No `--doctest-modules`
+    (`pyproject.toml:65`) → all other docstring fixes are suite-safe.
+  - **Migration table (head-owned):** state `add_*`→`.select(...).
+    save_as` is live-engine-only (+ retained `add(dim,ids,name=)`);
+    "`results.*.get(component=)` removed" = chain-`.values()`-only (the
+    typed reader is RETAINED, the successor). Gaps: SC-12 + the
+    `SelectionComposite.select_*` filter grammar (no `EntitySelection`
+    successor; `viz.Selection.filter()` is viewer-pick-only, NOT a
+    `g.model.select` path). Table + gaps → `docs/api/selection.md` +
+    `docs/changelog.md` BREAKING entry.
+  - **v1 supersede:** banner at the head of `docs/plans/
+    selection-unification.md` only (leave §9 body — live source xrefs
+    it). **§7 inv-1:** finalize past-tense in this plan, not user docs.
+    **Memory:** `MEMORY.md` index line + `project_selection_api_
+    deprecation.md` → program-COMPLETE. Exclude `.claude/_*` scratch +
+    `settings.local.json` from the PR.
+  Cross-ref: `selection-unification-v2.md` §6.2 P4 note (2026-05-19).
 
 ## 1. Zero-PROD-caller census (the P3-R gate) — summary
 

@@ -275,10 +275,10 @@ sequence, see §6.2 SC-1..SC-5.)
 | P1-K  | **SHIPPED** | `adc0c72` | #249 |
 | P2-I  | **SHIPPED** | `caaea3c` | #251 |
 | P2-G  | **SHIPPED** | `b427e5f` | #252 |
-| P3-K  | **NEXT** — invisible delegation-collapse + spatial unify (pins pinned; legacy oracle present) | — | — |
-| P3-R  | pending — BREAKING removal (exports only; classes retained) + ~35-caller migration + `_mesh_filters` flip + dependent-test rewrite; gated on §6.3 caller artifact | — | — |
-| P3-S  | pending — additive new-idiom spatial regression pins | — | — |
-| P4    | pending | — | — |
+| P3-K  | **SHIPPED & MERGED** — invisible delegation-collapse + spatial unify | `a696bb0` | #254 |
+| P3-R  | **SHIPPED & MERGED** — BREAKING removal (exports only; classes retained) + caller migration + `_mesh_filters` flip + dependent-test rewrite | `49033ed` | #255 |
+| P3-S  | **SHIPPED** — additive new-idiom spatial regression pins (4 gaps; M-CORRECTION-P3S) | `44a9087` | #256 |
+| P4    | **IN PROGRESS** — docs / ADR 0016 / skill / memory + the two ratified capability gaps (M-CORRECTION-P4) | — | this PR |
 
 > [!note] Ledger authoritative as of 2026-05-18 (was stale "all pending")
 > **All additive phases shipped and LANDED ON `main`.** Each of the 4 v2
@@ -807,6 +807,101 @@ Document the SC-12 capability gap (no v2 "geometric-selection → named
 mesh-selection" path replacing `from_geometric`/`viz.Selection.
 to_mesh_*`) and the rescoped §7 invariant 1.
 
+> [!note] P4 scope reconciliation (2026-05-19 — M-CORRECTION-P4
+> class: head-resolvable, owner-INFORMED via this note +
+> `selection-unification-v2-p3r-callers.md` §0 M-CORRECTION-P4 + the P4
+> PR body + the memory note; **NOT** owner-re-ratified — every item
+> resolves by following the repo's *own documented rules* (ADR
+> append-only; fix the CI-deployed published lie); reverses no R-v2-x,
+> no phase-structure change). Read-only pre-flight census + head
+> re-verification at HEAD (P3-R merged + P3-S):
+> 1. **P4-A is NOT "src docstrings only" (FATAL prompt-scope miss).**
+>    The worklist also includes the **published mkdocs tree**:
+>    `docs/api/selection.md` (in `mkdocs.yml` nav `:196`; `mkdocstrings`
+>    `:96`) whose type table `:27-32` carries **build-breaking dead
+>    autorefs** into the five P3-R-deleted modules
+>    (`[GeometryChain][apeGmsh.core._selection.GeometryChain]`,
+>    `…_mesh_selection_chain.MeshSelectionChain`, `…_node_chain.NodeChain`,
+>    `…_elem_chain.ElementChain`, `…_result_chain.ResultChain`) and
+>    `:14-15` teaches removed `add_nodes`/`queries.select`/
+>    `selection.select_*` as live; the other `docs/api/*.md`;
+>    `internal_docs/guide_selection.md` / `guide_selection_chain.md` /
+>    `guide_queries.md` / `MIGRATION_v1.md`; and the
+>    `.claude/skills/apegmsh-helper/SKILL.md` selection sections (§1.3/
+>    §1.4/§7/§8/§9 teach the entire removed surface as "unchanged").
+>    `.github/workflows/docs.yml` runs `mkdocs gh-deploy` on push to
+>    `main` (paths incl. `docs/**`,`internal_docs/**`,`src/**`) → the
+>    lie is **republished on merge**; fixing it is correctness-mandatory
+>    (deploy-on-merge, non-strict — not a PR-blocking gate, but a P4
+>    acceptance goal: mkdocs build clean / no dead autorefs).
+> 2. **ADR: add 0016, do NOT edit 0015 (prompt path + verb both wrong).**
+>    ADR 0015 exists at
+>    `src/apeGmsh/opensees/architecture/decisions/0015-label-pg-separate-registries-kernel-leaf.md`
+>    (there is **no** `docs/adr/`), Status "Accepted … Phase P2-I", and
+>    is stale (future-tense chain deletion; cites the P3-R-deleted
+>    `tests/test_p2i_parity.py`). It already covers the ratified
+>    label/PG non-merge + `_kernel` leaf. The ADR
+>    `decisions/README.md:7-8` mandates **append-only** ("write a new
+>    ADR that supersedes it; do not edit history"). P4 therefore adds
+>    **ADR 0016** (v2-completion: chains removed; `core/_selection.
+>    Selection` + `viz.Selection` classes RETAINED per R-v2-8/SC-8;
+>    `MeshSelection` self-contained on `_kernel/spatial.py`; the two
+>    capability gaps) + its README index row; 0015 is left as the
+>    historical P2-I record. "Finalize/extend ADR 0015" is reinterpreted
+>    per the repo's own append-only governance.
+> 3. **The single suite-delta tripwire (STOP — S-1).** Exactly ONE
+>    pinned stale token suite-wide: the `from_geometric` substring in
+>    `src/apeGmsh/mesh/MeshSelectionSet.py` `_seed_ids_by_name`'s
+>    `KeyError` (≈`:498-506`) is asserted by
+>    `tests/test_mesh_selection_chain_name_seed.py:227`
+>    (`assert "from_physical" in msg and "from_geometric" in msg`).
+>    **P4 leaves `MeshSelectionSet.py` byte-untouched** (its stale
+>    strings are already classed "P4/optional cosmetic" by §6.3 §0
+>    RED-2 MINOR; the message legitimately surfaces the *retained*
+>    `from_physical` register-then-select route — the cosmetic gain is
+>    not worth the suite-delta blast radius). No doctest collection
+>    exists (`pyproject.toml:65` addopts has **no** `--doctest-modules`)
+>    → every *other* docstring/string fix is inherently suite-safe; the
+>    §7 zero-suite-delta invariant holds iff `MeshSelectionSet.py`
+>    `:498-506` is untouched.
+> 4. **Re-derive every seed at HEAD; the prompt/§6.2 line refs shifted
+>    (P3-R deletions).** e.g. `core/_selection.Selection` terminal
+>    `:1368`/`:1039`→`:1127`/`:1139`; `Selection` class still `:436`;
+>    `MeshSelectionSet.select` `:511` (docstring `:580-591`),
+>    `from_physical` `:337` (RETAINED). LEAVE the naive-sweep false
+>    positives: `apeGmsh/__init__.py` `SelectionPicker=ModelViewer`
+>    (viewer alias), `viz/__init__.py:3-5` / `core/_model_queries.py:15-21`
+>    / `mesh/_live_engine.py` / `results/_result_engine.py` provenance,
+>    `viewers/ui/_filter_view_tabs.py` `_select_all` (Qt). `GeometryChain`
+>    is **DELETED** → a removed name in docs. The *retained* `Selection`
+>    class's own docstrings that reference removed `queries.select` ARE
+>    stale-fix (fix the reference, keep the class).
+> 5. **The migration table (highest-value artifact — head-owned, RED-checked).**
+>    Two non-obvious rows the prompt under-specifies: (i)
+>    `g.mesh_selection.add_*` → `.select(...).save_as` is **live-engine
+>    only**; the durable explicit-ids successor is the RETAINED
+>    `g.mesh_selection.add(dim,ids,name=)`. (ii) "`results.*.get(
+>    component=)` removed" is the **chain `.values()` path only** — the
+>    typed `results.<sub>.get(component=)` reader is RETAINED and is
+>    *itself* the successor (§3.1(c)). The two gaps confirmed at source:
+>    SC-12 (`from_geometric`/`viz.Selection.to_mesh_*` — both ends
+>    removed, no successor); the `SelectionComposite.select_*` filter
+>    grammar (`labels=`/`kinds=`/`*_range=`/`predicate=`/`exclude_tags=`
+>    /`physical=`/`at_point=`) — `EntitySelection` has **no** filter-
+>    grammar successor (the retained `viz.Selection.filter()` is
+>    viewer-pick-only, **not** a `g.model.select` migration path —
+>    state precisely to avoid implying a false successor). Migration
+>    table + both gaps go in `docs/api/selection.md` (published,
+>    user-first) + a `docs/changelog.md` BREAKING entry; the
+>    engineering record stays here + in ADR 0016.
+> 6. **§7 invariant 1** is already rescoped in §7 — P4 finalizes the
+>    wording past-tense (P3-R + P3-S done); it is an internal
+>    test-invariant and stays in this plan, **not** in user docs.
+> 7. **Memory:** the stale `MEMORY.md` index entry (the P3-resume line)
+>    + `project_selection_api_deprecation.md` → final state, both gaps,
+>    program-COMPLETE. Exclude `.claude/_p3s_*` / `_p4_*` scratch +
+>    `.claude/settings.local.json` from the P4 PR.
+
 ---
 
 ## 7. Invariants that must hold at every commit
@@ -822,7 +917,14 @@ to_mesh_*`) and the rescoped §7 invariant 1.
   P3-R** (its `_mesh_filters`/`add_*` surface removed there), with
   new-idiom regression successors added in P3-S. All four green every
   commit (§6.2 SC-3 — the program-wide "byte-unchanged through P3" was
-  unsatisfiable and is formally rescoped here).
+  unsatisfiable and is formally rescoped here). **FINAL (P4):** the
+  invariant held at every commit — `test_resolution_contract.py`
+  byte-unchanged through P3-K/P3-R/P3-S (and P4, docs-only); the two
+  proof files oracle-equal post-P3-R; `test_pin_spatial_v2.py` is the
+  P3-R SC-11 `_mesh_filters` fail-loud reviewed pin; the P3-S
+  new-idiom successors are `tests/test_pin_spatial_kernel_v2.py`
+  (5 reviewed pins, frozen literals). P4 changed no test
+  (docs/skill/ADR/memory only) so the bar is unchanged.
 - P3-S's "new-idiom regression successors" (the bullet above) are
   pinned **exclusively through `g.mesh_selection.select(...)`** — NOT a
   direct `_kernel.spatial` import (the §6.2 P3-S 2026-05-19
