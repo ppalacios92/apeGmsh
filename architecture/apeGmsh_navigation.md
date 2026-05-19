@@ -42,7 +42,7 @@ end-to-end trace.
 
 Every symbol below hangs off a live `apeGmsh` session instance (`g`).
 `g.*` attributes are created by `_SessionBase._create_composites()` from
-the `_COMPOSITES` tuple in [`_core.py`](../src/apeGmsh/_core.py).
+the `_COMPOSITES` tuple in `_core.py`.
 
 ```mermaid
 graph TD
@@ -126,7 +126,7 @@ apeSees(fem)  apeGmsh.opensees.apeSees                 (post-session)
 ```
 
 Output of the workflow is `fem = g.mesh.queries.get_fem_data(dim=N)` —
-a frozen [`FEMData`](../src/apeGmsh/mesh/FEMData.py) that has its own
+a frozen `FEMData` that has its own
 composite tree: `fem.nodes`, `fem.elements`, `fem.physical`, `fem.labels`,
 `fem.constraints`, `fem.loads`, `fem.masses`, `fem.inspect`. See §4.3
 for the full broker surface.

@@ -16,7 +16,8 @@ returns a chain whose spatial verbs (`in_box`, `in_sphere`, `on_plane`,
     deprecation shim** (project-owner-ratified full removal; no
     backward-compat). `.select()` is now the *only* idiom. See
     [Migration](#migration-from-the-legacy-surface-v2-breaking) and
-    [Known capability gaps](#known-capability-gaps) below. The classes
+    [pending v2 successors](#incomplete-unification-pending-v2-successors)
+    below. The classes
     `core._selection.Selection` and `viz.Selection` are **retained by
     architecture** (terminal-payload / viewer-pick-result types) — but
     only as internal payloads, **not** user entry points; their package
@@ -285,7 +286,7 @@ surface into one idiom), **not** capability reduction. Two capabilities
 came out of the removal without a v2-idiom equivalent. They are **not
 accepted permanent gaps** — they are *incomplete unification* and are
 owed v2-native successors (form / scope / priority planned; see
-[ADR 0017](../../src/apeGmsh/opensees/architecture/decisions/0017-selection-gaps-are-incomplete-unification.md)
+ADR 0017 (`src/apeGmsh/opensees/architecture/decisions/0017-selection-gaps-are-incomplete-unification.md`)
 and `docs/plans/selection-gaps-v3.md`). The earlier "SC-12 accepted
 gap" framing was an over-application of a precedent meant for *redundant*
 removals to a *unique-capability* removal; corrected here by owner

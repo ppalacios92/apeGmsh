@@ -11,6 +11,10 @@ exclude_docs: |
   _hooks.py
   __pycache__/
   api-flows/_embed.py
+  plans/diagram-catalog-comparison.md
+  plans/plotting-comparison.md
+  plans/region-tools-comparison.md
+  internal_docs/plan_session_save.md
 
 hooks:
   - docs/_hooks.py

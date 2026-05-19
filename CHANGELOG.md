@@ -20,10 +20,16 @@ terminal-payload / viewer-pick-result types — **not** user entry
 points; only their exports were dropped.
 
 **Migrate every legacy call** per the old→v2 table and the two
-**known capability gaps** (geometric-selection → named mesh-selection;
-the `SelectionComposite` filter grammar — both have *no* v2 successor)
-in [`docs/api/selection.md`](docs/api/selection.md) and
-[ADR 0016](src/apeGmsh/opensees/architecture/decisions/0016-selection-unification-v2-complete.md).
+**incomplete-unification gaps** in
+[`api/selection.md`](api/selection.md) (ADR 0017 supersedes the earlier
+ADR-0016 "accepted gap" framing — these are *owed v2 successors*, not
+WONTFIX). Gap 1 (geometric-selection → named mesh-selection): the
+capability is **intact** via the retained 2-call route
+(`g.model.select(...).to_physical(name)` then
+`g.mesh_selection.from_physical(...)`) — only the one-call ergonomic
+was lost. Gap 2 (the `SelectionComposite` filter grammar): a genuine
+unique-capability loss for which a **v2-native `EntitySelection`
+successor is owed/planned** (not a resurrected `SelectionComposite`).
 
 Two behavior changes ride along. The `g.mesh_selection` box filter
 moves **closed → half-open** by default to match the results side
@@ -108,10 +114,12 @@ returning a chain that composes fluently:
   (**live-mesh engine only**), or the retained explicit-ids registrar
   `g.mesh_selection.add(dim, ids, name=)` → FEMData snapshot →
   `results(selection=...)`. The removed
-  `g.mesh_selection.add_nodes(..., name=...)` /
-  `from_geometric` two-step has **no** v2 successor for the
-  geometric-selection → named-set round-trip (a documented capability
-  gap — see `docs/api/selection.md`).
+  `g.mesh_selection.add_nodes(..., name=...)` / `from_geometric`
+  two-step keeps its capability via the retained 2-call route
+  (`g.model.select(...).to_physical(name)` →
+  `g.mesh_selection.from_physical(...)`); only the one-call ergonomic
+  was lost (incomplete-unification Gap 1 — see
+  [`api/selection.md`](api/selection.md)).
 
 ### BREAKING — `g.mesh_selection` box is now half-open by default
 

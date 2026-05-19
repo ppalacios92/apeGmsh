@@ -70,7 +70,7 @@ Tier 2  (solver-facing)             "name"            ─► g.physical
 ```
 
 The prefix `_label:` is the central convention.
-[`core/Labels.py:68`](../src/apeGmsh/core/Labels.py) defines
+`core/Labels.py:68` defines
 `LABEL_PREFIX`, and three module-level helpers gate the two tiers:
 
 - `is_label_pg(name)` — True if the PG is Tier 1.
