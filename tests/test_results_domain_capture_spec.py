@@ -134,6 +134,34 @@ class TestIntrospection:
     def test_shorthands_for_modal_empty(self) -> None:
         assert DomainCaptureSpec.shorthands_for("modal") == {}
 
+    def test_where_does_routes_line_diagram(self) -> None:
+        assert DomainCaptureSpec.where_does("axial_force") == (
+            "line_stations",
+        )
+        assert DomainCaptureSpec.where_does("bending_moment_y") == (
+            "line_stations",
+        )
+
+    def test_where_does_routes_nodal(self) -> None:
+        assert DomainCaptureSpec.where_does("displacement_x") == ("nodes",)
+        assert DomainCaptureSpec.where_does("reaction_force_z") == ("nodes",)
+
+    def test_where_does_shared_categories(self) -> None:
+        # FIBER components valid in both fibers and layers
+        assert DomainCaptureSpec.where_does("fiber_stress") == (
+            "fibers", "layers",
+        )
+
+    def test_where_does_state_variable_wildcard(self) -> None:
+        # ``state_variable_*`` routes to the three element-level
+        # material categories per _validate_components_for_category.
+        assert DomainCaptureSpec.where_does("state_variable_42") == (
+            "fibers", "gauss", "layers",
+        )
+
+    def test_where_does_unknown_returns_empty(self) -> None:
+        assert DomainCaptureSpec.where_does("not_a_component") == ()
+
 
 # ---------------------------------------------------------------------------
 # resolve() — D8 enforcement

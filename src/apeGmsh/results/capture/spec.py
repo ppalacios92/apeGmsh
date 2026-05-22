@@ -523,6 +523,38 @@ class DomainCaptureSpec:
 
         return out
 
+    @staticmethod
+    def where_does(component: str) -> tuple[str, ...]:
+        """Return the categories that accept ``component``.
+
+        Reverse of :meth:`components_for` — given a canonical component
+        name, returns the tuple of ``DomainCaptureSpec`` categories
+        where ``spec.<category>(components=component, ...)`` would
+        validate. Empty tuple if no category accepts it.
+
+        Mirrors :func:`_validate_components_for_category` exactly,
+        including the ``state_variable_*`` wildcard which routes to
+        ``gauss`` / ``fibers`` / ``layers`` for any suffix.
+
+        Examples
+        --------
+        >>> DomainCaptureSpec.where_does("axial_force")
+        ('line_stations',)
+        >>> DomainCaptureSpec.where_does("displacement_x")
+        ('nodes',)
+        >>> DomainCaptureSpec.where_does("state_variable_42")
+        ('fibers', 'gauss', 'layers')
+        >>> DomainCaptureSpec.where_does("not_a_component")
+        ()
+        """
+        matches: set[str] = {
+            cat for cat, allowed in _CATEGORY_COMPONENTS.items()
+            if component in allowed
+        }
+        if component.startswith("state_variable_"):
+            matches |= {"gauss", "fibers", "layers"}
+        return tuple(sorted(matches))
+
     # ------------------------------------------------------------------
     # Resolution
     # ------------------------------------------------------------------
