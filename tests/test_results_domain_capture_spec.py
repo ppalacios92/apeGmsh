@@ -282,7 +282,7 @@ class TestFromH5:
         # window (2.7.x / 2.8.x).
         with h5py.File(path, "w") as f:
             meta = f.create_group("meta")
-            meta.attrs["schema_version"] = "2.7.0"
+            meta.attrs["schema_version"] = "2.8.0"
             meta.attrs["ndm"] = ndm
             meta.attrs["ndf"] = ndf
             meta.attrs["snapshot_id"] = "stub-snapshot"

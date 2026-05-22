@@ -31,3 +31,4 @@ earlier one, write a new ADR that supersedes it; do not edit history.
 | [0021](0021-lineage-chain-replaces-snapshot-id.md) | Lineage chain replaces `snapshot_id` binding; warn-not-raise | Accepted (ratifies the May 2026 bind-contract decision) |
 | [0022](0022-mp-constraint-emission-fanout.md) | MP constraint emission via `/neutral/` fan-out — closes the §3.3 deferral | Accepted (widens the `Emitter` Protocol) |
 | [0023](0023-per-zone-schema-versioning.md) | Per-zone schema versioning; two-version reader window | Accepted (replaces single-envelope policy) |
+| [0024](0024-emitter-protocol-widen-region.md) | `Emitter.region` Protocol widening for MPCO `pg=` filtering | Accepted (widens the `Emitter` Protocol; schema 2.8.0 → 2.9.0) |

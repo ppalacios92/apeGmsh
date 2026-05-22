@@ -102,6 +102,7 @@ __all__ = [
     "PatternRecord",
     "DeclContext",
     "RecorderRecord",
+    "RegionRecord",
     "FixRecord",
     "MassRecord",
     # MP constraint records (Phase 7b, ADR 0022, schema 2.7.0)
@@ -399,6 +400,31 @@ class RecorderRecord:
         None`` directly.
         """
         return "declared" if self.decl_context is not None else "typed"
+
+
+# ---------------------------------------------------------------------------
+# Region — tagged collection of nodes/elements (recorder filter target)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class RegionRecord:
+    """One ``region`` call.
+
+    A region is a tagged OpenSees domain object that bundles nodes
+    and/or elements; other commands reference it by tag.  The bridge
+    auto-emits regions from the recorder fan-out so :class:`MPCO`
+    recorders with ``nodes_pg=`` / ``elements_pg=`` selectors can pass
+    ``-R $regTag`` to the MPCO command (per the mpco-recorder skill:
+    MPCO records the whole model unless filtered by a region).
+
+    ``args`` carries the raw OpenSees flag sequence following the tag
+    (``-node n1 n2 ...``, ``-ele e1 e2 ...``, ``-eleOnly``, ``-nodeOnly``,
+    ``-eleRange``, etc.).  Persisted under ``/opensees/regions/`` and
+    replayed verbatim by :class:`OpenSeesModel._replay_into`.
+    """
+
+    tag: int
+    args: tuple[int | float | str, ...]
 
 
 # ---------------------------------------------------------------------------

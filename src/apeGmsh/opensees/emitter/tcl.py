@@ -147,6 +147,11 @@ class TclEmitter:
         # Round-trips the user's declaration label into the deck (INV-2).
         self._lines.append(f"# {name}")
 
+    # -- Regions -------------------------------------------------------------
+
+    def region(self, tag: int, *args: int | float | str) -> None:
+        self._lines.append(_join("region", tag, *args))
+
     # -- Constitutive --------------------------------------------------------
 
     def uniaxialMaterial(

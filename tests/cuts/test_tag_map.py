@@ -26,7 +26,7 @@ def _write_minimal_h5(
     path: Path,
     *,
     groups: dict[str, dict[str, np.ndarray]],
-    schema_version: str = "2.7.0",
+    schema_version: str = "2.8.0",
 ) -> None:
     """Write the smallest h5 that the reference reader accepts.
 
@@ -216,7 +216,7 @@ def test_missing_fem_eids_dataset_raises_helpful(tmp_path: Path) -> None:
     h5 = tmp_path / "model.h5"
     with h5py.File(h5, "w") as f:
         meta = f.create_group("meta")
-        meta.attrs["schema_version"] = "2.7.0"
+        meta.attrs["schema_version"] = "2.8.0"
         em = f.create_group("opensees/element_meta")
         g = em.create_group("forceBeamColumn")
         g.attrs["type"] = "forceBeamColumn"

@@ -341,7 +341,7 @@ def test_envelope_back_compat_preserves_existing_files(tmp_path: Any) -> None:
 
 
 def test_results_schema_version_independent_of_opensees(tmp_path: Any) -> None:
-    """results at 1.1.0 + opensees at 2.7.0 both validate independently.
+    """Each zone's version window is independent of the others.
 
     The results-zone reader window applies to the results version
     only; the opensees-zone window applies to the opensees version
@@ -350,15 +350,15 @@ def test_results_schema_version_independent_of_opensees(tmp_path: Any) -> None:
     reader_neutral = reader_version(NEUTRAL)
     reader_opensees = reader_version(OPENSEES)
     reader_results = reader_version(RESULTS)
-    # File at the current writer versions in every zone (each in its
-    # own two-version window: neutral 2.6.x, opensees 2.7.x–2.8.x,
-    # results 1.0.x–1.1.x).
-    validate_zone_version(
-        SchemaVersion(2, 6, 0), reader_neutral, zone=NEUTRAL,
+    # File at the prior-minor in each zone (still inside the window).
+    neutral_prior = SchemaVersion(
+        reader_neutral.major, reader_neutral.minor - 1, 0,
     )
-    validate_zone_version(
-        SchemaVersion(2, 7, 0), reader_opensees, zone=OPENSEES,
+    opensees_prior = SchemaVersion(
+        reader_opensees.major, reader_opensees.minor - 1, 0,
     )
+    validate_zone_version(neutral_prior, reader_neutral, zone=NEUTRAL)
+    validate_zone_version(opensees_prior, reader_opensees, zone=OPENSEES)
     validate_zone_version(
         SchemaVersion(1, 1, 0), reader_results, zone=RESULTS,
     )
@@ -400,34 +400,35 @@ def test_single_stamp_file_fallback_lineage_is_envelope(tmp_path: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 7b — schema 2.8.0 / /opensees/constraints/
-# (2.7.0 added the group; 2.8.0 renamed the embeddedNode field
-#  embedding_ele → cnode to match the OpenSees ``$Cnode`` vocabulary.)
+# Schema 2.9.0 (ADR 0024) / /opensees/regions/
+# (2.7.0 added /opensees/constraints/; 2.8.0 renamed embeddedNode's
+#  embedding_ele → cnode; 2.9.0 added /opensees/regions/ for MPCO
+#  region-filtered output.)
 # ---------------------------------------------------------------------------
 
 
-def test_opensees_reader_version_is_2_8_0() -> None:
-    """Schema 2.8.0 — embeddedNode field rename (embedding_ele → cnode)."""
-    assert reader_version(OPENSEES) == SchemaVersion(2, 8, 0)
+def test_opensees_reader_version_is_2_9_0() -> None:
+    """Schema 2.9.0 — /opensees/regions/ zone (ADR 0024)."""
+    assert reader_version(OPENSEES) == SchemaVersion(2, 9, 0)
 
 
-def test_two_version_window_at_2_8_accepts_2_7_and_2_8() -> None:
-    """Reader at 2.8.0 accepts 2.7.x and 2.8.x (window: prev minor + current)."""
-    reader = SchemaVersion(2, 8, 0)
+def test_two_version_window_at_2_9_accepts_2_8_and_2_9() -> None:
+    """Reader at 2.9.0 accepts 2.8.x and 2.9.x (window: prev minor + current)."""
+    reader = SchemaVersion(2, 9, 0)
     for patch in (0, 1, 99):
-        validate_zone_version(
-            SchemaVersion(2, 7, patch), reader, zone=OPENSEES,
-        )
         validate_zone_version(
             SchemaVersion(2, 8, patch), reader, zone=OPENSEES,
         )
+        validate_zone_version(
+            SchemaVersion(2, 9, patch), reader, zone=OPENSEES,
+        )
 
 
-def test_two_version_window_at_2_8_refuses_2_6() -> None:
-    """Reader at 2.8.0 refuses 2.6.x (outside window)."""
+def test_two_version_window_at_2_9_refuses_2_7() -> None:
+    """Reader at 2.9.0 refuses 2.7.x (outside window)."""
     with pytest.raises(_PerZoneSchemaError) as exc:
         validate_zone_version(
-            SchemaVersion(2, 6, 0), SchemaVersion(2, 8, 0), zone=OPENSEES,
+            SchemaVersion(2, 7, 0), SchemaVersion(2, 9, 0), zone=OPENSEES,
         )
     assert "too old" in str(exc.value)
 

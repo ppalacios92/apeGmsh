@@ -18,10 +18,14 @@ emits them after the topology + analysis chain so that each ``recorder``
 command sees fully-allocated node and element tags.
 
 The ``pg=`` form (physical-group fan-out into node/element tags) is
-declared on the type signatures for forward-compatibility but
-:meth:`_emit` raises :class:`NotImplementedError` until the Phase 4
-build pipeline materializes the FEM-snapshot lookup. Recorders
-constructed today supply explicit ``nodes=`` / ``elements=`` lists.
+materialized at build time by
+:func:`apeGmsh.opensees._internal.build.emit_recorder_spec`, which
+resolves ``pg`` through the FEM snapshot, rewrites the spec to its
+explicit ``nodes=`` / ``elements=`` form via :func:`dataclasses.replace`,
+and then delegates to ``_emit``. End users drive this through
+``apeSees(fem).tcl(...) / .py(...) / .run()`` — never call ``_emit``
+directly with a ``pg`` spec, which raises :class:`NotImplementedError`
+as a defense-in-depth guard.
 
 OpenSees command shapes
 -----------------------
@@ -90,9 +94,10 @@ class Node(Recorder):
                       -dof d1 d2 ... response
 
     Exactly one of ``nodes=`` (explicit list) or ``pg=`` (physical-group
-    label) must be supplied; the build pipeline (Phase 4) materializes
-    the ``pg=`` form into a concrete node-tag list. Until then, the
-    ``pg=`` path raises :class:`NotImplementedError` from :meth:`_emit`.
+    label) must be supplied. The bridge build pipeline materializes the
+    ``pg=`` form against the FEM snapshot before driving ``_emit``;
+    direct ``_emit`` calls on a ``pg=`` spec raise
+    :class:`NotImplementedError` as a defense-in-depth guard.
 
     Parameters
     ----------
@@ -105,7 +110,8 @@ class Node(Recorder):
         Explicit tuple of node tags. Mutually exclusive with ``pg``.
     pg
         Physical-group label whose nodes the recorder targets.
-        Mutually exclusive with ``nodes``. Build-pipeline only.
+        Mutually exclusive with ``nodes``. Resolved by the bridge
+        build pipeline at emit time.
     dofs
         DOF indices (1-based, OpenSees convention). At least one
         required.
@@ -154,10 +160,15 @@ class Node(Recorder):
         if self.nodes is not None:
             args += ["-node", *self.nodes]
         else:
-            # pg → node fan-out is build-pipeline territory (Phase 4).
+            # pg → node fan-out is owned by ``emit_recorder_spec`` in
+            # ``apeGmsh.opensees._internal.build``; that helper rewrites
+            # the spec via ``dataclasses.replace`` before calling here.
+            # Reaching this branch means someone bypassed the bridge.
             raise NotImplementedError(
-                "Node recorder pg= deferred to Phase 4 build pipeline; "
-                "supply explicit nodes= for now."
+                "Node recorder pg= must be resolved by the bridge "
+                "build pipeline. Drive emission through "
+                "apeSees(fem).tcl()/py()/run() instead of calling "
+                "_emit directly with a pg= spec."
             )
         args += ["-dof", *self.dofs, self.response]
         emitter.recorder("Node", *args)
@@ -183,7 +194,10 @@ class Element(Recorder):
     such as ``("section", "1", "force")``.
 
     Exactly one of ``elements=`` (explicit list) or ``pg=`` (physical-
-    group label) must be supplied; ``pg=`` is deferred to Phase 4.
+    group label) must be supplied. ``pg=`` is resolved against the FEM
+    snapshot by the bridge build pipeline before driving ``_emit``;
+    direct ``_emit`` calls on a ``pg=`` spec raise
+    :class:`NotImplementedError` as a defense-in-depth guard.
 
     Parameters
     ----------
@@ -195,7 +209,8 @@ class Element(Recorder):
         Explicit tuple of element tags. Mutually exclusive with ``pg``.
     pg
         Physical-group label whose elements the recorder targets.
-        Mutually exclusive with ``elements``. Build-pipeline only.
+        Mutually exclusive with ``elements``. Resolved by the bridge
+        build pipeline at emit time.
     dT
         Optional cadence — record only every ``dT`` simulation
         seconds. ``None`` records every step.
@@ -239,10 +254,15 @@ class Element(Recorder):
         if self.elements is not None:
             args += ["-ele", *self.elements]
         else:
-            # pg → element fan-out is build-pipeline territory (Phase 4).
+            # pg → element fan-out is owned by ``emit_recorder_spec`` in
+            # ``apeGmsh.opensees._internal.build``; that helper rewrites
+            # the spec via ``dataclasses.replace`` before calling here.
+            # Reaching this branch means someone bypassed the bridge.
             raise NotImplementedError(
-                "Element recorder pg= deferred to Phase 4 build "
-                "pipeline; supply explicit elements= for now."
+                "Element recorder pg= must be resolved by the bridge "
+                "build pipeline. Drive emission through "
+                "apeSees(fem).tcl()/py()/run() instead of calling "
+                "_emit directly with a pg= spec."
             )
         args += list(self.response)
         emitter.recorder("Element", *args)
@@ -261,6 +281,7 @@ class MPCO(Recorder):
         recorder mpco fname.mpco [-N nodal_responses...]
                                  [-E elem_responses...]
                                  [-T dt $dt | -T nsteps $n]
+                                 [-R $regTag]
 
     The MPCO recorder captures the full response tensor for each
     requested token (no per-DOF selection at write time); STKO /
@@ -270,6 +291,16 @@ class MPCO(Recorder):
     Cadence is selected by exactly one of ``dT`` (seconds) or
     ``nsteps`` (analysis steps). Supplying both raises ``ValueError``;
     supplying neither records every analysis step.
+
+    **Filtering** — MPCO records the whole model by default. To
+    restrict output to a subset of nodes/elements, supply any of
+    ``nodes=`` / ``nodes_pg=`` / ``elements=`` / ``elements_pg=``:
+    the build pipeline auto-emits an OpenSees ``region $tag -node ...
+    -ele ...`` command before the recorder and passes ``-R $tag`` to
+    MPCO. ``nodes=`` is mutually exclusive with ``nodes_pg=``; the
+    same applies to the element pair. When all four are ``None``
+    (the default) MPCO records the whole model and no region is
+    emitted.
 
     Parameters
     ----------
@@ -288,6 +319,30 @@ class MPCO(Recorder):
     nsteps
         Optional step-based cadence (every N analysis steps).
         Mutually exclusive with ``dT``.
+    nodes
+        Explicit tuple of node tags to include in the region filter.
+        Mutually exclusive with ``nodes_pg``.
+    nodes_pg
+        Physical-group label whose nodes the region filter targets.
+        Mutually exclusive with ``nodes``. Resolved by the bridge
+        build pipeline at emit time.
+    elements
+        Explicit tuple of element tags to include in the region
+        filter. Mutually exclusive with ``elements_pg``.
+    elements_pg
+        Physical-group label whose elements the region filter
+        targets. Mutually exclusive with ``elements``. Resolved by
+        the bridge build pipeline at emit time.
+
+    Note
+    ----
+    The bridge does not interpret ``-R``-bearing MPCO arg tails when
+    ``_emit`` is called directly (outside the build pipeline); the
+    ``pg=`` form is materialised by
+    :func:`apeGmsh.opensees._internal.build.emit_recorder_spec`,
+    which resolves selectors, allocates a region tag, emits the
+    region, and replaces the spec via :func:`dataclasses.replace`
+    with explicit ``nodes=``/``elements=`` before driving ``_emit``.
     """
 
     file: str
@@ -295,6 +350,16 @@ class MPCO(Recorder):
     elem_responses: tuple[str, ...] = ()
     dT: float | None = None
     nsteps: int | None = None
+    nodes: tuple[int, ...] | None = None
+    nodes_pg: str | None = None
+    elements: tuple[int, ...] | None = None
+    elements_pg: str | None = None
+    # When the build pipeline materialises the ``*_pg=`` form into a
+    # concrete region, it replays the spec with ``_region_tag=$tag``
+    # and ``nodes=``/``elements=`` populated; ``_emit`` reads
+    # ``_region_tag`` to append ``-R $tag`` to the MPCO command. End
+    # users never set this directly.
+    _region_tag: int | None = None
 
     def __post_init__(self) -> None:
         if not (self.nodal_responses or self.elem_responses):
@@ -307,11 +372,70 @@ class MPCO(Recorder):
                 "MPCO: supply only one of dT or nsteps "
                 f"(got dT={self.dT!r}, nsteps={self.nsteps!r})."
             )
+        if self.nodes is not None and self.nodes_pg is not None:
+            raise ValueError(
+                "MPCO: supply only one of nodes= or nodes_pg= "
+                f"(got nodes={self.nodes!r}, nodes_pg={self.nodes_pg!r})."
+            )
+        if self.elements is not None and self.elements_pg is not None:
+            raise ValueError(
+                "MPCO: supply only one of elements= or elements_pg= "
+                f"(got elements={self.elements!r}, "
+                f"elements_pg={self.elements_pg!r})."
+            )
+        # Reject silent-empty-output asymmetric filter combos.  An
+        # OpenSees ``region`` populated with only ``-node ...`` does NOT
+        # auto-derive elements (``MeshRegion::setNodes`` is one-way; the
+        # reverse ``setElements`` -> nodes IS auto-derived), so MPCO
+        # filtered by a node-only region produces an empty element
+        # stream — a silent runtime bug.  Refuse the combo at
+        # construction time.
+        node_filter = self.nodes is not None or self.nodes_pg is not None
+        elem_filter = (
+            self.elements is not None or self.elements_pg is not None
+        )
+        if (
+            node_filter and not elem_filter and self.elem_responses
+        ):
+            raise ValueError(
+                "MPCO: node-only filter (nodes= or nodes_pg=) cannot be "
+                "combined with elem_responses — the auto-emitted region "
+                "would carry no -ele entries, and OpenSees MeshRegion "
+                "does not auto-derive elements from nodes, so MPCO "
+                "would produce an empty element stream.  Supply "
+                "elements= / elements_pg= (or drop elem_responses)."
+            )
+        if (
+            elem_filter and not node_filter and self.nodal_responses
+        ):
+            # The symmetric case is less dangerous (OpenSees does
+            # auto-derive nodes from elements via the connectivity), but
+            # rejecting it keeps the API contract uniform and forces
+            # the user to be explicit about the nodal scope of the
+            # filter.
+            raise ValueError(
+                "MPCO: element-only filter (elements= or elements_pg=) "
+                "cannot be combined with nodal_responses without an "
+                "explicit nodes= / nodes_pg= — the region's auto-derived "
+                "node set is implicit and varies with element type. "
+                "Supply nodes= / nodes_pg= explicitly (or drop "
+                "nodal_responses)."
+            )
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()
 
     def _emit(self, emitter: "Emitter", tag: int) -> None:
+        # ``pg=`` selectors must be materialised by the build pipeline
+        # before _emit runs; reaching here with one set means someone
+        # bypassed the bridge.
+        if self.nodes_pg is not None or self.elements_pg is not None:
+            raise NotImplementedError(
+                "MPCO nodes_pg=/elements_pg= must be resolved by the "
+                "bridge build pipeline. Drive emission through "
+                "apeSees(fem).tcl()/py()/run() instead of calling "
+                "_emit directly with a pg= spec."
+            )
         args: list[int | float | str] = [self.file]
         if self.nodal_responses:
             args += ["-N", *self.nodal_responses]
@@ -321,6 +445,8 @@ class MPCO(Recorder):
             args += ["-T", "dt", self.dT]
         elif self.nsteps is not None:
             args += ["-T", "nsteps", self.nsteps]
+        if self._region_tag is not None:
+            args += ["-R", self._region_tag]
         emitter.recorder("mpco", *args)
 
 

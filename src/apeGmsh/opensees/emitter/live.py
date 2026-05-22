@@ -106,6 +106,11 @@ class LiveOpsEmitter:
         # so the Protocol shape is uniform across emitters (INV-4).
         del name
 
+    # -- Regions -------------------------------------------------------------
+
+    def region(self, tag: int, *args: int | float | str) -> None:
+        self._ops.region(tag, *args)
+
     # -- Constitutive --------------------------------------------------------
 
     def uniaxialMaterial(
