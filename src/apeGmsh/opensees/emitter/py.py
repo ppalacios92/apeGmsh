@@ -127,6 +127,11 @@ class PyEmitter:
         # Hash-comment line, matching Tcl's ``# {name}`` convention.
         self._lines.append(f"# {name}")
 
+    # -- Regions -------------------------------------------------------------
+
+    def region(self, tag: int, *args: int | float | str) -> None:
+        self._lines.append(_ops_call("region", tag, *args))
+
     # -- Constitutive --------------------------------------------------------
 
     def uniaxialMaterial(

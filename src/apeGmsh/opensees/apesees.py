@@ -419,7 +419,7 @@ class BuiltModel:
             if isinstance(p, Pattern):
                 emit_pattern_spec(p, emitter, tag, self.fem)
             elif isinstance(p, Recorder):
-                emit_recorder_spec(p, emitter, tag, self.fem)
+                emit_recorder_spec(p, emitter, tag, self.fem, tags=tags)
             else:  # pragma: no cover  - unreachable per partition above
                 p._emit(emitter, tag)
 

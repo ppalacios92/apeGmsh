@@ -75,7 +75,7 @@ def test_apesees_h5_bumps_schema_version_to_2_5_0(tmp_path: Path) -> None:
     ops.h5(str(out))
 
     with h5py.File(out, "r") as f:
-        assert f["meta"].attrs["schema_version"] == "2.8.0"
+        assert f["meta"].attrs["schema_version"] == "2.9.0"
 
 
 # --------------------------------------------------------------------- #
@@ -181,6 +181,6 @@ def test_apesees_h5_with_cuts_passes_reference_reader(
     ops.h5(str(out), cuts=[cut])
 
     with h5_reader.open(str(out)) as model:
-        assert model.schema_version == "2.8.0"
+        assert model.schema_version == "2.9.0"
         violations = model.validate()
         assert violations == [], violations

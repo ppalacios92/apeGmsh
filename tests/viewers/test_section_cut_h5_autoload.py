@@ -36,7 +36,7 @@ from apeGmsh.viewers.results_viewer import ResultsViewer
 # --------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------- #
-def _make_minimal_h5(path: Path, schema_version: str = "2.7.0") -> None:
+def _make_minimal_h5(path: Path, schema_version: str = "2.8.0") -> None:
     """Minimum the cuts reader needs: ``/meta/schema_version``."""
     with h5py.File(path, "w") as f:
         meta = f.create_group("meta")
@@ -134,7 +134,7 @@ def test_director_load_cuts_from_h5_on_pre_v4_file_is_empty(
     not "pre-window file" handling.
     """
     path = tmp_path / "pre_v4.h5"
-    _make_minimal_h5(path, schema_version="2.7.0")
+    _make_minimal_h5(path, schema_version="2.8.0")
 
     director = ResultsDirector.__new__(ResultsDirector)
     director._model_h5 = path

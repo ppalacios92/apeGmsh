@@ -416,7 +416,7 @@ def test_domain_capture_from_h5(tmp_path: Path) -> None:
     model_path = tmp_path / "model.h5"
     with h5py.File(model_path, "w") as f:
         meta = f.create_group("meta")
-        meta.attrs["schema_version"] = "2.7.0"
+        meta.attrs["schema_version"] = "2.8.0"
         meta.attrs["ndm"] = 3
         meta.attrs["ndf"] = 6
         meta.attrs["snapshot_id"] = "stub-snapshot"

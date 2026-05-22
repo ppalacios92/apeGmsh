@@ -192,7 +192,7 @@ class TestNodeEmit:
             dofs=(1,),
         )
         e = RecordingEmitter()
-        with pytest.raises(NotImplementedError, match="Phase 4 build"):
+        with pytest.raises(NotImplementedError, match="build pipeline"):
             r._emit(e, tag=1)
 
 
@@ -398,7 +398,7 @@ class TestElementEmit:
             pg="Cols",
         )
         e = RecordingEmitter()
-        with pytest.raises(NotImplementedError, match="Phase 4 build"):
+        with pytest.raises(NotImplementedError, match="build pipeline"):
             r._emit(e, tag=1)
 
 
@@ -435,6 +435,133 @@ class TestMPCOConstruction:
         assert r.elem_responses == ()
         assert r.dT is None
         assert r.nsteps is None
+        # Filter selectors default to None on every channel.
+        assert r.nodes is None
+        assert r.nodes_pg is None
+        assert r.elements is None
+        assert r.elements_pg is None
+        assert r._region_tag is None
+
+    def test_nodes_and_nodes_pg_mutex_raises(self) -> None:
+        with pytest.raises(
+            ValueError, match="supply only one of nodes= or nodes_pg=",
+        ):
+            MPCO(
+                file="run.mpco",
+                nodal_responses=("displacement",),
+                nodes=(1, 2),
+                nodes_pg="Targets",
+            )
+
+    def test_elements_and_elements_pg_mutex_raises(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="supply only one of elements= or elements_pg=",
+        ):
+            MPCO(
+                file="run.mpco",
+                elem_responses=("stresses",),
+                elements=(10,),
+                elements_pg="Critical",
+            )
+
+    def test_nodes_pg_alone_is_legal(self) -> None:
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+        )
+        assert r.nodes_pg == "Targets"
+        assert r.nodes is None
+
+    def test_explicit_nodes_alone_is_legal(self) -> None:
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement",),
+            nodes=(5, 6, 7),
+        )
+        assert r.nodes == (5, 6, 7)
+        assert r.nodes_pg is None
+
+    def test_nodes_only_filter_with_elem_responses_raises(self) -> None:
+        # Silent-empty-output guard — a node-only region carries no
+        # -ele entries, and MPCO -R would deliver an empty element
+        # stream. Reject at construction.
+        with pytest.raises(
+            ValueError, match="auto-emitted region would carry no -ele",
+        ):
+            MPCO(
+                file="run.mpco",
+                nodal_responses=("displacement",),
+                elem_responses=("section.force",),
+                nodes_pg="Targets",
+            )
+
+    def test_nodes_only_filter_explicit_ids_with_elem_responses_raises(
+        self,
+    ) -> None:
+        # Same guard, exercised via explicit nodes= path.
+        with pytest.raises(
+            ValueError, match="auto-emitted region would carry no -ele",
+        ):
+            MPCO(
+                file="run.mpco",
+                nodal_responses=("displacement",),
+                elem_responses=("stresses",),
+                nodes=(1, 2, 3),
+            )
+
+    def test_elements_only_filter_with_nodal_responses_raises(self) -> None:
+        # Symmetric guard — auto-derived nodes from elements are
+        # implicit and element-type dependent; force the user to be
+        # explicit.
+        with pytest.raises(
+            ValueError, match="cannot be combined with nodal_responses",
+        ):
+            MPCO(
+                file="run.mpco",
+                nodal_responses=("displacement",),
+                elem_responses=("section.force",),
+                elements_pg="Critical",
+            )
+
+    def test_nodes_only_filter_without_elem_responses_is_legal(
+        self,
+    ) -> None:
+        # node-only filter is fine as long as only nodal responses are
+        # requested.
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement", "reactionForce"),
+            nodes_pg="Targets",
+        )
+        assert r.nodes_pg == "Targets"
+        assert r.elem_responses == ()
+
+    def test_elements_only_filter_without_nodal_responses_is_legal(
+        self,
+    ) -> None:
+        # element-only filter is fine as long as only element
+        # responses are requested.
+        r = MPCO(
+            file="run.mpco",
+            elem_responses=("section.force",),
+            elements_pg="Critical",
+        )
+        assert r.elements_pg == "Critical"
+        assert r.nodal_responses == ()
+
+    def test_both_filters_with_both_response_types_is_legal(self) -> None:
+        # The fully-symmetric case the canonical LHS workflow uses.
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement",),
+            elem_responses=("section.force",),
+            nodes_pg="Targets",
+            elements_pg="Critical",
+        )
+        assert r.nodes_pg == "Targets"
+        assert r.elements_pg == "Critical"
 
     def test_minimal_elem_only(self) -> None:
         r = MPCO(file="run.mpco", elem_responses=("stresses",))
@@ -559,6 +686,34 @@ class TestMPCOEmit:
         e = RecordingEmitter()
         r._emit(e, tag=1)
         assert "-T" not in e.calls[0][1]
+
+    def test_emit_with_region_tag_appends_R_flag(self) -> None:
+        # _region_tag is set by the build pipeline after region emission;
+        # _emit just forwards it onto the MPCO command tail.
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement",),
+            nodes=(5, 6),
+            _region_tag=42,
+        )
+        e = RecordingEmitter()
+        r._emit(e, tag=33)
+        args = e.calls[0][1]
+        assert "-R" in args
+        r_idx = args.index("-R")
+        assert args[r_idx + 1] == 42
+
+    def test_pg_path_raises_not_implemented(self) -> None:
+        # Defense-in-depth — calling _emit directly with a pg= selector
+        # must raise; build pipeline is the only legal driver.
+        r = MPCO(
+            file="run.mpco",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+        )
+        e = RecordingEmitter()
+        with pytest.raises(NotImplementedError, match="build pipeline"):
+            r._emit(e, tag=1)
 
 
 class TestMPCOContract:

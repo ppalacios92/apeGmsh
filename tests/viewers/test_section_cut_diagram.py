@@ -43,7 +43,7 @@ from tests.conftest import _open_model_from_h5
 def _write_minimal_h5(
     path: Path, *, ops_to_fem: dict[int, int],
     type_token: str = "forceBeamColumn",
-    schema_version: str = "2.7.0",
+    schema_version: str = "2.8.0",
 ) -> None:
     ids = np.array(list(ops_to_fem.keys()), dtype=np.int64)
     fem_eids = np.array(list(ops_to_fem.values()), dtype=np.int64)

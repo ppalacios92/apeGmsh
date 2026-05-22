@@ -33,6 +33,13 @@ declaring ``g.constraints.rigid_diaphragm(...)`` /
 gained an ``ndf=`` kwarg on :meth:`node` (additive, default ``None``)
 to express the per-node DOF override used for the 6-DOF phantom nodes
 in mixed-ndf models.
+
+**Architecture event — ADR 0024 (late-May 2026).** The Protocol was
+widened with one new method (:meth:`region`) so the MPCO recorder can
+filter its output via OpenSees ``region $tag -node ... -ele ...`` +
+``-R $tag``.  Auto-emitted by the build pipeline when
+``ops.recorder.MPCO(nodes_pg=..., elements_pg=...)`` is declared.
+Schema bumped 2.7.0 → 2.8.0 for the new ``/opensees/regions/`` zone.
 """
 from __future__ import annotations
 
@@ -126,6 +133,17 @@ class Emitter(Protocol):
     def load(self, tag: int, *forces: float) -> None: ...
     def eleLoad(self, *args: int | float | str) -> None: ...
     def sp(self, tag: int, dof: int, value: float) -> None: ...
+
+    # -- Regions ---------------------------------------------------------
+    # ``region`` declares a named OpenSees region (a tagged collection of
+    # nodes and/or elements) that other commands can reference. Today
+    # the bridge emits it from the recorder fan-out to filter MPCO
+    # output via ``-R $regTag`` (per the mpco-recorder skill: MPCO
+    # records the whole model unless an explicit region filter is
+    # supplied). The ``args`` tail carries the raw OpenSees flag
+    # sequence (``-node n1 n2 ...``, ``-ele e1 e2 ...``, ``-eleOnly``,
+    # ``-nodeOnly``, ``-eleRange``, etc.) — see the OpenSees manual.
+    def region(self, tag: int, *args: int | float | str) -> None: ...
 
     # -- Recorders -------------------------------------------------------
     def recorder(self, kind: str, *args: int | float | str) -> None: ...

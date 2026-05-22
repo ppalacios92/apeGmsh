@@ -332,7 +332,7 @@ def test_missing_file_marks_error(qapp, director, tmp_path):
 # v4-5 — Source toggle (file vs h5) + h5-cut dropdown
 # =====================================================================
 
-def _make_minimal_h5(path, *, schema_version="2.7.0"):
+def _make_minimal_h5(path, *, schema_version="2.8.0"):
     import h5py
     with h5py.File(path, "w") as f:
         meta = f.create_group("meta")

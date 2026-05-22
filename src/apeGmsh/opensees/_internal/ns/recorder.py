@@ -248,11 +248,19 @@ class _RecorderNS(_BridgeNamespace):
         elem_responses: tuple[str, ...] = (),
         dT: float | None = None,
         nsteps: int | None = None,
+        nodes: tuple[int, ...] | None = None,
+        nodes_pg: str | None = None,
+        elements: tuple[int, ...] | None = None,
+        elements_pg: str | None = None,
     ) -> MPCO:
         """Construct + register a ``recorder mpco``.
 
         At least one of ``nodal_responses`` or ``elem_responses`` must
-        be non-empty; supplying both ``dT`` and ``nsteps`` raises. See
+        be non-empty; supplying both ``dT`` and ``nsteps`` raises.
+        ``nodes=`` / ``nodes_pg=`` and ``elements=`` / ``elements_pg=``
+        are pairwise mutex; supplying any of the four triggers
+        auto-emission of an OpenSees ``region`` plus ``-R $tag`` on
+        the MPCO line at build time. See
         :class:`apeGmsh.opensees.recorder.MPCO` for the full parameter
         contract.
         """
@@ -263,6 +271,10 @@ class _RecorderNS(_BridgeNamespace):
                 elem_responses=elem_responses,
                 dT=dT,
                 nsteps=nsteps,
+                nodes=nodes,
+                nodes_pg=nodes_pg,
+                elements=elements,
+                elements_pg=elements_pg,
             )
         )
 

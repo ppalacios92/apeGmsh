@@ -52,6 +52,7 @@ from ..element.beam_column import (
 )
 from ..pattern.pattern import Plain, _LoadRecord, _SPRecord
 from ..recorder import Element as ElementRecorder
+from ..recorder import MPCO as MPCORecorder
 from ..recorder import Node as NodeRecorder
 from ..recorder import RecorderDeclaration, RecorderRecord
 from ..transform import Corotational, Linear, PDelta
@@ -690,14 +691,25 @@ def emit_recorder_spec(
     emitter: "Emitter",
     tag: int,
     fem: "FEMData",
+    *,
+    tags: "TagAllocator | None" = None,
 ) -> None:
     """Drive a recorder's emit, expanding ``pg=`` to explicit id lists.
 
     For Node / Element recorders the type-system already requires
     exactly-one-of ``pg`` / ``nodes`` (or ``elements``); we resolve the
     ``pg`` form into an in-memory replica with the equivalent explicit
-    list, then drive the replica's ``_emit``. Other recorder kinds
-    (MPCO) have no PG resolution and pass through unchanged.
+    list, then drive the replica's ``_emit``.
+
+    For :class:`MPCO` recorders the OpenSees command takes no explicit
+    node/element list; filtering is done through an OpenSees ``region``
+    referenced by ``-R $regTag``.  When MPCO carries any of
+    ``nodes=`` / ``nodes_pg=`` / ``elements=`` / ``elements_pg=`` we
+    resolve the selectors, allocate a fresh region tag (requires
+    ``tags=``), emit one ``region $tag -node ... -ele ...`` line via
+    :meth:`Emitter.region`, and replace the spec with the materialised
+    explicit-id form plus a populated ``_region_tag`` so ``_emit``
+    appends ``-R $tag`` to the MPCO command.
 
     Phase 9 adds :class:`RecorderDeclaration` dispatch — each record
     is resolved against the FEM, canonical components are translated
@@ -723,7 +735,123 @@ def emit_recorder_spec(
         elem_replaced = replace(spec, pg=None, elements=elem_ids)
         elem_replaced._emit(emitter, tag)
         return
+    if isinstance(spec, MPCORecorder) and (
+        spec.nodes is not None
+        or spec.nodes_pg is not None
+        or spec.elements is not None
+        or spec.elements_pg is not None
+    ):
+        _emit_mpco_with_region(spec, emitter, tag, fem, tags)
+        return
     spec._emit(emitter, tag)
+
+
+def _emit_mpco_with_region(
+    spec: "MPCORecorder",
+    emitter: "Emitter",
+    tag: int,
+    fem: "FEMData",
+    tags: "TagAllocator | None",
+) -> None:
+    """Materialise the filter selectors on an MPCO spec.
+
+    Resolves ``nodes_pg`` / ``elements_pg`` against the FEM, allocates
+    a fresh ``region`` tag from ``tags`` (a TagAllocator must be
+    supplied — the recorder fan-out call site forwards the bridge's
+    allocator), emits the region declaration, and replays ``_emit`` on
+    a clone of the spec with the ``_region_tag`` slot populated so the
+    MPCO command appends ``-R $tag``.
+
+    Raises :class:`BridgeError` when ``tags`` is missing (the bridge
+    always supplies one; tests that drive ``emit_recorder_spec``
+    directly with MPCO filters must pass a fresh
+    :class:`TagAllocator`).
+    """
+    from dataclasses import replace
+
+    if tags is None:
+        raise BridgeError(
+            "MPCO with nodes=/elements=/nodes_pg=/elements_pg= filter "
+            "requires a TagAllocator on emit_recorder_spec(..., tags=); "
+            "the bridge build pipeline supplies one — tests that bypass "
+            "the bridge must pass it explicitly."
+        )
+
+    # Resolve node-side selector.
+    node_ids: tuple[int, ...] = ()
+    if spec.nodes_pg is not None:
+        node_ids = expand_pg_to_nodes(fem, spec.nodes_pg)
+        if not node_ids:
+            raise BridgeError(
+                f"MPCO recorder filter: nodes_pg={spec.nodes_pg!r} "
+                "resolved to zero nodes against the FEM snapshot. "
+                "An empty region is rejected by OpenSees at runtime; "
+                "check the PG name spelling and that the PG was "
+                "populated before get_fem_data."
+            )
+    elif spec.nodes is not None:
+        node_ids = tuple(int(n) for n in spec.nodes)
+        if not node_ids:
+            raise BridgeError(
+                "MPCO recorder filter: nodes=() is empty.  An empty "
+                "region is rejected by OpenSees at runtime; supply a "
+                "non-empty tuple or drop the nodes= kwarg."
+            )
+
+    # Resolve element-side selector.
+    elem_ids: tuple[int, ...] = ()
+    if spec.elements_pg is not None:
+        elem_ids = tuple(
+            eid for eid, _conn in expand_pg_to_elements(fem, spec.elements_pg)
+        )
+        if not elem_ids:
+            raise BridgeError(
+                f"MPCO recorder filter: elements_pg={spec.elements_pg!r} "
+                "resolved to zero elements against the FEM snapshot. "
+                "An empty region is rejected by OpenSees at runtime; "
+                "check the PG name spelling and that elements were "
+                "registered against it before get_fem_data."
+            )
+    elif spec.elements is not None:
+        elem_ids = tuple(int(e) for e in spec.elements)
+        if not elem_ids:
+            raise BridgeError(
+                "MPCO recorder filter: elements=() is empty.  An "
+                "empty region is rejected by OpenSees at runtime; "
+                "supply a non-empty tuple or drop the elements= kwarg."
+            )
+
+    # Allocate one region tag for this MPCO recorder and emit it.  One
+    # ``region`` command can carry both ``-node`` and ``-ele`` flags;
+    # MPCO's ``-R`` then filters both nodal and element results to the
+    # region's members.  At least one of node_ids / elem_ids is
+    # guaranteed non-empty here (the empty-resolution branches above
+    # raise BridgeError before we get this far, and the caller already
+    # verified at least one selector was supplied).
+    region_tag = tags.allocate("region")
+    region_args: list[int | float | str] = []
+    if node_ids:
+        region_args += ["-node", *node_ids]
+    if elem_ids:
+        region_args += ["-ele", *elem_ids]
+    emitter.region(region_tag, *region_args)
+
+    # Replay the MPCO spec with selectors cleared and region tag set.
+    # Setting ``nodes_pg=None`` / ``elements_pg=None`` is what unlocks
+    # ``_emit`` (the defense-in-depth guard refuses to run with pg=
+    # still present).  ``nodes`` / ``elements`` are preserved on the
+    # record (downstream consumers can inspect them) but ``_emit``
+    # itself ignores them — the region filter is what restricts MPCO
+    # output.
+    materialised = replace(
+        spec,
+        nodes_pg=None,
+        elements_pg=None,
+        nodes=node_ids if node_ids else None,
+        elements=elem_ids if elem_ids else None,
+        _region_tag=region_tag,
+    )
+    materialised._emit(emitter, tag)
 
 
 # ---------------------------------------------------------------------------

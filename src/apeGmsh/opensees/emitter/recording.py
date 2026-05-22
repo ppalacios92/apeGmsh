@@ -145,6 +145,10 @@ class RecordingEmitter:
     def sp(self, tag: int, dof: int, value: float) -> None:
         self.calls.append(("sp", (tag, dof, value), {}))
 
+    # -- Regions ---------------------------------------------------------
+    def region(self, tag: int, *args: int | float | str) -> None:
+        self.calls.append(("region", (tag, *args), {}))
+
     # -- Recorders -------------------------------------------------------
     def recorder(self, kind: str, *args: int | float | str) -> None:
         self.calls.append(("recorder", (kind, *args), {}))

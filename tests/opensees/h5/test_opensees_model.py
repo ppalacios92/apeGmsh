@@ -39,6 +39,7 @@ from apeGmsh.opensees.emitter import h5_reader
 
 from tests.opensees.h5._opensees_model_fixtures import (
     build_frame_with_orientation_fan_out_h5,
+    build_simple_frame_fem,
     build_simple_frame_h5,
 )
 
@@ -178,6 +179,101 @@ def test_materials_typed_carry_steel02_params(tmp_path: Path) -> None:
     assert steel.params[0] == pytest.approx(420e6)
     assert steel.params[1] == pytest.approx(200e9)
     assert steel.params[2] == pytest.approx(0.01)
+
+
+def test_region_round_trip_through_opensees_model(tmp_path: Path) -> None:
+    """ADR 0024 round-trip: ``ops.recorder.MPCO(nodes_pg=..., ...)``
+    auto-emits a ``region`` line; after ``apeSees.h5(p)`` →
+    ``OpenSeesModel.from_h5(p)`` → ``model.build("tcl", q)`` the
+    re-emitted Tcl must STILL carry the same region (verbatim
+    ``tag`` + flag tail) so the MPCO ``-R $tag`` reference resolves.
+
+    Closes the H5 round-trip gap that the red-team architectural
+    audit flagged.
+    """
+    from apeGmsh.opensees import apeSees
+
+    fem = build_simple_frame_fem()
+    ops = apeSees(fem)
+    ops.model(ndm=3, ndf=6)
+    ops.recorder.MPCO(
+        file="run.mpco",
+        nodal_responses=("displacement",),
+        # Use the FEM stub's known node ids — explicit form so the
+        # fixture's PG registration shape doesn't matter for this
+        # smoke test.
+        nodes=(1, 2),
+    )
+
+    out = tmp_path / "with_region.h5"
+    ops.h5(str(out))
+
+    om = OpenSeesModel.from_h5(out)
+    # Round-trip the region records.
+    regions = om.regions()
+    assert len(regions) == 1
+    rec = regions[0]
+    assert rec.tag > 0
+    # The recorded args replay verbatim what the build pipeline emitted.
+    assert "-node" in rec.args
+    flag_idx = rec.args.index("-node")
+    assert rec.args[flag_idx + 1:flag_idx + 3] == (1, 2)
+
+    # Re-emit via build("tcl", out=...) and confirm the region survives.
+    tcl_out = tmp_path / "round_trip.tcl"
+    om.build("tcl", out=str(tcl_out))
+    tcl_lines = tcl_out.read_text().splitlines()
+    region_lines = [ln for ln in tcl_lines if ln.startswith("region ")]
+    assert len(region_lines) == 1
+    # And the recorder's -R references the same tag.
+    mpco_lines = [
+        ln for ln in tcl_lines if "recorder mpco" in ln or "recorder  mpco" in ln
+    ]
+    assert len(mpco_lines) == 1
+    assert f"-R {rec.tag}" in mpco_lines[0]
+
+
+def test_initial_stress_wrapper_h5_round_trip(tmp_path: Path) -> None:
+    """``InitialStress`` wraps a base uniaxial via a tag reference.  The
+    H5 round-trip must persist both materials and preserve the wrapper's
+    ``$base_tag`` reference so a downstream re-emit produces a valid
+    Tcl/Py deck.
+    """
+    from apeGmsh.opensees import apeSees
+    from apeGmsh.opensees.section.fiber import FiberPoint
+
+    fem = build_simple_frame_fem()
+    ops = apeSees(fem)
+    ops.model(ndm=3, ndf=6)
+    base = ops.uniaxialMaterial.Steel02(fy=420e6, E=200e9, b=0.01)
+    wrapped = ops.uniaxialMaterial.InitialStress(
+        base_material=base, sigma_init=0.5 * 250e6,
+    )
+    sec = ops.section.Fiber(
+        GJ=1.0e9,
+        fibers=(FiberPoint(material=wrapped, y=0.0, z=0.0, area=0.01),),
+    )
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    integ = ops.beamIntegration.Lobatto(section=sec, n_ip=5)
+    ops.element.forceBeamColumn(pg="Cols", transf=transf, integration=integ)
+
+    out = tmp_path / "initial_stress.h5"
+    ops.h5(str(out))
+
+    om = OpenSeesModel.from_h5(out)
+    materials = om.materials()
+
+    # Both materials must be present.
+    by_token = {m.type_token: m for m in materials}
+    assert "Steel02" in by_token
+    assert "InitialStressMaterial" in by_token
+
+    base_rec = by_token["Steel02"]
+    wrap_rec = by_token["InitialStressMaterial"]
+
+    # The wrapper's first param is the base material's tag, second is sigma_init.
+    assert wrap_rec.params[0] == base_rec.tag
+    assert float(wrap_rec.params[1]) == pytest.approx(0.5 * 250e6)
 
 
 def test_sections_typed_include_fiber_complex(tmp_path: Path) -> None:

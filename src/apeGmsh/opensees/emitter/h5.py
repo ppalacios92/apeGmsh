@@ -96,6 +96,7 @@ from .._internal.typed_records import (
     PatchRecord as _PatchRecord,
     PatternRecord as _PatternRecord,
     RecorderRecord as _RecorderRecord,
+    RegionRecord as _RegionRecord,
     RigidDiaphragmRecord as _RigidDiaphragmRecord,
     RigidLinkRecord as _RigidLinkRecord,
     SPRecord as _SPRecord,
@@ -190,7 +191,22 @@ __all__ = ["H5Emitter", "SCHEMA_VERSION"]
 #:     no compat shim is required; the two-version reader window
 #:     accepts 2.7.x and 2.8.x files but the column name is
 #:     version-dependent.
-SCHEMA_VERSION: str = "2.8.0"
+#:   * 2.9.0 — ADR 0024 (Emitter Protocol widening for ``region()``):
+#:     the H5 emitter gained the ``/opensees/regions/`` group, with
+#:     one ``region_NNN`` sub-group per :meth:`region` call carrying
+#:     the integer ``tag`` attribute plus a ``params`` dataset
+#:     mirroring the OpenSees flag tail (``-node n1 n2 ...``,
+#:     ``-ele e1 e2 ...``, etc.).  Auto-emitted today by the
+#:     ``MPCO`` recorder fan-out (``nodes_pg=`` / ``elements_pg=``)
+#:     so MPCO output filtered by ``-R $tag`` round-trips through
+#:     ``OpenSeesModel.from_h5(...).build("tcl", ...)``.  Additive —
+#:     old 2.8.x readers ignore the new group and lose only the
+#:     filter round-trip (the MPCO recorder line still carries the
+#:     dangling ``-R`` reference; the bridge raises if the
+#:     referenced region is missing at re-emit time).  Per ADR 0023
+#:     two-version reader window, both 2.8.x and 2.9.x files are
+#:     accepted.
+SCHEMA_VERSION: str = "2.9.0"
 
 
 # Map known time-series type tokens to "is path-bearing": for a Path
@@ -414,6 +430,10 @@ class H5Emitter:
         # BCs (model-level).
         self._fixes: list[_FixRecord] = []
         self._masses: list[_MassRecord] = []
+
+        # Regions (emitted from the recorder fan-out; persisted so MPCO
+        # ``-R $tag`` round-trips through ``OpenSeesModel.from_h5``).
+        self._regions: list[_RegionRecord] = []
 
         # Recorders.
         self._recorders: list[_RecorderRecord] = []
@@ -884,6 +904,9 @@ class H5Emitter:
             decl_context=self._decl_context,
         ))
 
+    def region(self, tag: int, *args: int | float | str) -> None:
+        self._regions.append(_RegionRecord(tag=int(tag), args=tuple(args)))
+
     def recorder_declaration_begin(
         self,
         *,
@@ -1015,6 +1038,7 @@ class H5Emitter:
         self._write_element_meta(f)
         self._write_time_series(f)
         self._write_patterns(f)
+        self._write_regions(f)
         self._write_recorders(f)
         self._write_constraints(f)
         self._write_analysis(f)
@@ -1574,6 +1598,23 @@ class H5Emitter:
         g.create_dataset("sps", data=rows)
 
     # -- Recorders -------------------------------------------------------
+
+    def _write_regions(self, f: Any) -> None:
+        """Persist ``/opensees/regions/region_NN`` groups (one per region call).
+
+        Each group carries the integer ``tag`` attribute plus a
+        ``params`` dataset capturing the raw OpenSees flag tail
+        (``-node n1 n2 ...``, ``-ele e1 e2 ...``, ``-eleOnly``, etc.).
+        Empty when no region was emitted — auto-emit from the recorder
+        fan-out (MPCO ``pg=`` form) is the only producer today.
+        """
+        if not self._regions:
+            return
+        regions = self._ops_group(f).create_group("regions")
+        for idx, rec in enumerate(self._regions):
+            g = regions.create_group(f"region_{idx:03d}")
+            _set_attr(g, "tag", rec.tag)
+            _write_param_array(g, "params", rec.args)
 
     def _write_recorders(self, f: Any) -> None:
         if not self._recorders:
