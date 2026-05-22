@@ -30,7 +30,14 @@ from ._slabs import (
     LineStationSlab,
     NodeSlab,
 )
-from .readers import NativeReader, ResultLevel, ResultsReader, StageInfo, TimeSlice
+from .readers import (
+    EigenMode,
+    NativeReader,
+    ResultLevel,
+    ResultsReader,
+    StageInfo,
+    TimeSlice,
+)
 from .Results import Results
 
 __all__ = [
@@ -40,6 +47,7 @@ __all__ = [
     "NativeReader",
     "ResultLevel",
     "StageInfo",
+    "EigenMode",
     "TimeSlice",
     # Slab dataclasses (returned from .get())
     "NodeSlab",

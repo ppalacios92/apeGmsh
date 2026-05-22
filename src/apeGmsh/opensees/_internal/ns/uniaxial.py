@@ -16,6 +16,7 @@ from ...material.uniaxial import (
     Concrete02,
     ElasticMaterial,
     Hysteretic,
+    InitialStress,
     Steel01,
     Steel02,
 )
@@ -174,3 +175,17 @@ class _UniaxialMaterialNS(_BridgeNamespace):
 
     def ENT(self, *, E: float) -> ENT:
         return self._bridge._register(ENT(E=E))
+
+    def InitialStress(
+        self, *,
+        base_material: UniaxialMaterial,
+        sigma_init:    float,
+    ) -> InitialStress:
+        """``uniaxialMaterial InitialStressMaterial`` — wrap a uniaxial
+        material with a per-fiber initial stress.
+
+        See :class:`InitialStress` for the full contract.
+        """
+        return self._bridge._register(
+            InitialStress(base_material=base_material, sigma_init=sigma_init)
+        )

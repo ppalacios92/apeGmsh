@@ -25,6 +25,7 @@ from apeGmsh.opensees._internal.types import (
     Section,
     UniaxialMaterial,
 )
+from apeGmsh.opensees.section.aggregator import Aggregator
 from apeGmsh.opensees.section.beam import ElasticSection
 from apeGmsh.opensees.section.fiber import Fiber, RectPatch
 from apeGmsh.opensees.section.plate import (
@@ -41,6 +42,7 @@ ALL_SECTIONS: list[type[Section]] = [
     LayeredShell,
     LayeredShellFiberSection,
     Fiber,
+    Aggregator,
 ]
 
 
@@ -74,6 +76,13 @@ def _make_minimal(cls: type[Section]) -> Section:
                     yI=0, zI=0, yJ=1, zJ=1,
                 ),
             )
+        )
+    if cls is Aggregator:
+        # Real UniaxialMaterial (not a MagicMock) — Aggregator's
+        # __post_init__ isinstance-checks the materials.
+        from apeGmsh.opensees.material.uniaxial import ElasticMaterial
+        return Aggregator(
+            materials_by_dof={"P": ElasticMaterial(E=2e11)},
         )
     raise NotImplementedError(
         f"Contract test needs a minimal-instance factory for {cls!r}."

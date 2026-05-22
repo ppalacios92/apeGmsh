@@ -83,7 +83,7 @@ from ._composites import (
     NodeResultsComposite,
 )
 from ._inspect import ResultsInspect
-from .readers._protocol import ResultsReader, StageInfo
+from .readers._protocol import EigenMode, ResultsReader, StageInfo
 
 if TYPE_CHECKING:
     from ..mesh.FEMData import FEMData
@@ -516,6 +516,44 @@ class Results:
             self._derive(stage_id=s.id)
             for s in self._all_stages() if s.kind == "mode"
         ]
+
+    @property
+    def eigen_modes(self) -> list[EigenMode]:
+        """Mode-kind stages as lightweight :class:`EigenMode` snapshots.
+
+        Each :class:`EigenMode` carries only the four scalar fields
+        (``mode_index``, ``eigenvalue``, ``frequency_hz``, ``period_s``)
+        — no file handle, no mode-shape arrays.  Use this when you
+        need the eigenvalue spectrum but not the per-node shapes
+        (e.g. an LTB Mcr probe, a pickle-able report, or a return
+        value from a function whose Results context is about to be
+        closed).
+
+        For the per-node mode shape arrays, use the mode-scoped
+        :class:`Results` from :attr:`modes` instead and query via
+        ``mode.nodes.get(component="displacement_x", ...)``.
+
+        Order matches :attr:`modes`.  For a stable lookup by index,
+        sort: ``sorted(results.eigen_modes, key=lambda m: m.mode_index)``.
+        """
+        out: list[EigenMode] = []
+        for s in self._all_stages():
+            if s.kind != "mode":
+                continue
+            # Mode-kind stages always have these four fields populated
+            # (capture_modes guarantees it); guard with asserts so the
+            # type checker accepts the float coercion.
+            assert s.eigenvalue is not None
+            assert s.frequency_hz is not None
+            assert s.period_s is not None
+            assert s.mode_index is not None
+            out.append(EigenMode(
+                mode_index=int(s.mode_index),
+                eigenvalue=float(s.eigenvalue),
+                frequency_hz=float(s.frequency_hz),
+                period_s=float(s.period_s),
+            ))
+        return out
 
     # ------------------------------------------------------------------
     # Stage-scoped properties (raise on unscoped or wrong-kind access)

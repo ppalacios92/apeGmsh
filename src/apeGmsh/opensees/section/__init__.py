@@ -18,8 +18,9 @@ and are exposed via ``ops.section.<Type>(...)``.
 """
 from __future__ import annotations
 
+from .aggregator import AGGREGATOR_DOF_CODES, Aggregator
 from .beam import ElasticSection
-from .fiber import Fiber, FiberPoint, RectPatch, StraightLayer
+from .fiber import Fiber, FiberPoint, RectPatch, StraightLayer, W_fiber
 from .plate import (
     ElasticMembranePlateSection,
     LayeredShell,
@@ -41,4 +42,8 @@ __all__ = [
     "FiberPoint",
     "RectPatch",
     "StraightLayer",
+    "W_fiber",
+    # aggregator (composes other sections + uniaxials)
+    "Aggregator",
+    "AGGREGATOR_DOF_CODES",
 ]

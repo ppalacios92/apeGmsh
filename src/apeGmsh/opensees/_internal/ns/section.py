@@ -5,14 +5,24 @@ Phase 1C populates this with one typed method per OpenSees section.
 """
 from __future__ import annotations
 
+from typing import Literal, Mapping
+
+from ...section.aggregator import Aggregator
 from ...section.beam import ElasticSection
-from ...section.fiber import Fiber, FiberPoint, RectPatch, StraightLayer
+from ...section.fiber import (
+    Fiber,
+    FiberPoint,
+    RectPatch,
+    StraightLayer,
+    W_fiber as _build_W_fiber,
+)
 from ...section.plate import (
     ElasticMembranePlateSection,
     LayeredShell,
     LayeredShellFiberSection,
     ShellLayer,
 )
+from ..types import Section, UniaxialMaterial
 from ._base import _BridgeNamespace
 
 
@@ -113,5 +123,64 @@ class _SectionNS(_BridgeNamespace):
                 fibers=fibers,
                 layers=layers,
                 GJ=GJ,
+            )
+        )
+
+    # -- Parametric fiber-section builders ------------------------------
+
+    def W_fiber(
+        self,
+        *,
+        bf: float,
+        tf: float,
+        hw: float,
+        tw: float,
+        material: UniaxialMaterial,
+        ny_flange: int = 2,
+        nz_flange: int = 8,
+        ny_web: int = 8,
+        nz_web: int = 1,
+        GJ: float | None = None,
+    ) -> Fiber:
+        """``section Fiber`` for a built-up W shape — parametric builder.
+
+        Convenience wrapper around
+        :func:`apeGmsh.opensees.section.fiber.W_fiber` that
+        auto-registers the resulting :class:`Fiber` with the bridge.
+        See the helper docstring for the full geometric contract.
+        """
+        return self._bridge._register(
+            _build_W_fiber(
+                bf=bf, tf=tf, hw=hw, tw=tw,
+                material=material,
+                ny_flange=ny_flange, nz_flange=nz_flange,
+                ny_web=ny_web, nz_web=nz_web,
+                GJ=GJ,
+            )
+        )
+
+    # -- Aggregator (composes other sections + uniaxials) ---------------
+
+    def Aggregator(
+        self,
+        *,
+        materials_by_dof: Mapping[
+            Literal["P", "Vy", "Vz", "T", "My", "Mz"],
+            UniaxialMaterial,
+        ],
+        base_section: Section | None = None,
+    ) -> Aggregator:
+        """``section Aggregator`` — DOF-wise uniaxial coupling.
+
+        Maps each entry in ``materials_by_dof`` (DOF code →
+        :class:`UniaxialMaterial`) onto a force/moment response code,
+        optionally layered on top of ``base_section``.  See
+        :class:`apeGmsh.opensees.section.Aggregator` for the full
+        contract.
+        """
+        return self._bridge._register(
+            Aggregator(
+                materials_by_dof=materials_by_dof,
+                base_section=base_section,
             )
         )

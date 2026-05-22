@@ -59,6 +59,7 @@ __all__ = [
     "FiberPoint",
     "RectPatch",
     "StraightLayer",
+    "W_fiber",
 ]
 
 
@@ -268,3 +269,126 @@ class Fiber(Section):
             emitter.fiber(fpt.y, fpt.z, fpt.area, mat_tag)
 
         emitter.section_close()
+
+
+# ---------------------------------------------------------------------------
+# Parametric builders — boilerplate-free Fiber-section constructors
+# ---------------------------------------------------------------------------
+
+def W_fiber(
+    *,
+    bf: float,
+    tf: float,
+    hw: float,
+    tw: float,
+    material: UniaxialMaterial,
+    ny_flange: int = 2,
+    nz_flange: int = 8,
+    ny_web: int = 8,
+    nz_web: int = 1,
+    GJ: float | None = None,
+) -> Fiber:
+    """Build a fiber :class:`Fiber` section for a built-up W shape.
+
+    Replaces ~30 lines of :class:`RectPatch` boilerplate.  Section
+    geometry follows the canonical OpenSees convention:
+
+    * ``y`` is the major-bending axis (vertical, upward positive),
+    * ``z`` is the minor-bending axis (horizontal),
+    * the centroid of the section sits at the origin (``y=0``, ``z=0``).
+
+    The three rectangular regions:
+
+    * **Top flange** — ``y ∈ [hw/2, hw/2 + tf]``,
+      ``z ∈ [-bf/2, +bf/2]``
+    * **Bottom flange** — ``y ∈ [-hw/2 - tf, -hw/2]``,
+      ``z ∈ [-bf/2, +bf/2]``
+    * **Web** — ``y ∈ [-hw/2, +hw/2]``, ``z ∈ [-tw/2, +tw/2]``
+
+    Parameters
+    ----------
+    bf
+        Flange width (z extent).
+    tf
+        Flange thickness (y extent).
+    hw
+        **Clear** web height between the flanges — the y-extent of
+        the web region only.  This is NOT the catalog total depth
+        ``d``.  For an AISC catalog shape with depth ``d`` and flange
+        thickness ``tf``, pass ``hw = d - 2*tf``.
+
+        Worked example — W360×64 (d = 347 mm, bf = 203 mm, tf = 13.5 mm,
+        tw = 7.7 mm)::
+
+            sec = ops.section.W_fiber(
+                bf=203e-3, tf=13.5e-3,
+                hw=347e-3 - 2 * 13.5e-3,   # = 0.320 m clear web
+                tw=7.7e-3,
+                material=steel,
+            )
+
+        The emitted section's full y-extent is ``hw + 2*tf`` (i.e. the
+        catalog ``d``).
+    tw
+        Web thickness (z extent).
+    material
+        Uniform uniaxial material for every fiber.  Per-band
+        residual-stress variants — e.g. the ECCS welded-I pattern
+        (+0.5/-0.3/+0.2 Fy) — are not supported by this builder
+        directly; for that, build the section manually or wrap the
+        base material via :class:`InitialStress` at the patch level.
+    ny_flange, nz_flange
+        Fiber subdivision count for each flange patch (``ny`` is the
+        y-direction count, ``nz`` is the z-direction count).
+    ny_web, nz_web
+        Fiber subdivision count for the web patch.
+    GJ
+        Optional torsional stiffness ``GJ``.
+
+    Returns
+    -------
+    Fiber
+        A typed :class:`Fiber` primitive — NOT registered with any
+        bridge.  Register it on the bridge via
+        ``ops.section.W_fiber(...)`` (which wraps this helper) or
+        pass it through ``apeSees._register`` directly.
+
+    Raises
+    ------
+    ValueError
+        If any dimension is non-positive or any subdivision count is
+        not strictly positive.
+    """
+    if bf <= 0 or tf <= 0 or hw <= 0 or tw <= 0:
+        raise ValueError(
+            f"W_fiber: all dimensions must be > 0, got "
+            f"bf={bf}, tf={tf}, hw={hw}, tw={tw}."
+        )
+    if tw >= bf:
+        raise ValueError(
+            f"W_fiber: web thickness ({tw}) must be smaller than "
+            f"flange width ({bf})."
+        )
+
+    top_flange = RectPatch(
+        material=material,
+        ny=ny_flange, nz=nz_flange,
+        yI=hw / 2.0,        zI=-bf / 2.0,
+        yJ=hw / 2.0 + tf,   zJ=+bf / 2.0,
+    )
+    bottom_flange = RectPatch(
+        material=material,
+        ny=ny_flange, nz=nz_flange,
+        yI=-hw / 2.0 - tf,  zI=-bf / 2.0,
+        yJ=-hw / 2.0,       zJ=+bf / 2.0,
+    )
+    web = RectPatch(
+        material=material,
+        ny=ny_web, nz=nz_web,
+        yI=-hw / 2.0, zI=-tw / 2.0,
+        yJ=+hw / 2.0, zJ=+tw / 2.0,
+    )
+    return Fiber(
+        patches=(top_flange, bottom_flange, web),
+        GJ=GJ,
+    )

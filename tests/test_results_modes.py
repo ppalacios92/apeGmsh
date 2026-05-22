@@ -106,6 +106,119 @@ def test_modes_empty_when_no_mode_stages(tmp_path: Path) -> None:
         assert r.modes == []
 
 
+def test_eigen_modes_returns_lightweight_dataclass_list(tmp_path: Path) -> None:
+    """``Results.eigen_modes`` returns plain :class:`EigenMode` snapshots
+    detached from the Results file — safe to keep after .close()."""
+    from apeGmsh.results import EigenMode
+
+    path = _write_modes_file(tmp_path, n_modes=3)
+    with Results.from_native(path, model=_open_model_from_h5(path)) as r:
+        modes = sorted(r.eigen_modes, key=lambda m: m.mode_index)
+        assert len(modes) == 3
+        assert all(isinstance(m, EigenMode) for m in modes)
+        # Field values match the fixture writer.
+        assert [m.mode_index for m in modes] == [1, 2, 3]
+        assert modes[0].eigenvalue == pytest.approx(100.0)
+        assert modes[1].frequency_hz == pytest.approx(4.0)
+        assert modes[2].period_s == pytest.approx(1.0 / 6.0)
+    # File is closed — the dataclasses survive (no AttributeError on access).
+    assert modes[0].mode_index == 1
+
+
+def test_eigen_modes_empty_on_no_mode_stages(tmp_path: Path) -> None:
+    path = tmp_path / "no_modes.h5"
+    with NativeWriter(path) as w:
+        w.open()
+        sid = w.begin_stage(name="grav", kind="static",
+                             time=np.array([0.0]))
+        w.write_nodes(sid, "partition_0", node_ids=np.array([1]),
+                      components={"displacement_x": np.array([[0.0]])})
+        w.end_stage()
+    with Results.from_native(path, model=_open_model_from_h5(path)) as r:
+        assert r.eigen_modes == []
+
+
+def test_eigen_mode_omega_rad_s() -> None:
+    """``EigenMode.omega_rad_s`` is ``sqrt(eigenvalue)`` for positive
+    eigenvalues and ``0.0`` for non-positive (rigid-body) ones."""
+    from apeGmsh.results import EigenMode
+    import math as _m
+
+    m = EigenMode(
+        mode_index=1, eigenvalue=400.0,
+        frequency_hz=_m.sqrt(400.0) / (2.0 * _m.pi),
+        period_s=2.0 * _m.pi / _m.sqrt(400.0),
+    )
+    assert m.omega_rad_s == pytest.approx(20.0)
+
+    rigid = EigenMode(
+        mode_index=0, eigenvalue=-1e-12,
+        frequency_hz=0.0, period_s=0.0,
+    )
+    assert rigid.omega_rad_s == 0.0
+
+
+def test_eigen_mode_omega_rad_s_at_exact_zero() -> None:
+    """``omega_rad_s`` boundary — ``eigenvalue == 0.0`` exactly must
+    return ``0.0`` (and NOT ``nan``).  Tested explicitly because the
+    standard implementation guard ``eigenvalue <= 0`` admits the
+    boundary; if anyone refactors to ``eigenvalue < 0`` they'd hit a
+    ``sqrt(0.0)`` branch and get ``0.0`` anyway, but the test pins
+    the contract either way.
+    """
+    from apeGmsh.results import EigenMode
+
+    m = EigenMode(
+        mode_index=0, eigenvalue=0.0,
+        frequency_hz=0.0, period_s=0.0,
+    )
+    assert m.omega_rad_s == 0.0
+
+
+def test_eigen_modes_on_mpco_returns_empty(tmp_path: Path) -> None:
+    """``Results.from_mpco(...)`` carries no native modal stages
+    (MPCO files don't persist eigenvalues alongside the response
+    streams), so ``.eigen_modes`` should return ``[]`` cleanly rather
+    than crash.
+
+    We can't easily synthesize a real .mpco file here, so we exercise
+    the MPCOReader path indirectly: a Results with NO mode-kind
+    stages must report an empty eigen_modes list regardless of
+    backend.
+    """
+    # Reuse the no-modes fixture — the eigen_modes property iterates
+    # _all_stages() and filters; backend identity doesn't matter for
+    # the empty-case contract.
+    path = tmp_path / "no_modes.h5"
+    with NativeWriter(path) as w:
+        w.open()
+        sid = w.begin_stage(name="dynamic", kind="transient",
+                             time=np.array([0.0, 1.0]))
+        w.write_nodes(sid, "partition_0", node_ids=np.array([1]),
+                      components={"displacement_x": np.zeros((2, 1))})
+        w.end_stage()
+    with Results.from_native(path, model=_open_model_from_h5(path)) as r:
+        # No mode stages — eigen_modes must be the empty list, not None.
+        assert r.eigen_modes == []
+        assert isinstance(r.eigen_modes, list)
+
+
+def test_eigen_modes_is_picklable(tmp_path: Path) -> None:
+    """A lightweight ``EigenMode`` snapshot can be pickled — the
+    intended use case for "return modes from a function whose Results
+    context is closed."""
+    import pickle
+
+    path = _write_modes_file(tmp_path, n_modes=2)
+    with Results.from_native(path, model=_open_model_from_h5(path)) as r:
+        snapshot = r.eigen_modes
+
+    blob = pickle.dumps(snapshot)
+    restored = pickle.loads(blob)
+    assert [m.mode_index for m in restored] == [m.mode_index for m in snapshot]
+    assert [m.eigenvalue for m in restored] == [m.eigenvalue for m in snapshot]
+
+
 def test_mixed_stages_and_modes_in_one_file(tmp_path: Path) -> None:
     path = tmp_path / "mixed.h5"
     node_ids = np.array([1, 2], dtype=np.int64)

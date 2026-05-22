@@ -10,6 +10,7 @@ only to this protocol — it never branches on backend type.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional, Protocol, Union, runtime_checkable
@@ -61,6 +62,39 @@ class StageInfo:
     frequency_hz: Optional[float] = None
     period_s: Optional[float] = None
     mode_index: Optional[int] = None
+
+
+@dataclass(frozen=True, slots=True)
+class EigenMode:
+    """Lightweight snapshot of one eigenmode — no file handle.
+
+    Returned by :attr:`apeGmsh.results.Results.eigen_modes`.  Mirrors
+    the mode-only fields of :class:`StageInfo` but is detachable from
+    the Results context, so it is safe to pickle, pass between
+    processes, or return from a function whose Results was already
+    closed.
+
+    For the *mode shape* (per-node displacement vectors), use the
+    mode-scoped :class:`apeGmsh.results.Results` from ``results.modes``
+    and query via ``results.nodes.get(component="displacement_x", ...)``
+    — that path holds the file handle and reads the underlying arrays.
+    """
+
+    mode_index: int
+    eigenvalue: float
+    frequency_hz: float
+    period_s: float
+
+    @property
+    def omega_rad_s(self) -> float:
+        """Angular frequency ``omega = sqrt(eigenvalue)`` in rad/s.
+
+        Returns ``0.0`` for non-positive (rigid-body or numerical
+        zero) eigenvalues — matches ``capture_modes``' behaviour.
+        """
+        if self.eigenvalue <= 0.0:
+            return 0.0
+        return math.sqrt(self.eigenvalue)
 
 
 # A time slice can be:

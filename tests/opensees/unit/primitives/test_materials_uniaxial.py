@@ -25,6 +25,7 @@ from apeGmsh.opensees.material.uniaxial import (
     Concrete02,
     ElasticMaterial,
     Hysteretic,
+    InitialStress,
     Steel01,
     Steel02,
 )
@@ -560,3 +561,94 @@ class TestENT:
     def test_validation_rejects_nonpositive_E(self) -> None:
         with pytest.raises(ValueError, match="E"):
             ENT(E=0.0)
+
+
+# ---------------------------------------------------------------------------
+# InitialStress — uniaxial wrapper composing a base uniaxial + sigma_init
+# ---------------------------------------------------------------------------
+
+class TestInitialStress:
+    def test_construction(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        assert m.base_material is base
+        assert m.sigma_init == 125e6
+
+    def test_base_material_is_the_only_dependency(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        assert m.dependencies() == (base,)
+
+    def test_emit_resolves_base_tag(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        rec = RecordingEmitter()
+        set_tag_resolver(rec, lambda p: 7 if p is base else 0)
+        m._emit(rec, tag=12)
+        assert rec.calls == [
+            (
+                "uniaxialMaterial",
+                ("InitialStressMaterial", 12, 7, 125e6),
+                {},
+            )
+        ]
+
+    def test_emit_without_tag_resolver_raises(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        rec = RecordingEmitter()
+        with pytest.raises(RuntimeError, match="tag resolver"):
+            m._emit(rec, tag=1)
+
+    def test_repr_includes_type_token(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        assert "InitialStress" in repr(m)
+
+    def test_is_frozen(self) -> None:
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=125e6)
+        with pytest.raises(Exception):  # FrozenInstanceError
+            m.sigma_init = 0.0  # type: ignore[misc]
+
+    def test_rejects_non_uniaxial_base(self) -> None:
+        class FakePrimitive:
+            pass
+
+        with pytest.raises(TypeError, match="UniaxialMaterial"):
+            InitialStress(
+                base_material=FakePrimitive(),  # type: ignore[arg-type]
+                sigma_init=125e6,
+            )
+
+    def test_accepts_zero_sigma_init(self) -> None:
+        # sigma_init=0 is a degenerate but legal call (e.g. parametric
+        # sweep over a residual-stress amplitude that starts at zero).
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=0.0)
+        assert m.sigma_init == 0.0
+
+    def test_accepts_negative_sigma_init(self) -> None:
+        # Compressive residual stress for the central web band in an
+        # ECCS welded-I pattern.
+        base = Steel02(fy=420e6, E=200e9, b=0.01)
+        m = InitialStress(base_material=base, sigma_init=-0.3 * 250e6)
+        assert m.sigma_init < 0
+
+
+class TestInitialStressNamespace:
+    def test_namespace_constructs_and_registers(self) -> None:
+        from unittest.mock import MagicMock
+        from typing import cast
+        from apeGmsh.opensees import apeSees
+
+        ops = apeSees(cast("object", MagicMock(name="FEMData")))  # type: ignore[arg-type]
+        base = ops.uniaxialMaterial.Steel02(fy=420e6, E=200e9, b=0.01)
+        wrapped = ops.uniaxialMaterial.InitialStress(
+            base_material=base, sigma_init=125e6,
+        )
+        assert isinstance(wrapped, InitialStress)
+        # Distinct registered primitives must hold distinct tags; the
+        # tag allocator hands them out in registration order.
+        assert ops.tag_for(base) == 1
+        assert ops.tag_for(wrapped) == 2

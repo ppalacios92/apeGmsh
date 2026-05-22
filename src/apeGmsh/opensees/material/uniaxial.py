@@ -30,6 +30,7 @@ __all__ = [
     "Hysteretic",
     "ElasticMaterial",
     "ENT",
+    "InitialStress",
 ]
 
 
@@ -638,3 +639,61 @@ class ENT(UniaxialMaterial):
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()
+
+
+# ---------------------------------------------------------------------------
+# Wrappers — compose other uniaxial materials
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class InitialStress(UniaxialMaterial):
+    """``uniaxialMaterial InitialStressMaterial`` — wrap a uniaxial with
+    a per-fiber initial stress.
+
+    OpenSees command::
+
+        uniaxialMaterial InitialStressMaterial $tag $base_tag $sigma_init
+
+    The wrapper applies a constant ``sigma_init`` superimposed on the
+    base material's stress response. Useful for per-fiber residual
+    stress patterns (e.g. ECCS welded-I residual: +0.5/-0.3/+0.2 Fy
+    across the web/flange bands) where ``Steel02``'s built-in
+    ``sig_init`` field is insufficient because it is per-material, not
+    per-fiber.
+
+    The base material is held by reference; its tag is resolved at
+    emit time via :func:`resolve_tag`. The base must be a
+    :class:`UniaxialMaterial` — nD or section bases raise
+    :class:`TypeError` at construction.
+
+    Parameters
+    ----------
+    base_material
+        The wrapped uniaxial material. Must itself be a typed
+        :class:`UniaxialMaterial` primitive; its tag is resolved at
+        emit time. The bridge emits the base material **before** the
+        wrapper via :meth:`dependencies`.
+    sigma_init
+        Constant initial stress added to the base material's response.
+        Sign convention matches the base material (tension positive
+        for steels).
+    """
+
+    base_material: UniaxialMaterial
+    sigma_init: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base_material, UniaxialMaterial):
+            raise TypeError(
+                "InitialStress: base_material must be a UniaxialMaterial "
+                f"primitive, got {type(self.base_material).__name__!r}."
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return (self.base_material,)
+
+    def _emit(self, emitter: Emitter, tag: int) -> None:
+        base_tag = resolve_tag(emitter, self.base_material)
+        emitter.uniaxialMaterial(
+            "InitialStressMaterial", tag, base_tag, self.sigma_init,
+        )

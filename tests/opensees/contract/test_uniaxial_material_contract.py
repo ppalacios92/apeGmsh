@@ -8,7 +8,9 @@ listed in ``ALL_UNIAXIAL`` and verified against the family contract:
   * is a frozen, kw-only dataclass,
   * implements ``_emit`` and emits a single
     ``("uniaxialMaterial", ...)`` call,
-  * implements ``dependencies`` returning ``()`` (uniaxial leaves),
+  * implements ``dependencies`` returning a tuple of :class:`Primitive`
+    (empty for leaf uniaxials; non-empty for wrappers like
+    :class:`InitialStress`),
   * ``__repr__`` includes the class name.
 
 Future uniaxial material slices append their classes to
@@ -22,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from apeGmsh.opensees._internal.tag_resolution import set_tag_resolver
 from apeGmsh.opensees._internal.types import Primitive, UniaxialMaterial
 from apeGmsh.opensees.emitter.recording import RecordingEmitter
 from apeGmsh.opensees.material.uniaxial import (
@@ -31,9 +34,15 @@ from apeGmsh.opensees.material.uniaxial import (
     Concrete02,
     ElasticMaterial,
     Hysteretic,
+    InitialStress,
     Steel01,
     Steel02,
 )
+
+
+# Smoke base for InitialStress's mandatory base_material kwarg; shared so
+# the dependency-roundtrip assertion can recognise it by identity.
+_INITIAL_STRESS_BASE = Steel02(fy=420e6, E=200e9, b=0.01)
 
 
 ALL_UNIAXIAL: list[type[UniaxialMaterial]] = [
@@ -45,6 +54,7 @@ ALL_UNIAXIAL: list[type[UniaxialMaterial]] = [
     Hysteretic,
     ElasticMaterial,
     ENT,
+    InitialStress,
 ]
 
 
@@ -69,6 +79,10 @@ _MINIMAL_PARAMS: dict[type[UniaxialMaterial], dict[str, Any]] = {
     },
     ElasticMaterial: {"E": 200e9},
     ENT: {"E": 200e9},
+    InitialStress: {
+        "base_material": _INITIAL_STRESS_BASE,
+        "sigma_init": 0.5 * 250e6,
+    },
 }
 
 
@@ -102,6 +116,10 @@ class TestUniaxialMaterialContract:
     def test_implements_emit(self, cls: type[UniaxialMaterial]) -> None:
         assert "_emit" in cls.__dict__
         rec = RecordingEmitter()
+        # Composing primitives (e.g. InitialStress) call resolve_tag at
+        # emit time. Install a stub resolver so the smoke test does not
+        # crash; leaf primitives ignore the attribute.
+        set_tag_resolver(rec, lambda _p: 99)
         _minimal(cls)._emit(rec, tag=1)
         assert len(rec.calls) == 1
         assert rec.calls[0][0] == "uniaxialMaterial"
@@ -110,7 +128,11 @@ class TestUniaxialMaterialContract:
         self, cls: type[UniaxialMaterial],
     ) -> None:
         assert "dependencies" in cls.__dict__
-        assert _minimal(cls).dependencies() == ()
+        deps = _minimal(cls).dependencies()
+        assert isinstance(deps, tuple)
+        # Every element is a Primitive (covers both leaves -> () and
+        # wrappers like InitialStress -> (base,)).
+        assert all(isinstance(d, Primitive) for d in deps)
 
     def test_repr_includes_class_name(
         self, cls: type[UniaxialMaterial],
