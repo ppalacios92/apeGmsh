@@ -34,3 +34,4 @@ earlier one, write a new ADR that supersedes it; do not edit history.
 | [0024](0024-emitter-protocol-widen-region.md) | `Emitter.region` Protocol widening for MPCO `pg=` filtering | Accepted (widens the `Emitter` Protocol; schema 2.8.0 → 2.9.0) |
 | [0025](0025-emitter-protocol-widen-eigen.md) | `Emitter.eigen` Protocol widening for one-shot modal solves; `apeSees.eigen` bridge method + `EigenResult` | Accepted (widens the `Emitter` Protocol; no schema bump) |
 | [0026](0026-h5modelreader-protocol-contract.md) | `H5ModelReader` Protocol — formalise the viewer-side model read contract; unblock director path-survivor elimination and foreign-format adapters | Proposed (May 2026; successor to 0014/0019/0020) |
+| [0027](0027-cross-partition-mp-constraints.md) | Cross-partition MP-constraint emission policy: replicate on every owning rank, broker-deterministic phantom tags, auto ParallelPlain + Mumps | Accepted (extends ADR 0022; schema 2.9.0 → 2.10.0 in P4) |
