@@ -1427,21 +1427,15 @@ class ResultsViewer:
             and not has_persisted_cuts
         ):
             return
-        # Bind the director's model handle.  Two surfaces wired here:
-        #
-        # * ``set_model(results.model)`` — chain-forward (cuts
-        #   iteration source).
-        # * ``_bind_model_h5(path)`` — internal path binder used for
-        #   the :class:`FemToOpsTagMap` (still path-based today).
+        # Bind the director — ADR 0026 PR7-d collapsed the dual
+        # ``set_model`` + ``_bind_model_h5`` ceremony into one call.
+        # ``bind_results(results)`` derives both binding sources off
+        # the Results: ``results.model`` for cuts iteration and
+        # ``resolve_orientation_source(results)`` for the tag-map path.
         try:
-            self._director.set_model(self._results.model)
+            self._director.bind_results(self._results)
         except Exception as exc:
-            log_error("init", "ResultsViewer.set_model", exc)
-        if bind_path is not None:
-            try:
-                self._director._bind_model_h5(bind_path)
-            except Exception as exc:
-                log_error("init", "ResultsViewer._bind_model_h5", exc)
+            log_error("init", "ResultsViewer.bind_results", exc)
         if self._pending_cuts:
             # Explicit cuts kwarg — wins over auto-load (H14).
             for i, cut in enumerate(self._pending_cuts):

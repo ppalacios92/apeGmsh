@@ -273,10 +273,11 @@ def test_viewer_autoload_when_results_model_has_cuts(tmp_path: Path) -> None:
     )
     ResultsViewer._apply_pending_cuts(stub)
 
-    # The director was wired with the chain-forward handle and
-    # the path (for tag_map). Auto-load fired.
-    stub._director.set_model.assert_called_once_with(stub._results.model)
-    stub._director._bind_model_h5.assert_called_once_with(path)
+    # The director is bound through the canonical single-call
+    # ``bind_results`` (ADR 0026 PR7-d) — it internally pulls
+    # both ``results.model`` and ``resolve_orientation_source(results)``.
+    # Auto-load fires because persisted cuts are present.
+    stub._director.bind_results.assert_called_once_with(stub._results)
     stub._director.load_cuts_from_h5.assert_called_once_with()
     stub._director.add_section_cut.assert_not_called()
 
@@ -330,11 +331,10 @@ def test_viewer_kwarg_wins_when_cuts_supplied(tmp_path: Path) -> None:
     )
     ResultsViewer._apply_pending_cuts(stub)
 
-    # Chain-forward bind still fires (orientation source).
-    stub._director.set_model.assert_called_once_with(stub._results.model)
-    stub._director._bind_model_h5.assert_called_once_with(path)
-    # But explicit cuts go through add_section_cut, and load_cuts_from_h5
-    # is NOT called (H14 — kwarg wins).
+    # Single-call director bind still fires (PR7-d). Explicit cuts
+    # go through add_section_cut, and load_cuts_from_h5 is NOT
+    # called (H14 — kwarg wins).
+    stub._director.bind_results.assert_called_once_with(stub._results)
     stub._director.add_section_cut.assert_called_once_with(cut)
     stub._director.load_cuts_from_h5.assert_not_called()
 
@@ -344,28 +344,27 @@ def test_viewer_noop_when_no_cuts_and_no_source() -> None:
     stub = _viewer_stub(pending_cuts=())
     ResultsViewer._apply_pending_cuts(stub)
 
-    stub._director.set_model.assert_not_called()
-    stub._director._bind_model_h5.assert_not_called()
+    stub._director.bind_results.assert_not_called()
     stub._director.add_section_cut.assert_not_called()
     stub._director.load_cuts_from_h5.assert_not_called()
 
 
 def test_viewer_kwarg_cuts_without_h5() -> None:
-    """Cuts kwarg supplied but no orientation source → cuts apply, no h5 bind.
+    """Cuts kwarg supplied but no orientation source → cuts apply, no
+    tag-map path bound.
 
-    Phase 8 — ``set_model(results.model)`` always fires (the model is
-    always non-None post-prune); the orientation-binding path
-    (``_bind_model_h5``) only fires when ``results._path`` carries
-    ``/opensees/``.
+    PR7-d — the single ``bind_results(results)`` call always fires
+    when there's anything to do (pending cuts here).  The director's
+    internal ``resolve_orientation_source`` decides whether to set a
+    tag-map path; here it returns ``None`` (no _path on the stub)
+    so ``model_h5`` stays None on the director side.  The test
+    asserts on the wire — ``bind_results`` was called.
     """
     cut = _sample_cut(label="standalone", z=3.0)
     stub = _viewer_stub(pending_cuts=(cut,))
     ResultsViewer._apply_pending_cuts(stub)
 
-    # set_model always fires post-prune (model is the chain-forward
-    # source).
-    stub._director.set_model.assert_called_once_with(stub._results.model)
-    stub._director._bind_model_h5.assert_not_called()
+    stub._director.bind_results.assert_called_once_with(stub._results)
     stub._director.add_section_cut.assert_called_once_with(cut)
     stub._director.load_cuts_from_h5.assert_not_called()
 

@@ -357,3 +357,119 @@ def test_bind_without_fem_raises(tmp_path, g):
     d = ResultsDirector(r)
     with pytest.raises(RuntimeError):
         d.bind_plotter(_DummyPlotter())
+
+
+# =====================================================================
+# ADR 0026 PR7-d — bind_results() collapses set_model + _bind_model_h5
+# =====================================================================
+#
+# bind_results(results) is the canonical single-call binder.  It must:
+# * set ``opensees_model`` from ``results.model``
+# * derive the tag-map file path via ``resolve_orientation_source``
+# * tolerate Results with ``_path=None`` (in-memory / recorder)
+# * clear ``_tag_map_cache`` when the bound path changes
+
+from types import SimpleNamespace
+
+
+def _stub_results(*, path, model):
+    """Minimal Results stand-in — director only reads ``_path`` and
+    ``model``."""
+    return SimpleNamespace(_path=path, model=model, fem=None)
+
+
+def test_bind_results_sets_opensees_model_handle(one_stage_results):
+    d = ResultsDirector(one_stage_results)
+    d._opensees_model = None  # reset for clarity
+    handle = object()
+    stub = _stub_results(path=None, model=handle)
+
+    d.bind_results(stub)
+
+    assert d.opensees_model is handle
+
+
+def test_bind_results_with_no_path_clears_tag_map_path(one_stage_results):
+    """In-memory Results (``_path=None``) → no tag-map path bound."""
+    d = ResultsDirector(one_stage_results)
+    stub = _stub_results(path=None, model=object())
+
+    d.bind_results(stub)
+
+    assert d.model_h5 is None
+
+
+def test_bind_results_with_oriented_path_binds_tag_map_path(
+    tmp_path: Path, one_stage_results,
+):
+    """When ``results._path`` points at a model.h5 with the
+    ``/opensees/`` orientation zone, bind_results extracts the path
+    and stores it for the tag_map factory."""
+    from apeGmsh.opensees import ModelData
+    from tests.opensees.fixtures.fem_stub import make_two_node_beam
+
+    fem = make_two_node_beam()
+    oriented = tmp_path / "oriented.h5"
+    md = ModelData(fem, ndm=3, ndf=6, model_name="oriented")
+    md.oriented_elements(pg="Cols", ele_type="forceBeamColumn",
+                         vecxz=(1.0, 0.0, 0.0))
+    md.write(str(oriented))
+
+    d = ResultsDirector(one_stage_results)
+    stub = _stub_results(path=oriented, model=object())
+
+    d.bind_results(stub)
+
+    assert d.model_h5 == oriented
+
+
+def test_bind_results_bare_path_clears_tag_map_path(
+    tmp_path: Path, one_stage_results,
+):
+    """A model.h5 WITHOUT the orientation zone → no tag-map path
+    (the viewer must degrade)."""
+    from apeGmsh.opensees import ModelData
+    from tests.opensees.fixtures.fem_stub import make_two_node_beam
+
+    fem = make_two_node_beam()
+    bare = tmp_path / "bare.h5"
+    md = ModelData(fem, ndm=3, ndf=6, model_name="bare")
+    md.write(str(bare))
+
+    d = ResultsDirector(one_stage_results)
+    stub = _stub_results(path=bare, model=object())
+
+    d.bind_results(stub)
+
+    assert d.model_h5 is None
+
+
+def test_bind_results_clears_tag_map_cache_when_path_changes(
+    tmp_path: Path, one_stage_results,
+):
+    """Re-binding to a different oriented file invalidates the
+    cached :class:`FemToOpsTagMap` (the path change is the cache key)."""
+    from apeGmsh.opensees import ModelData
+    from tests.opensees.fixtures.fem_stub import make_two_node_beam
+
+    fem = make_two_node_beam()
+    a = tmp_path / "a.h5"
+    b = tmp_path / "b.h5"
+    for p in (a, b):
+        md = ModelData(fem, ndm=3, ndf=6, model_name="oriented")
+        md.oriented_elements(pg="Cols", ele_type="forceBeamColumn",
+                             vecxz=(1.0, 0.0, 0.0))
+        md.write(str(p))
+
+    d = ResultsDirector(one_stage_results)
+    d.bind_results(_stub_results(path=a, model=object()))
+    # Force the cache to populate.
+    _ = d.tag_map
+    cached_before = d._tag_map_cache
+    assert cached_before is not None
+
+    d.bind_results(_stub_results(path=b, model=object()))
+
+    # Path changed → cache invalidated.
+    assert d._tag_map_cache is None
+    assert d.model_h5 == b

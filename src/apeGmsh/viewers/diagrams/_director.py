@@ -216,6 +216,36 @@ class ResultsDirector:
     # Section-cut tag map (cuts subpackage integration)
     # ------------------------------------------------------------------
 
+    def bind_results(self, results: "Any") -> None:
+        """Bind a :class:`Results` handle — the canonical single-call
+        replacement for the dual ``set_model`` + ``_bind_model_h5``
+        ceremony (ADR 0026 PR7-d).
+
+        Pulls both binding sources off the Results in one step:
+
+        * ``results.model`` — the chain-forward OpenSeesModel handle
+          (cuts iteration source; duck-typed per ADR 0014 INV-2).
+        * ``results._path`` — the file path the
+          :class:`FemToOpsTagMap` builds against, IFF
+          :func:`resolve_orientation_source` confirms the file
+          carries the ``/opensees/`` orientation zone.
+
+        Cuts auto-load (``_apply_pending_cuts`` in ResultsViewer)
+        should call this method instead of issuing ``set_model`` and
+        ``_bind_model_h5`` separately.  ``set_model`` and
+        ``_bind_model_h5`` survive for session-restore paths that
+        serialise paths today; they are slated for removal once the
+        session payload moves to a reader-based descriptor.
+
+        Idempotent: re-binding the same Results is a no-op on the
+        chain-forward handle and re-derives the tag-map path (clears
+        the cache if the path changes).
+        """
+        from ..data._h5_probe import resolve_orientation_source
+        self._opensees_model = getattr(results, "model", None)
+        source = resolve_orientation_source(results)
+        self._bind_model_h5(source)
+
     def set_model(
         self, opensees_model: "Optional[Any]",
     ) -> None:
@@ -229,6 +259,11 @@ class ResultsDirector:
 
         The :class:`FemToOpsTagMap` is still built from a file path
         via :meth:`_bind_model_h5` (still path-based today).
+
+        ADR 0026 — prefer :meth:`bind_results` for the canonical
+        single-call binding from a Results handle.  ``set_model``
+        stays for external callers that already hold an
+        OpenSeesModel directly (without a Results wrapper).
 
         Pass ``None`` to clear the bound handle.
         """
@@ -252,8 +287,13 @@ class ResultsDirector:
         that need the tag_map file path.
 
         Phase 8 (ADR 0020) collapsed the public ``set_model_h5``
-        deprecated alias.  Cuts auto-load and session restore call
-        this private helper directly.
+        deprecated alias.  ADR 0026 PR7-d added :meth:`bind_results`
+        as the canonical single-call binder; this method survives as
+        the back-compat seam for paths that still arrive as strings
+        (session restore in particular — the session payload
+        schema still serialises ``model_h5`` as a path string).
+        Removal is gated on session-payload migration to a reader-
+        based descriptor.
         """
         new_path = Path(path) if path is not None else None
         if new_path == self._model_h5:
