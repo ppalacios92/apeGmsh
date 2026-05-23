@@ -187,14 +187,23 @@ def _wire_apesees(fem, *, with_recorders: bool = True):
     ops = apeSees(cast("object", fem))
     ops.model(ndm=3, ndf=6)
 
-    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    # Two separate transforms — a single vecxz cannot cover both
+    # vertical columns and horizontal beams without being parallel to
+    # one of the beam axes (OpenSees rejects degenerate vecxz with
+    # "vector v that defines plane xz is parallel to x axis"; OpenSeesMP
+    # segfaults on the same condition instead of erroring cleanly).
+    #   * Columns (along Z): vecxz=(1,0,0) — horizontal, perpendicular.
+    #   * Beams (along X or Y): vecxz=(0,0,1) — vertical, perpendicular
+    #     to any horizontal beam regardless of plan orientation.
+    transf_col = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    transf_beam = ops.geomTransf.Linear(vecxz=(0.0, 0.0, 1.0))
     # Columns and beams share section properties for simplicity.
     ops.element.elasticBeamColumn(
-        pg="Columns", transf=transf,
+        pg="Columns", transf=transf_col,
         A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
     )
     ops.element.elasticBeamColumn(
-        pg="Beams", transf=transf,
+        pg="Beams", transf=transf_beam,
         A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
     )
 
