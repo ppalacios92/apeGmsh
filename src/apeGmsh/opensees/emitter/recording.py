@@ -232,3 +232,19 @@ class RecordingEmitter:
 
     def partition_close(self) -> None:
         self.calls.append(("partition_close", (), {}))
+
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5) ---------
+
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        self.calls.append(
+            ("parallel_runtime_fallback_numberer", (primary, fallback), {}),
+        )
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        self.calls.append(
+            ("parallel_runtime_fallback_system", (primary, fallback), {}),
+        )

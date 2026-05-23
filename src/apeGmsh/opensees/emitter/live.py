@@ -339,6 +339,53 @@ class LiveOpsEmitter:
         self._ops = self._real_ops
         self._in_partition = False
 
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5) ------------
+
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Try the primary numberer in-process; fall back on any
+        ``Exception`` with a single ``UserWarning``.
+
+        Mirrors the runtime conditional emitted by Tcl/Py emitters but
+        actually executes the choice against openseespy at emit time
+        (live mode runs in-process).  ``ParallelPlain`` is typically
+        not available in a single-process openseespy build, so this
+        path almost always lands in the fallback branch — but the
+        warning surfaces the contract mismatch loudly.
+        """
+        try:
+            self._ops.numberer(primary)
+        except Exception:
+            warnings.warn(
+                f"{primary!r} numberer not available in this "
+                "openseespy build; falling back to "
+                f"{fallback!r}. Use OpenSeesMP for true parallel runs.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._ops.numberer(fallback)
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Try the primary system in-process; fall back on any
+        ``Exception`` with a single ``UserWarning``.
+
+        Mirror of :meth:`parallel_runtime_fallback_numberer`.
+        """
+        try:
+            self._ops.system(primary)
+        except Exception:
+            warnings.warn(
+                f"{primary!r} system not available in this "
+                "openseespy build; falling back to "
+                f"{fallback!r}. Use OpenSeesMP for true parallel runs.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._ops.system(fallback)
+
     # -- Direct accessor for tests / diagnostics ----------------------------
 
     @property

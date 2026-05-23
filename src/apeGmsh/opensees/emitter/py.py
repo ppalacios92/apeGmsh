@@ -362,3 +362,43 @@ class PyEmitter:
         if self._lines.indent.endswith("    "):
             self._lines.indent = self._lines.indent[:-4]
         self._lines.append("")
+
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5) ------------
+
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit a ``try / except`` wrapping ``ops.numberer(primary)``
+        with a fallback ``ops.numberer(fallback)``.
+
+        ``ParallelPlain`` only exists in OpenSeesMP; under single-process
+        openseespy the call raises and the ``except`` branch falls back
+        to ``RCM`` so the deck still runs.  Restores shim-consistency
+        with :meth:`partition_open`'s ``getPID`` fallback (ADR 0027
+        INV-5 amendment 2026-05-23).
+        """
+        self._lines.append(
+            f"# {primary} only exists in OpenSeesMP; "
+            f"fall back to {fallback} under single-process OpenSees."
+        )
+        self._lines.append("try:")
+        self._lines.append(f"    {_ops_call('numberer', primary)}")
+        self._lines.append("except Exception:")
+        self._lines.append(f"    {_ops_call('numberer', fallback)}")
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit a ``try / except`` wrapping ``ops.system(primary)``
+        with a fallback ``ops.system(fallback)``.
+
+        Mirror of :meth:`parallel_runtime_fallback_numberer`.
+        """
+        self._lines.append(
+            f"# {primary} requires OpenSeesMP + MPI; "
+            f"fall back to {fallback} under single-process OpenSees."
+        )
+        self._lines.append("try:")
+        self._lines.append(f"    {_ops_call('system', primary)}")
+        self._lines.append("except Exception:")
+        self._lines.append(f"    {_ops_call('system', fallback)}")

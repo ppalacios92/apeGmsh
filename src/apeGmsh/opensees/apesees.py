@@ -998,14 +998,17 @@ class BuiltModel:
         if declared_numberer is None:
             _warnings.warn(
                 "len(fem.partitions) > 1 with no user-declared numberer; "
-                "auto-emitting 'numberer ParallelPlain' (OpenSeesMP-"
-                "compatible).  Explicitly declare "
-                "ops.numberer.<Plain|RCM|ParallelPlain|ParallelRCM>() "
+                "auto-emitting runtime-conditional 'numberer ParallelPlain' "
+                "with 'RCM' fallback so the deck runs under both OpenSeesMP "
+                "and single-process OpenSees (ADR 0027 INV-5).  Explicitly "
+                "declare ops.numberer.<Plain|RCM|ParallelPlain|ParallelRCM>() "
                 "before build() to override.",
                 UserWarning,
                 stacklevel=2,
             )
-            emitter.numberer("ParallelPlain")
+            emitter.parallel_runtime_fallback_numberer(
+                "ParallelPlain", "RCM",
+            )
             return
 
         # User-declared numberer — check MP compatibility.
@@ -1043,14 +1046,17 @@ class BuiltModel:
         if declared_system is None:
             _warnings.warn(
                 "len(fem.partitions) > 1 with no user-declared system; "
-                "auto-emitting 'system Mumps' (OpenSeesMP-compatible "
-                "parallel sparse-direct solver).  Explicitly declare "
-                "ops.system.<Mumps|MumpsParallel>() before build() to "
-                "override.",
+                "auto-emitting runtime-conditional 'system Mumps' with "
+                "'UmfPack' fallback so the deck runs under both OpenSeesMP "
+                "and single-process OpenSees (ADR 0027 INV-5).  Explicitly "
+                "declare ops.system.<Mumps|MumpsParallel>() before build() "
+                "to override.",
                 UserWarning,
                 stacklevel=2,
             )
-            emitter.system("Mumps")
+            emitter.parallel_runtime_fallback_system(
+                "Mumps", "UmfPack",
+            )
             return
 
         # User-declared system — check MP compatibility.

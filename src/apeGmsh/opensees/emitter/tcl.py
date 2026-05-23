@@ -388,3 +388,45 @@ class TclEmitter:
         # Closing brace and trailing blank line at the outer indent.
         self._lines.append("}")
         self._lines.append("")
+
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5) ------------
+
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit ``if {[catch {numberer $primary} _err]} { numberer $fallback }``.
+
+        ``ParallelPlain`` (the typical primary) only exists in
+        OpenSeesMP; under single-process OpenSees the ``numberer``
+        command errors and the Tcl ``catch`` swallows it so the
+        fallback (typically ``RCM``) runs instead.  Restores
+        shim-consistency with :meth:`partition_open`'s ``proc getPID``
+        fallback (ADR 0027 INV-5 amendment 2026-05-23).
+        """
+        self._lines.append(
+            f"# {primary} only exists in OpenSeesMP; "
+            f"fall back to {fallback} under single-process OpenSees."
+        )
+        self._lines.append(
+            f"if {{[catch {{numberer {primary}}} _err]}} "
+            f"{{ numberer {fallback} }}"
+        )
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit ``if {[catch {system $primary} _err]} { system $fallback }``.
+
+        Mirror of :meth:`parallel_runtime_fallback_numberer` — the
+        primary (``Mumps``) requires OpenSeesMP + MPI; the fallback
+        (``UmfPack``) lets the deck still parse and run under
+        single-process OpenSees.
+        """
+        self._lines.append(
+            f"# {primary} requires OpenSeesMP + MPI; "
+            f"fall back to {fallback} under single-process OpenSees."
+        )
+        self._lines.append(
+            f"if {{[catch {{system {primary}}} _err]}} "
+            f"{{ system {fallback} }}"
+        )

@@ -56,6 +56,19 @@ mode)`` accessor over ``ops.nodeEigenvector``.  No schema bump — the
 H5 emitter no-ops on ``eigen`` because the call is a runtime
 retrieval, not a model-definition declaration.
 
+**Architecture event — ADR 0027 INV-5 amendment (May 2026).** The
+Protocol was widened with two runtime-conditional fallback methods
+(:meth:`parallel_runtime_fallback_numberer`,
+:meth:`parallel_runtime_fallback_system`) that emit a
+primary / fallback pair so the same partitioned deck runs under both
+OpenSeesMP (``ParallelPlain`` + ``Mumps``) and single-process
+OpenSees (``RCM`` + ``UmfPack``).  Tcl wraps the primary in
+``catch``; Py wraps it in ``try / except``; LiveOps invokes the
+primary and falls back on exception with a ``UserWarning``; H5
+records the primary as canonical and stores a ``runtime_fallback``
+attribute; Recording captures the pair.  Restores end-to-end
+shim-consistency with the ``proc getPID`` partition-open shim.
+
 **Architecture event — ADR 0027 (P4, May 2026).** The Protocol was
 widened with two emission-scoping methods (:meth:`partition_open`,
 :meth:`partition_close`) that bracket a per-rank emission block.
@@ -253,4 +266,40 @@ class Emitter(Protocol):
 
     def partition_close(self) -> None:
         """Close the current per-rank emission block."""
+        ...
+
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5, amended) --
+    # Emit a runtime conditional so the same deck runs under both
+    # OpenSeesMP (uses ``primary``, e.g. ``ParallelPlain`` / ``Mumps``)
+    # and single-process OpenSees (falls back to ``fallback``, e.g.
+    # ``RCM`` / ``UmfPack``).  Tcl wraps the primary call in a Tcl
+    # ``catch`` block; Py wraps it in a Python ``try / except``;
+    # LiveOps actually invokes openseespy and catches the exception in-
+    # process (firing a ``UserWarning`` on fallback); H5 records the
+    # primary choice as the canonical numberer / system and stores a
+    # ``runtime_fallback`` attribute documenting the fallback;
+    # Recording captures the pair as ``(primary, fallback)``.  This
+    # restores end-to-end shim-consistency with the ``proc getPID``
+    # single-process fallback in :meth:`partition_open` (ADR 0027 INV-5
+    # amendment 2026-05-23).
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit a runtime-conditional numberer (primary / fallback).
+
+        The primary numberer is tried at runtime; on failure (e.g.
+        ``ParallelPlain`` not registered under single-process OpenSees),
+        the fallback numberer is used instead.
+        """
+        ...
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Emit a runtime-conditional system of equations (primary / fallback).
+
+        The primary system is tried at runtime; on failure (e.g.
+        ``Mumps`` not compiled into a single-process OpenSees build),
+        the fallback system is used instead.
+        """
         ...

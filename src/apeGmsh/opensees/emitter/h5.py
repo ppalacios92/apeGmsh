@@ -1111,6 +1111,33 @@ class H5Emitter:
         self._partition_blocks.append(self._partition_current)
         self._partition_current = None
 
+    # -- Partition runtime-conditional fallback (ADR 0027 INV-5) ----------
+
+    def parallel_runtime_fallback_numberer(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Record the primary numberer as canonical; stash the fallback
+        in ``numberer_runtime_fallback`` so re-emit can reconstruct the
+        runtime conditional.
+
+        Minimal additive change to the analysis attrs (ADR 0027 INV-5
+        amendment 2026-05-23).
+        """
+        self._analysis_attrs["numberer"] = primary
+        self._analysis_attrs["numberer_runtime_fallback"] = fallback
+
+    def parallel_runtime_fallback_system(
+        self, primary: str, fallback: str,
+    ) -> None:
+        """Record the primary system as canonical; stash the fallback
+        in ``system_runtime_fallback`` so re-emit can reconstruct the
+        runtime conditional.
+
+        Mirror of :meth:`parallel_runtime_fallback_numberer`.
+        """
+        self._analysis_attrs["system"] = primary
+        self._analysis_attrs["system_runtime_fallback"] = fallback
+
     # =====================================================================
     # Protocol — Analysis chain
     # =====================================================================

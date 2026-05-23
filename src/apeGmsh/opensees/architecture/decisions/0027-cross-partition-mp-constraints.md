@@ -236,11 +236,15 @@ unchanged.
   scalar across every rank that does emit, so MPCO post-processing
   can stitch per-rank `.mpco` files by tag identity.
 
-- **INV-5.** `numberer ParallelPlain` and `system Mumps` are
-  auto-emitted when `len(fem.partitions) > 1` and the user has not
-  explicitly set the numberer or the system, respectively. Existing
-  user choices are preserved verbatim; an MP-incompatible user choice
-  emits a `UserWarning` at build time and the deck still emits.
+- **INV-5.** When `len(fem.partitions) > 1` and the user has not
+  explicitly set a numberer / system, the deck emits a
+  **runtime-conditional fallback** — primary choice
+  (`ParallelPlain` / `Mumps`) under OpenSeesMP, automatic fallback
+  (`RCM` / `UmfPack`) under single-process OpenSees. The same deck
+  runs in both runtimes. Existing user choices are preserved
+  verbatim with `UserWarning` on detected incompatibility (see
+  **Amendment 2026-05-23** below for the rationale and the exact
+  Tcl / Py forms).
 
 ## Alternatives considered
 
@@ -343,3 +347,92 @@ OpenSeesMP-runnable deck → modal periods match single-rank baseline.
   that P4 makes partition-aware.
 - `opensees/emitter/base.py` — Protocol header documenting that
   widenings are architecture events.
+
+## Amendment 2026-05-23 — runtime-conditional numberer / system
+
+The original INV-5 wording mandated **unconditional** emission of
+`numberer ParallelPlain` and `system Mumps` at the top level of every
+partitioned deck. P4-B implemented that literally. Field testing
+exposed a contradiction with P4-A's partition-open shim:
+
+* P4-A's `partition_open(rank)` emits a single-process fallback shim
+  — Tcl declares `proc getPID {} { return 0 }` if not already
+  registered, and Py wraps `from openseespy.opensees import getPID`
+  in a `try / except ImportError` with a `def getPID(): return 0`
+  fallback. The shim lets `if {[getPID] == K}` blocks safely no-op
+  (for K != 0) under single-process OpenSees so the per-rank emit
+  blocks "skip themselves" instead of raising.
+* P4-B's INV-5 auto-emit of `numberer ParallelPlain` / `system Mumps`
+  is **outside** any per-rank block — it is global. Regular
+  OpenSees has no `ParallelPlain` numberer and no `Mumps` system; it
+  errors out before the deck even reaches the per-rank `if`-blocks:
+  `WARNING No Numberer type exists (Plain, RCM only)`.
+
+The shim was therefore illusory cover: the deck *looked* portable
+but only ran under OpenSeesMP. Two single-process accommodations
+contradicted each other.
+
+The amendment replaces the unconditional emit with a
+**runtime-conditional** fallback that mirrors the shape of the
+`partition_open` shim. The deck still names `ParallelPlain` /
+`Mumps` as the intended primary (so OpenSeesMP-aware readers see the
+intent), but wraps the call in a Tcl `catch` / Python `try / except`
+so a single-process OpenSees swallows the parse error and falls back
+to a serial choice (`RCM` / `UmfPack`) that does exist in every
+build.
+
+**Emitted Tcl (when the user has not explicitly declared a
+numberer / system):**
+
+```tcl
+# ParallelPlain only exists in OpenSeesMP; fall back to RCM under single-process OpenSees.
+if {[catch {numberer ParallelPlain} _err]} { numberer RCM }
+# Mumps requires OpenSeesMP + MPI; fall back to UmfPack under single-process OpenSees.
+if {[catch {system Mumps} _err]} { system UmfPack }
+```
+
+**Emitted Python:**
+
+```python
+# ParallelPlain only exists in OpenSeesMP; fall back to RCM under single-process OpenSees.
+try:
+    ops.numberer('ParallelPlain')
+except Exception:
+    ops.numberer('RCM')
+# Mumps requires OpenSeesMP + MPI; fall back to UmfPack under single-process OpenSees.
+try:
+    ops.system('Mumps')
+except Exception:
+    ops.system('UmfPack')
+```
+
+The amendment introduces two new Emitter Protocol methods —
+`parallel_runtime_fallback_numberer(primary, fallback)` and
+`parallel_runtime_fallback_system(primary, fallback)` — alongside
+the existing `numberer` / `system` ones. The build pipeline's
+`_maybe_auto_emit_parallel_numberer` /
+`_maybe_auto_emit_parallel_system` paths now call the new
+runtime-conditional methods instead of `emitter.numberer(...)` /
+`emitter.system(...)`. Per-emitter behaviour:
+
+| Emitter | Runtime conditional |
+|---|---|
+| Tcl | Emits the `catch` wrapper shown above. |
+| Py | Emits the `try / except` block shown above. |
+| LiveOps | Actually calls `self._ops.numberer(primary)` in-process; on `Exception` falls back to `self._ops.numberer(fallback)` and fires a one-shot `UserWarning`. Same for system. |
+| H5 | Records the primary as the canonical `numberer` / `system` attribute under `/opensees/analysis/`, plus a new `numberer_runtime_fallback` / `system_runtime_fallback` attribute carrying the fallback string. Re-emit can reconstruct the conditional from the pair. |
+| Recording | Captures `("parallel_runtime_fallback_numberer", (primary, fallback), {})` and the system equivalent. |
+
+User-override paths are **unchanged**: a user who declares a
+specific numberer or system gets that choice emitted verbatim
+(plus the existing MP-incompatibility `UserWarning` when the choice
+is detectably serial). The runtime conditional only fires on the
+"no user declaration" branch.
+
+Schema impact: zero. The H5 emitter adds two optional attributes
+under `/opensees/analysis/`; the schema 2.10.0 envelope (introduced
+by P4 for the new `/opensees/partitions/` group) already covers
+attribute additions per ADR 0023's additive-minor rule. Readers
+that ignore the new attributes degrade gracefully — they reconstruct
+the canonical numberer / system without the runtime fallback wrapper
+(matching pre-2.10.0 behaviour).
