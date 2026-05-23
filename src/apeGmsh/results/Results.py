@@ -115,6 +115,50 @@ _MODEL_H5_REQUIRED_MESSAGE = (
 )
 
 
+def _start_subprocess_monitor(handle: Any, args: list[str]) -> None:
+    """Spawn a daemon thread that waits on ``handle`` and surfaces
+    a non-zero exit code to stderr.
+
+    Closes the silent-failure window the May 2026 audit identified:
+    :meth:`Results._spawn_viewer_subprocess` returns a fire-and-forget
+    :class:`subprocess.Popen`; without this monitor, a child failure
+    (corrupt file, missing dependency, ``__main__.sys.exit(2)``) is
+    invisible to the parent kernel.  PR1 fixed the specific
+    MPCO-without-model-h5 path; this monitor catches the general case.
+
+    The monitor uses :meth:`Popen.wait` (no busy-poll, no CPU cost) on
+    a daemon thread (dies with the parent — no shutdown hook needed).
+    Exit code 0 is silent; non-zero prints a single line with the
+    code and the argv that was launched.  Crucially, the monitor
+    never *raises* — surfacing-to-stderr is the right escalation
+    level for a fire-and-forget IPC pattern.
+    """
+    import sys
+    import threading
+
+    def _wait_and_report() -> None:
+        try:
+            rc = handle.wait()
+        except Exception as exc:
+            print(
+                f"[apeGmsh] viewer subprocess monitor failed: {exc!r}",
+                file=sys.stderr, flush=True,
+            )
+            return
+        if rc != 0:
+            print(
+                f"[apeGmsh] viewer subprocess exited with code {rc}; "
+                f"argv={args!r}",
+                file=sys.stderr, flush=True,
+            )
+
+    threading.Thread(
+        target=_wait_and_report,
+        daemon=True,
+        name="apeGmsh-viewer-monitor",
+    ).start()
+
+
 class Results:
     """Top-level results object. Returned by ``Results.from_*`` constructors.
 
@@ -776,10 +820,20 @@ class Results:
         ``cuts=`` is *not* forwarded (live ``SectionCutDef`` objects
         don't survive an argv hop; that needs real IPC — separate
         future work, see ``viewer()`` docstring).
+
+        A daemon thread monitors the child's exit code and surfaces
+        non-zero exits to stderr (see :func:`_monitor_subprocess`).
+        Without this, a child failure (corrupt file, missing dep,
+        ``sys.exit(2)`` from ``__main__``) is invisible to the
+        parent — the fire-and-forget ``Popen`` swallows the failure
+        entirely.  PR1 fixed the specific MPCO-without-model-h5
+        case; this monitor catches the general case.
         """
         import subprocess
         args = self._build_viewer_argv(title=title)
-        return subprocess.Popen(args)
+        handle = subprocess.Popen(args)
+        _start_subprocess_monitor(handle, args)
+        return handle
 
     # ------------------------------------------------------------------
     # Display

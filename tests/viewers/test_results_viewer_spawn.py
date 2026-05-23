@@ -192,3 +192,102 @@ def test_spawn_mpco_argv_is_parseable_by_main_parser(mpco_results, patch_popen):
     assert ns.path == str(mpco_results._path)
     assert ns.title == "My MPCO Run"
     assert ns.model_h5 == mpco_results._model_path
+
+
+# =====================================================================
+# Subprocess failure monitor (PR-ε / audit-gap closure)
+# =====================================================================
+#
+# _spawn_viewer_subprocess returns a fire-and-forget Popen; without
+# the monitor, child failures (corrupt file, missing dep, exit(2))
+# are invisible to the parent.  These tests exercise the helper in
+# isolation (the spawn path is exercised above; the helper has no
+# Results dependency).
+
+
+def test_monitor_silent_on_zero_exit(capsys):
+    """Exit code 0 → monitor prints nothing.  The thread waits, sees
+    zero, and the call vanishes silently — the success case must
+    not pollute stderr."""
+    from apeGmsh.results.Results import _start_subprocess_monitor
+
+    class FakeHandle:
+        def wait(self):
+            return 0
+
+    _start_subprocess_monitor(FakeHandle(), ["python", "-m", "x"])
+    # Give the daemon thread a moment to run.
+    import time
+    time.sleep(0.05)
+
+    out, err = capsys.readouterr()
+    assert err == ""
+    assert out == ""
+
+
+def test_monitor_surfaces_nonzero_exit_to_stderr(capsys):
+    """Exit code != 0 → one line on stderr with the code and argv.
+    This is the audit-gap closure: a child that exited(2) (the B1
+    MPCO failure mode) now leaves a footprint in the parent's
+    stderr instead of vanishing."""
+    from apeGmsh.results.Results import _start_subprocess_monitor
+
+    class FakeHandle:
+        def wait(self):
+            return 2
+
+    argv = ["python", "-m", "apeGmsh.viewers", "/tmp/bad.mpco"]
+    _start_subprocess_monitor(FakeHandle(), argv)
+    import time
+    time.sleep(0.05)
+
+    out, err = capsys.readouterr()
+    assert "viewer subprocess exited with code 2" in err
+    assert "/tmp/bad.mpco" in err
+    # stdout is untouched — only the parent's stderr carries the alert.
+    assert out == ""
+
+
+def test_monitor_swallows_wait_exception(capsys):
+    """If ``handle.wait()`` itself raises (rare — Popen is robust),
+    the monitor logs to stderr and does NOT re-raise.  A monitor
+    crash must never propagate to the parent thread."""
+    from apeGmsh.results.Results import _start_subprocess_monitor
+
+    class FakeHandle:
+        def wait(self):
+            raise OSError("simulated wait failure")
+
+    _start_subprocess_monitor(FakeHandle(), ["python"])
+    import time
+    time.sleep(0.05)
+
+    out, err = capsys.readouterr()
+    assert "viewer subprocess monitor failed" in err
+    assert "simulated wait failure" in err
+
+
+def test_monitor_thread_is_daemon():
+    """The monitor thread must be a daemon — otherwise the parent
+    process cannot exit cleanly until every spawned viewer closes,
+    breaking the fire-and-forget contract."""
+    from apeGmsh.results.Results import _start_subprocess_monitor
+    import threading
+
+    class FakeHandle:
+        def wait(self):
+            import time
+            time.sleep(0.5)
+            return 0
+
+    before = {t.name for t in threading.enumerate()}
+    _start_subprocess_monitor(FakeHandle(), ["python"])
+    after = {t.name for t in threading.enumerate()}
+    new_threads = after - before
+
+    assert "apeGmsh-viewer-monitor" in new_threads
+    monitor_thread = next(
+        t for t in threading.enumerate()
+        if t.name == "apeGmsh-viewer-monitor"
+    )
+    assert monitor_thread.daemon is True
