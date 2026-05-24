@@ -18,7 +18,7 @@ This is the only place ``import openseespy.opensees`` may appear in
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -90,6 +90,15 @@ class LiveOpsEmitter:
         self._real_ops: "ModuleType" = self._ops
         self._partition_warned: bool = False
         self._in_partition: bool = False
+        # Step-hook state (Phase SSI-1).  ``_before_step_hooks`` /
+        # ``_after_step_hooks`` are lists of zero-arg callables fired
+        # before / after each ``analyze 1`` call when the hook-wrapped
+        # path is active (i.e. ``_step_hooks_registered is True``).
+        # Each closure captures its own state (counter + per-parameter
+        # cumulative value) so multiple ramps coexist cleanly.
+        self._before_step_hooks: list[Callable[[], None]] = []
+        self._after_step_hooks: list[Callable[[], None]] = []
+        self._step_hooks_registered: bool = False
 
     # -- Model ---------------------------------------------------------------
 
@@ -285,11 +294,33 @@ class LiveOpsEmitter:
         self._ops.analysis(a_type)
 
     def analyze(self, *, steps: int, dt: float | None = None) -> int:
-        if dt is None:
-            ret: Any = self._ops.analyze(steps)
-        else:
-            ret = self._ops.analyze(steps, dt)
-        return int(ret)
+        if not self._step_hooks_registered:
+            if dt is None:
+                ret: Any = self._ops.analyze(steps)
+            else:
+                ret = self._ops.analyze(steps, dt)
+            return int(ret)
+        # Hook-wrapped form: drive the loop in-process, firing
+        # registered closures between each ``ops.analyze(1)`` call.
+        # On the first non-zero return from openseespy we break with
+        # that exit code so the caller can react to non-convergence —
+        # matching the contract of unhook-wrapped ``ops.analyze(N)``
+        # (which short-circuits internally on failure).
+        last_ret: int = 0
+        for _ in range(int(steps)):
+            for fn in self._before_step_hooks:
+                fn()
+            if dt is None:
+                r: Any = self._ops.analyze(1)
+            else:
+                r = self._ops.analyze(1, dt)
+            ri = int(r)
+            if ri != 0:
+                last_ret = ri
+                break
+            for fn in self._after_step_hooks:
+                fn()
+        return last_ret
 
     def eigen(
         self, num_modes: int, *, solver: str = "-genBandArpack",
@@ -385,6 +416,69 @@ class LiveOpsEmitter:
                 stacklevel=2,
             )
             self._ops.system(fallback)
+
+    # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) -------
+
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None:
+        self._ops.addToParameter(tag, "element", ele_tag, response)
+
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None:
+        """Build a Python closure that ramps the parameters per step
+        and register it with the in-process hook dispatcher.
+
+        Side effects (matching the Tcl / Py emitters):
+
+        1. Declare each parameter in the live openseespy domain.
+        2. Capture per-hook state (step counter + cumulative value per
+           parameter) in a dict the closure mutates.
+        3. Append the closure to the before- or after-step hook list.
+        4. Flip ``_step_hooks_registered`` so :meth:`analyze` wraps
+           the loop with hook calls.
+
+        The ``name`` argument is recorded for diagnostics but is not
+        otherwise observable from the closure — the live dispatch does
+        not need a global name lookup.
+        """
+        del name  # diagnostics-only; live dispatch is by reference.
+
+        # 1. Declare the parameters in the live domain.
+        for tag, _target in targets:
+            self._ops.parameter(int(tag))
+
+        # 2. Per-hook state — closed over by the hook function below.
+        captured_targets = tuple((int(t), float(v)) for t, v in targets)
+        captured_divisor = float(n_steps_to_full)
+        state: dict[str, Any] = {"count": 0}
+        for tag, _ in captured_targets:
+            state[f"cum_{tag}"] = 0.0
+
+        # 3. The ramp closure — same algorithm as the emitted Tcl proc:
+        # advance counter, compute capped factor, emit one
+        # ``updateParameter $tag $delta`` per target.
+        def _ramp() -> None:
+            state["count"] = state["count"] + 1
+            factor = min(state["count"] / captured_divisor, 1.0)
+            for tag, target in captured_targets:
+                current = target * factor
+                delta = current - state[f"cum_{tag}"]
+                self._ops.updateParameter(tag, delta)
+                state[f"cum_{tag}"] = current
+
+        # 4. Register + flip the flag.
+        if phase == "before":
+            self._before_step_hooks.append(_ramp)
+        else:
+            self._after_step_hooks.append(_ramp)
+        self._step_hooks_registered = True
 
     # -- Direct accessor for tests / diagnostics ----------------------------
 

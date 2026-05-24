@@ -73,7 +73,9 @@ if TYPE_CHECKING:
 __all__ = [
     "BridgeError",
     "FixRecord",
+    "InitialStressRecord",
     "MassRecord",
+    "RegionAssignmentRecord",
     "VECXZ_TOL",
     "allocate_element_tags",
     "build_element_partition_owner",
@@ -81,6 +83,9 @@ __all__ = [
     "compute_vecxz_for_element",
     "emit_element_spec",
     "emit_element_spec_partitioned",
+    "emit_initial_stress_addtoparameter",
+    "emit_initial_stress_global",
+    "resolve_initial_stress_elements",
     "emit_mp_constraints",
     "emit_mp_constraints_partitioned",
     "emit_pattern_spec",
@@ -149,6 +154,60 @@ class RegionAssignmentRecord:
     name: str
     pg: str | None
     nodes: tuple[int, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class InitialStressRecord:
+    """One ``apeSees.initial_stress(name=...)`` directive — a ramped
+    in-situ stress tensor applied to a set of ASDPlasticMaterial3D
+    elements via the OpenSees ``parameter`` / ``addToParameter`` /
+    ``updateParameter`` mechanism.
+
+    Either ``pg`` or ``elements`` is non-None (validated at the call
+    site).  Each record fans out into:
+
+    * Three parameter declarations (XX, YY, ZZ) with bridge-allocated
+      tags.
+    * One ``addToParameter`` per element (per-rank-scoped in MP).
+    * One :class:`StepHookRampRecord` registering the per-step ramp.
+
+    ``lambda_install`` scales the target stress baked into the ramp's
+    target_value (target_value = sigma * lambda_install); the per-step
+    factor always ramps 0 → 1.0 over ``ramp_steps``.
+
+    Parameters
+    ----------
+    name
+        Unique label for this initial-stress region — used to name the
+        Tcl proc / Python function and the per-hook state container.
+        MUST be a valid Tcl identifier (alphanumeric + underscore, not
+        starting with a digit).
+    pg
+        Physical group whose elements receive the ramped stress.
+    elements
+        Explicit list of element tags.  XOR with ``pg``.
+    sigma_xx, sigma_yy, sigma_zz
+        Target Cauchy stress per component (compression negative).
+        Units must match the model's stress unit.
+    ramp_steps
+        Number of analyze steps over which the factor ramps 0 → 1.0.
+        After ``ramp_steps`` analyze calls, the cumulative
+        ``updateParameter`` is exactly ``sigma_* * lambda_install``;
+        subsequent steps emit ``updateParameter $tag 0.0`` (no-op).
+    lambda_install
+        Fraction of target stress to install (0 < lambda <= 1).  1.0
+        = full install (default).  0.5 = 50% relaxation (intermediate
+        convergence-confinement step).
+    """
+
+    name: str
+    pg: str | None
+    elements: tuple[int, ...] | None
+    sigma_xx: float
+    sigma_yy: float
+    sigma_zz: float
+    ramp_steps: int
+    lambda_install: float
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +467,7 @@ def emit_element_spec(
     tags: TagAllocator,
     base_resolver: object,
     transf_tag_for_element: dict[tuple[int, int], int] | None = None,
+    tag_recorder: dict[int, int] | None = None,
 ) -> None:
     """Drive the per-PG fan-out for one :class:`Element` typed spec.
 
@@ -432,6 +492,11 @@ def emit_element_spec(
         ``geomTransf`` tag. Filled by :func:`emit_transform_specs` for
         orientation-bearing transforms; ``None`` (or missing keys)
         means use the spec's own resolver path.
+    tag_recorder
+        Optional ``{fem_eid: ops_tag}`` dict the fan-out mutates as
+        each element is emitted.  Used by downstream emit passes that
+        need to look up the OpenSees element tag for a FEM element id
+        (Phase SSI-1: initial_stress' addToParameter fan-out).
     """
     elements = expand_pg_to_elements(fem, spec.pg)  # type: ignore[attr-defined]
     if not elements:
@@ -441,6 +506,8 @@ def emit_element_spec(
 
     for eid, node_tags in elements:
         ele_tag = tags.allocate("element")
+        if tag_recorder is not None:
+            tag_recorder[int(eid)] = int(ele_tag)
         set_element_nodes(emitter, node_tags)
         # Phase 8.6: pass the FEM element id through the side channel
         # so the H5 emitter can record the (fem_eid, ops_tag) mapping
@@ -1702,6 +1769,101 @@ def allocate_element_tags(
             sub.append((int(eid), tuple(int(n) for n in conn), int(ele_tag)))
         plan.append((spec, sub))
     return plan
+
+
+def resolve_initial_stress_elements(
+    rec: InitialStressRecord, fem: "FEMData",
+) -> tuple[int, ...]:
+    """Return the FEM element ids for an :class:`InitialStressRecord`.
+
+    Exactly one of ``rec.pg`` / ``rec.elements`` is non-None
+    (validated at the call site in :meth:`apeSees.initial_stress`).
+    """
+    if rec.elements is not None:
+        return rec.elements
+    if rec.pg is not None:
+        return tuple(eid for eid, _conn in expand_pg_to_elements(fem, rec.pg))
+    return ()
+
+
+def emit_initial_stress_global(
+    records: "Iterable[InitialStressRecord]",
+    emitter: "Emitter",
+    tags: TagAllocator,
+) -> dict[str, tuple[int, int, int]]:
+    """Emit the global side of each :class:`InitialStressRecord`.
+
+    For each record, allocates three parameter tags (XX, YY, ZZ) from
+    the bridge allocator, then calls :meth:`Emitter.step_hook_ramp`,
+    which bundles the dispatcher boilerplate (once), the parameter
+    declarations, the per-step proc, and the dispatcher registration.
+
+    Returns the mapping ``{record_name: (xx_tag, yy_tag, zz_tag)}`` so
+    the per-rank ``addToParameter`` fan-out (see
+    :func:`emit_initial_stress_addtoparameter`) can reach the same
+    tags without re-allocating.
+    """
+    out: dict[str, tuple[int, int, int]] = {}
+    for rec in records:
+        xx_tag = tags.allocate("parameter")
+        yy_tag = tags.allocate("parameter")
+        zz_tag = tags.allocate("parameter")
+        targets = (
+            (xx_tag, rec.sigma_xx * rec.lambda_install),
+            (yy_tag, rec.sigma_yy * rec.lambda_install),
+            (zz_tag, rec.sigma_zz * rec.lambda_install),
+        )
+        emitter.step_hook_ramp(
+            name=rec.name,
+            targets=targets,
+            n_steps_to_full=float(rec.ramp_steps),
+            phase="before",
+        )
+        out[rec.name] = (xx_tag, yy_tag, zz_tag)
+    return out
+
+
+def emit_initial_stress_addtoparameter(
+    records: "Iterable[InitialStressRecord]",
+    emitter: "Emitter",
+    fem: "FEMData",
+    name_to_param_tags: dict[str, tuple[int, int, int]],
+    fem_eid_to_ops_tag: dict[int, int],
+    element_owner: dict[int, int] | None = None,
+    partition_rank: int | None = None,
+) -> None:
+    """Emit ``addToParameter`` for each element covered by each record.
+
+    Per-rank semantics: if ``partition_rank`` is supplied (MP-mode
+    emission inside a ``partition_open`` block), elements are filtered
+    against ``element_owner`` and only owned elements emit.  Single-
+    partition / flat callers pass ``partition_rank=None`` and the
+    filter is skipped.
+
+    Elements whose FEM id isn't in ``fem_eid_to_ops_tag`` are silently
+    skipped — they live on a different rank in MP, or the user listed
+    an element id that doesn't correspond to any registered Element
+    spec.  The fan-out is best-effort by design.
+    """
+    components = (
+        ("commitStressIncrementXX", 0),
+        ("commitStressIncrementYY", 1),
+        ("commitStressIncrementZZ", 2),
+    )
+    for rec in records:
+        param_tags = name_to_param_tags[rec.name]
+        for eid in resolve_initial_stress_elements(rec, fem):
+            if partition_rank is not None and element_owner is not None:
+                owner = element_owner.get(int(eid))
+                if owner is None or owner != partition_rank:
+                    continue
+            ops_tag = fem_eid_to_ops_tag.get(int(eid))
+            if ops_tag is None:
+                continue
+            for response, idx in components:
+                emitter.addToParameter(
+                    int(param_tags[idx]), int(ops_tag), response,
+                )
 
 
 def emit_element_spec_partitioned(

@@ -15,7 +15,7 @@ file and see exactly what gets recorded.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 
 class RecordingEmitter:
@@ -248,3 +248,30 @@ class RecordingEmitter:
         self.calls.append(
             ("parallel_runtime_fallback_system", (primary, fallback), {}),
         )
+
+    # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) ----
+
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None:
+        self.calls.append(
+            ("addToParameter", (tag, ele_tag, response), {})
+        )
+
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None:
+        self.calls.append((
+            "step_hook_ramp",
+            (name,),
+            {
+                "targets": tuple(targets),
+                "n_steps_to_full": n_steps_to_full,
+                "phase": phase,
+            },
+        ))

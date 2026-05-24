@@ -15,7 +15,7 @@ not pollute prior state.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 
 __all__ = ["PyEmitter"]
@@ -97,6 +97,15 @@ class PyEmitter:
         # but falls back to a 0-returning stub so single-process
         # Python still runs the deck.
         self._partition_shim_emitted: bool = False
+        # Step-hook state (Phase SSI-1).  Mirror of the TclEmitter
+        # flags: ``_step_hooks_registered`` flips on the first
+        # ``step_hook_ramp`` and is checked by ``analyze`` to wrap the
+        # analyze loop with dispatcher calls.
+        # ``_hook_dispatcher_emitted`` ensures the dispatcher
+        # boilerplate (module-level lists + dispatcher functions) is
+        # emitted exactly once.
+        self._step_hooks_registered: bool = False
+        self._hook_dispatcher_emitted: bool = False
 
     # -- Output --------------------------------------------------------------
 
@@ -311,10 +320,23 @@ class PyEmitter:
         self._lines.append(_ops_call("analysis", a_type))
 
     def analyze(self, *, steps: int, dt: float | None = None) -> int:
+        if not self._step_hooks_registered:
+            if dt is None:
+                self._lines.append(_ops_call("analyze", steps))
+            else:
+                self._lines.append(_ops_call("analyze", steps, dt))
+            return 0
+        # Hook-wrapped form: Python for-loop with dispatcher calls.
+        self._lines.append(f"for _apesees_i in range({int(steps)}):")
+        prev_indent = self._lines.indent
+        self._lines.indent = prev_indent + "    "
+        self._lines.append("_apesees_call_before_step()")
         if dt is None:
-            self._lines.append(_ops_call("analyze", steps))
+            self._lines.append(_ops_call("analyze", 1))
         else:
-            self._lines.append(_ops_call("analyze", steps, dt))
+            self._lines.append(_ops_call("analyze", 1, dt))
+        self._lines.append("_apesees_call_after_step()")
+        self._lines.indent = prev_indent
         return 0
 
     def eigen(
@@ -322,6 +344,100 @@ class PyEmitter:
     ) -> list[float]:
         self._lines.append(_ops_call("eigen", solver, num_modes))
         return []
+
+    # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) -------
+
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None:
+        self._lines.append(
+            _ops_call("addToParameter", tag, "element", ele_tag, response)
+        )
+
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None:
+        # 1. Dispatcher boilerplate (idempotent).
+        if not self._hook_dispatcher_emitted:
+            self._emit_hook_dispatcher_boilerplate()
+            self._hook_dispatcher_emitted = True
+        # 2. parameter declarations.
+        for tag, _target in targets:
+            self._lines.append(_ops_call("parameter", int(tag)))
+        # 3. The per-step function body.
+        self._emit_hook_ramp_function(name, targets, n_steps_to_full)
+        # 4. Register with the appropriate dispatcher list.
+        list_var = (
+            "_apesees_before_step_hooks"
+            if phase == "before"
+            else "_apesees_after_step_hooks"
+        )
+        self._lines.append(f"{list_var}.append({name})")
+        # 5. Flip flag so analyze() wraps.
+        self._step_hooks_registered = True
+
+    def _emit_hook_dispatcher_boilerplate(self) -> None:
+        """Emit the once-per-deck hook dispatcher infrastructure."""
+        prev_indent = self._lines.indent
+        self._lines.indent = ""
+        self._lines.append("# apeSees per-step hook dispatcher (Phase SSI-1)")
+        self._lines.append("_apesees_before_step_hooks: list = []")
+        self._lines.append("_apesees_after_step_hooks: list = []")
+        self._lines.append("def _apesees_call_before_step() -> None:")
+        self._lines.append("    for _f in _apesees_before_step_hooks:")
+        self._lines.append("        _f()")
+        self._lines.append("def _apesees_call_after_step() -> None:")
+        self._lines.append("    for _f in _apesees_after_step_hooks:")
+        self._lines.append("        _f()")
+        self._lines.indent = prev_indent
+
+    def _emit_hook_ramp_function(
+        self,
+        name: str,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+    ) -> None:
+        """Emit the per-step linear ramp function for one hook.
+
+        Mirrors the Tcl proc: a module-level ``{name}_state`` dict
+        carries the step counter and cumulative-value per parameter;
+        each call advances the counter, recomputes the capped factor,
+        and emits one ``ops.updateParameter`` per target.
+        """
+        prev_indent = self._lines.indent
+        self._lines.indent = ""
+        # State dict — declared at module level so the closure can
+        # mutate it across calls.  Initial cumulative is 0.0 for every
+        # parameter; the counter starts at 0.
+        state_items = ", ".join(
+            f"'cum_{int(tag)}': 0.0" for tag, _ in targets
+        )
+        self._lines.append(
+            f"{name}_state: dict = {{'count': 0, {state_items}}}"
+        )
+        self._lines.append(f"def {name}() -> None:")
+        self._lines.append(f"    {name}_state['count'] += 1")
+        self._lines.append(
+            f"    _factor = min({name}_state['count'] / "
+            f"{repr(float(n_steps_to_full))}, 1.0)"
+        )
+        for tag, target in targets:
+            self._lines.append(
+                f"    _cur = {repr(float(target))} * _factor"
+            )
+            self._lines.append(
+                f"    _delta = _cur - {name}_state['cum_{int(tag)}']"
+            )
+            self._lines.append(
+                f"    ops.updateParameter({int(tag)}, _delta)"
+            )
+            self._lines.append(f"    {name}_state['cum_{int(tag)}'] = _cur")
+        self._lines.indent = prev_indent
 
     # -- Partition emission scoping (ADR 0027, P4) --------------------------
 

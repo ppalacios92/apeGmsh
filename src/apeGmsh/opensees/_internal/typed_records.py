@@ -110,6 +110,10 @@ __all__ = [
     "RigidLinkRecord",
     "RigidDiaphragmRecord",
     "EmbeddedNodeRecord",
+    # Stress-control records (Phase SSI-1: initial_stress, ramping hooks)
+    "ParameterRecord",
+    "AddToParameterRecord",
+    "StepHookRampRecord",
 ]
 
 
@@ -532,3 +536,78 @@ class EmbeddedNodeRecord:
     cnode: int
     args: tuple[int | float, ...]
     name: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Stress-control records (Phase SSI-1: initial_stress + per-step ramping hooks)
+# ---------------------------------------------------------------------------
+#
+# These are the read-side mirror of the H5 buffer for the parameter /
+# addToParameter / step-hook bundle emitted by the InitialStress
+# composite primitive.  H5 archival is deferred for Phase SSI-1 — the
+# H5 emitter no-ops these methods with a deviation marker.  The
+# records exist now so the Emitter Protocol shape is uniform across
+# emitters and the future schema bump is mechanical (additive).
+
+@dataclass(frozen=True, slots=True)
+class ParameterRecord:
+    """One ``parameter $tag`` declaration.
+
+    OpenSees parameters are tag-only at declaration time; subsequent
+    :class:`AddToParameterRecord` rows attach element responses to the
+    same tag, and :class:`StepHookRampRecord` drives the per-step
+    ``updateParameter $tag $delta``.
+    """
+
+    tag: int
+
+
+@dataclass(frozen=True, slots=True)
+class AddToParameterRecord:
+    """One ``addToParameter $tag element $ele_tag $response`` directive.
+
+    Emitted per-rank inside ``partition_open`` blocks for MP-partitioned
+    models — each rank only emits the addToParameter calls for elements
+    it owns (see :func:`emit_initial_stress_partitioned` in
+    :mod:`apeGmsh.opensees._internal.build`).
+
+    ``response`` is the element-response name OpenSees exposes for the
+    parameter (e.g. ``"commitStressIncrementXX"`` on
+    ``ASDPlasticMaterial3D``).
+    """
+
+    tag: int
+    ele_tag: int
+    response: str
+
+
+@dataclass(frozen=True, slots=True)
+class StepHookRampRecord:
+    """A per-step linear ramping hook bound to one or more parameters.
+
+    Bundles the four things that materialize one
+    :class:`apeGmsh.opensees.InitialStress` composite into the deck:
+
+    1. Dispatcher boilerplate (emitted once across the emitter's
+       lifetime; subsequent ramps reuse the same dispatcher).
+    2. ``parameter $tag`` declaration for each tag in :attr:`targets`.
+    3. The per-step procedure body — advances an internal counter,
+       computes ``factor = min(count / n_steps_to_full, 1.0)``, then
+       for each ``(param_tag, target_value)`` computes the delta
+       against the previous step's cumulative value and emits
+       ``updateParameter $param_tag $delta``.
+    4. Registration with the before / after-step hook dispatcher list
+       (``_apesees_before_step_hooks`` / ``_apesees_after_step_hooks``).
+
+    Once any :class:`StepHookRampRecord` has been emitted on an
+    emitter, subsequent :meth:`Emitter.analyze` calls MUST wrap the
+    analyze loop with hook dispatcher calls.
+
+    ``targets`` is ordered: the first entry of each ramp proc emits
+    its updateParameter first.  Order is stable across emitters.
+    """
+
+    name: str
+    targets: tuple[tuple[int, float], ...]
+    n_steps_to_full: float
+    phase: Literal["before", "after"]

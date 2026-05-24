@@ -84,6 +84,20 @@ so single-process OpenSees still runs the deck: Tcl declares
 ``from openseespy.opensees import getPID`` in a ``try / except
 ImportError`` with a fallback ``def getPID(): return 0``.  Schema
 bump opensees ``2.9.0 → 2.10.0`` per ADR 0023 — additive minor.
+
+**Architecture event — Phase SSI-1 (initial_stress, May 2026).** The
+Protocol was widened with two stress-control methods,
+:meth:`addToParameter` and :meth:`step_hook_ramp`, that materialize
+the STKO-style initial-stress-injection-via-committed-stress-increment
+pattern.  ``addToParameter`` is a single-line per-rank-scoped
+directive; ``step_hook_ramp`` is a multi-line bundle (dispatcher
+init + parameter declarations + per-step proc + lappend
+registration) emitted globally.  Once any ``step_hook_ramp`` has
+been emitted, the emitter's :meth:`analyze` MUST wrap the analyze
+loop with hook-dispatcher calls so the ramp actually advances
+between steps.  H5 archival is deferred (no schema bump in Phase
+SSI-1); H5 / Recording / Live emitters implement the methods as
+no-ops / capture-only / in-process closures respectively.
 """
 from __future__ import annotations
 
@@ -229,7 +243,53 @@ class Emitter(Protocol):
     def algorithm(self, a_type: str, *args: int | float | str) -> None: ...
     def integrator(self, i_type: str, *args: int | float | str) -> None: ...
     def analysis(self, a_type: str) -> None: ...
+
+    # Behavior change (Phase SSI-1): once :meth:`step_hook_ramp` has
+    # been called on this emitter, ``analyze`` MUST wrap the analyze
+    # loop with per-step hook-dispatcher calls so registered ramps
+    # actually advance between steps.  Tcl emits ``for`` + dispatcher
+    # invocations; Py emits ``for`` + dispatcher invocations; LiveOps
+    # runs the loop in-process and invokes the captured closures.
     def analyze(self, *, steps: int, dt: float | None = None) -> int: ...
+
+    # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) ----
+    # ``addToParameter`` attaches one element's response to a previously
+    # declared parameter.  Emitted per-rank inside ``partition_open``
+    # blocks for MP-partitioned models — each rank emits only the
+    # addToParameter calls for elements it owns.  The parameter
+    # declarations themselves come from :meth:`step_hook_ramp` (global).
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None: ...
+
+    # ``step_hook_ramp`` emits the multi-line bundle that materializes
+    # one ``InitialStress`` composite into the deck:
+    #
+    # 1. Dispatcher boilerplate (idempotent — emitted once across the
+    #    emitter's lifetime).  Includes the
+    #    ``_apesees_before_step_hooks`` / ``_apesees_after_step_hooks``
+    #    list and the ``_apesees_call_before_step`` /
+    #    ``_apesees_call_after_step`` dispatcher procs.
+    # 2. ``parameter $tag`` declaration for each tag in ``targets``.
+    # 3. The per-step procedure body.  Computes
+    #    ``factor = min(count / n_steps_to_full, 1.0)`` then emits
+    #    one ``updateParameter $param_tag $delta`` per target, where
+    #    ``$delta = target_value * factor - previous_cumulative``.
+    # 4. Registration via ``lappend`` to the dispatcher list selected
+    #    by ``phase``.
+    #
+    # The ``lambda_install`` parameter of the user-facing
+    # :func:`apeSees.initial_stress` is baked into ``target_value``
+    # (target_value = sigma * lambda_install), so the proc body
+    # always ramps factor 0 → 1.0.
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None: ...
 
     # -- Eigen (one-shot, returns values from live emitter) ---------------
     # Issues ``eigen [solver] $numModes`` — does not require an

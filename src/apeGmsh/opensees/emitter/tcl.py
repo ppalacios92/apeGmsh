@@ -24,7 +24,7 @@ Tcl-specific dialect choices:
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 
 __all__ = ["TclEmitter"]
@@ -116,6 +116,15 @@ class TclEmitter:
         # (4 spaces) so the closing ``\\}`` lines up with the opening
         # ``if {[getPID] == K}``.
         self._partition_shim_emitted: bool = False
+        # Step-hook state (Phase SSI-1).  ``_step_hooks_registered``
+        # flips to True the first time ``step_hook_ramp`` runs and is
+        # checked by ``analyze`` to decide whether to wrap the analyze
+        # loop with hook-dispatcher calls.
+        # ``_hook_dispatcher_emitted`` toggles on the first
+        # ``step_hook_ramp`` call so the dispatcher boilerplate (list
+        # variables + dispatcher procs) emits exactly once.
+        self._step_hooks_registered: bool = False
+        self._hook_dispatcher_emitted: bool = False
 
     # -- Output --------------------------------------------------------------
 
@@ -339,10 +348,29 @@ class TclEmitter:
         self._lines.append(_join("analysis", a_type))
 
     def analyze(self, *, steps: int, dt: float | None = None) -> int:
+        if not self._step_hooks_registered:
+            if dt is None:
+                self._lines.append(f"analyze {steps}")
+            else:
+                self._lines.append(_join("analyze", steps, dt))
+            return 0
+        # Hook-wrapped form: for-loop with dispatcher calls per step.
+        # We use a private loop variable name to avoid clashing with
+        # anything the user might define in their own Tcl.
+        self._lines.append(
+            f"for {{set _apesees_i 0}} {{$_apesees_i < {steps}}} "
+            f"{{incr _apesees_i}} {{"
+        )
+        prev_indent = self._lines.indent
+        self._lines.indent = prev_indent + "    "
+        self._lines.append("_apesees_call_before_step")
         if dt is None:
-            self._lines.append(f"analyze {steps}")
+            self._lines.append("analyze 1")
         else:
-            self._lines.append(_join("analyze", steps, dt))
+            self._lines.append(_join("analyze", 1, dt))
+        self._lines.append("_apesees_call_after_step")
+        self._lines.indent = prev_indent
+        self._lines.append("}")
         return 0
 
     def eigen(
@@ -350,6 +378,129 @@ class TclEmitter:
     ) -> list[float]:
         self._lines.append(_join("eigen", solver, num_modes))
         return []
+
+    # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) -------
+
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None:
+        self._lines.append(
+            _join("addToParameter", tag, "element", ele_tag, response)
+        )
+
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None:
+        # 1. Dispatcher boilerplate (idempotent — emitted on first call).
+        if not self._hook_dispatcher_emitted:
+            self._emit_hook_dispatcher_boilerplate()
+            self._hook_dispatcher_emitted = True
+        # 2. parameter declarations (one per ramped component).  These
+        # are global — emit at the outer indent so partition_open does
+        # NOT scope them per-rank.
+        for tag, _target in targets:
+            self._lines.append(_join("parameter", int(tag)))
+        # 3. The per-step proc body.  Uses a Tcl array keyed by a name
+        # that includes the hook name (so multiple ramps don't clash).
+        self._emit_hook_ramp_proc(name, targets, n_steps_to_full)
+        # 4. Register with the appropriate dispatcher list.
+        list_var = (
+            "_apesees_before_step_hooks"
+            if phase == "before"
+            else "_apesees_after_step_hooks"
+        )
+        self._lines.append(f"lappend {list_var} {name}")
+        # 5. Flip the flag so future analyze() calls know to wrap.
+        self._step_hooks_registered = True
+
+    def _emit_hook_dispatcher_boilerplate(self) -> None:
+        """Emit the once-per-deck hook dispatcher infrastructure.
+
+        Mirrors STKO's ``STKO_CALL_OnBeforeAnalyze`` pattern but with
+        apeSees-prefixed names so emitted decks don't collide with
+        hand-written STKO blocks.
+        """
+        # Emit at indent 0 (the dispatcher is global, not per-rank).
+        prev_indent = self._lines.indent
+        self._lines.indent = ""
+        self._lines.append(
+            "# apeSees per-step hook dispatcher (Phase SSI-1)"
+        )
+        self._lines.append("set _apesees_before_step_hooks {}")
+        self._lines.append("set _apesees_after_step_hooks {}")
+        self._lines.append("proc _apesees_call_before_step {} {")
+        self._lines.append(
+            "    global _apesees_before_step_hooks"
+        )
+        self._lines.append(
+            "    foreach _f $_apesees_before_step_hooks { $_f }"
+        )
+        self._lines.append("}")
+        self._lines.append("proc _apesees_call_after_step {} {")
+        self._lines.append("    global _apesees_after_step_hooks")
+        self._lines.append(
+            "    foreach _f $_apesees_after_step_hooks { $_f }"
+        )
+        self._lines.append("}")
+        self._lines.indent = prev_indent
+
+    def _emit_hook_ramp_proc(
+        self,
+        name: str,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+    ) -> None:
+        """Emit the per-step linear ramp procedure body for one hook.
+
+        The proc tracks a private Tcl array ``${name}_state`` carrying
+        a step counter plus one cumulative-value entry per parameter.
+        Each call advances the counter, recomputes the factor (capped
+        at 1.0), and emits one ``updateParameter $tag $delta`` per
+        target where ``$delta = target * factor - previous_cumulative``.
+        """
+        # Emit at indent 0 — procs are global definitions.
+        prev_indent = self._lines.indent
+        self._lines.indent = ""
+        self._lines.append(f"proc {name} {{}} {{")
+        self._lines.append(f"    global {name}_state")
+        # First-call initialization of state array.
+        self._lines.append(f"    if {{![info exists {name}_state(count)]}} {{")
+        self._lines.append(f"        set {name}_state(count) 0")
+        for tag, _target in targets:
+            self._lines.append(
+                f"        set {name}_state(cum_{int(tag)}) 0.0"
+            )
+        self._lines.append("    }")
+        # Advance counter, compute capped factor.
+        self._lines.append(
+            f"    set {name}_state(count) "
+            f"[expr {{${name}_state(count) + 1}}]"
+        )
+        self._lines.append(
+            f"    set _factor [expr "
+            f"{{${name}_state(count) / {repr(float(n_steps_to_full))}}}]"
+        )
+        self._lines.append("    if {$_factor > 1.0} { set _factor 1.0 }")
+        # One updateParameter per target — delta = current - previous.
+        for tag, target in targets:
+            self._lines.append(
+                f"    set _cur [expr {{{repr(float(target))} * $_factor}}]"
+            )
+            self._lines.append(
+                f"    set _delta "
+                f"[expr {{$_cur - ${name}_state(cum_{int(tag)})}}]"
+            )
+            self._lines.append(f"    updateParameter {int(tag)} $_delta")
+            self._lines.append(
+                f"    set {name}_state(cum_{int(tag)}) $_cur"
+            )
+        self._lines.append("}")
+        self._lines.indent = prev_indent
 
     # -- Partition emission scoping (ADR 0027, P4) --------------------------
 

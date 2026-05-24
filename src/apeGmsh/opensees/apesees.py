@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Sequence, TypeVar
 from ._internal.build import (
     BridgeError,
     FixRecord,
+    InitialStressRecord,
     MassRecord,
     RegionAssignmentRecord,
     allocate_element_tags,
@@ -34,6 +35,8 @@ from ._internal.build import (
     build_node_partition_owners,
     emit_element_spec,
     emit_element_spec_partitioned,
+    emit_initial_stress_addtoparameter,
+    emit_initial_stress_global,
     emit_mp_constraints,
     emit_mp_constraints_partitioned,
     emit_pattern_spec,
@@ -270,16 +273,23 @@ class BuiltModel:
         Multiple records sharing the same ``name`` are merged at emit
         time into a single ``region $tag -node ...`` command with one
         freshly-allocated tag.
+    initial_stress_records
+        :class:`~apeGmsh.opensees._internal.build.InitialStressRecord`
+        directives collected through ``apeSees.initial_stress(...)``
+        — each is a ramped in-situ stress tensor that fans out into
+        parameter declarations + per-rank ``addToParameter`` calls +
+        a step-hook ramping proc.  Phase SSI-1.
     """
 
-    primitives:      tuple[Primitive, ...]
-    tag_for:         dict[int, int]
-    ndm:             int
-    ndf:             int
-    fem:             "FEMData"
-    fix_records:     tuple[FixRecord, ...]
-    mass_records:    tuple[MassRecord, ...]
-    region_records:  tuple[RegionAssignmentRecord, ...]
+    primitives:              tuple[Primitive, ...]
+    tag_for:                 dict[int, int]
+    ndm:                     int
+    ndf:                     int
+    fem:                     "FEMData"
+    fix_records:             tuple[FixRecord, ...]
+    mass_records:            tuple[MassRecord, ...]
+    region_records:          tuple[RegionAssignmentRecord, ...]
+    initial_stress_records:  tuple[InitialStressRecord, ...] = ()
 
     def emit(self, emitter: Emitter) -> int:
         """Drive ``emitter`` over the model, returning ``analyze``'s exit value.
@@ -440,7 +450,12 @@ class BuiltModel:
             ndm=self.ndm,
         )
 
-        # 6. Elements.
+        # 6. Elements.  ``fem_eid_to_ops_tag`` collects ``{fem_eid:
+        # ops_element_tag}`` as the fan-out emits each element — the
+        # initial_stress emit pass below needs it to translate the
+        # user's element selection (FEM ids) into the OpenSees tags
+        # used by ``addToParameter``.
+        fem_eid_to_ops_tag: dict[int, int] = {}
         for ele_spec in elements:
             emit_element_spec(
                 spec=ele_spec,
@@ -449,6 +464,7 @@ class BuiltModel:
                 tags=tags,
                 base_resolver=base_resolver,
                 transf_tag_for_element=overrides,
+                tag_recorder=fem_eid_to_ops_tag,
             )
 
         # 7. Fixes / masses / regions / broker loads.
@@ -462,6 +478,21 @@ class BuiltModel:
 
         # 7c. Auto-emit constraint handler when MP constraints present.
         self._maybe_auto_emit_constraint_handler(emitter, pre_element)
+
+        # 7d. Initial stress (Phase SSI-1).  Emit the step_hook_ramp
+        # bundle (dispatcher + parameter decls + proc + lappend), then
+        # one addToParameter per element / component.  Single-process
+        # path = no ``partition_open`` wrapping.
+        if self.initial_stress_records:
+            name_to_param_tags = emit_initial_stress_global(
+                self.initial_stress_records, emitter, tags,
+            )
+            emit_initial_stress_addtoparameter(
+                self.initial_stress_records,
+                emitter, self.fem,
+                name_to_param_tags=name_to_param_tags,
+                fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+            )
 
         # 8. Patterns + recorders.
         for p in post_element:
@@ -545,6 +576,27 @@ class BuiltModel:
         # holds for every element (the rank-K block uses the same
         # element tag as the owning rank's block).
         element_plan = allocate_element_tags(elements, self.fem, tags)
+        # Global fem-eid → ops-tag map; used by the initial_stress
+        # per-rank ``addToParameter`` fan-out to translate the user's
+        # FEM element selection into OpenSees element tags (Phase
+        # SSI-1).
+        fem_eid_to_ops_tag: dict[int, int] = {}
+        for _, sub in element_plan:
+            for eid, _conn, ele_tag in sub:
+                fem_eid_to_ops_tag[int(eid)] = int(ele_tag)
+
+        # Initial stress — global side (parameter declarations + proc +
+        # lappend) emits ONCE outside any ``partition_open`` block.
+        # The per-rank ``addToParameter`` fan-out happens inside each
+        # rank's block, below.  Per OpenSeesMP semantics the deck is
+        # executed by every rank, so the global block runs N times —
+        # but parameter / proc / lappend state is rank-local in MP, so
+        # each rank ends up with the same local setup.
+        init_stress_param_tags: dict[str, tuple[int, int, int]] = {}
+        if self.initial_stress_records:
+            init_stress_param_tags = emit_initial_stress_global(
+                self.initial_stress_records, emitter, tags,
+            )
 
         # Stable per-rank node tags — sort within each rank by node id
         # so cross-rank diffs of the emitted text are grep-friendly.
@@ -659,6 +711,21 @@ class BuiltModel:
                     element_owner=element_owner,
                     foreign_node_ndf=int(self.ndf),
                 )
+
+                # 7d. Initial stress — per-rank ``addToParameter`` fan-
+                # out for owned elements only (Phase SSI-1).  The
+                # global step_hook_ramp was emitted before the per-rank
+                # loop; this block attaches each owned element's
+                # response to the previously declared parameter tags.
+                if self.initial_stress_records:
+                    emit_initial_stress_addtoparameter(
+                        self.initial_stress_records,
+                        emitter, self.fem,
+                        name_to_param_tags=init_stress_param_tags,
+                        fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+                        element_owner=element_owner,
+                        partition_rank=rank,
+                    )
 
                 # 8. Patterns (loads + sps) per-rank.
                 self._emit_patterns_partitioned(
@@ -1374,6 +1441,7 @@ class apeSees:
         self._fix_records: list[FixRecord] = []
         self._mass_records: list[MassRecord] = []
         self._region_records: list[RegionAssignmentRecord] = []
+        self._initial_stress_records: list[InitialStressRecord] = []
         # Resolve the sentinel: unset → Cartesian() (Z-up). Explicit
         # None disables the auto-default (2D models).
         if isinstance(default_orientation, _UnsetType):
@@ -1510,6 +1578,98 @@ class apeSees:
             MassRecord(pg=pg, nodes=nodes_tuple, values=tuple(values)),
         )
 
+    def initial_stress(
+        self,
+        *,
+        name: str,
+        pg: str | None = None,
+        elements: Iterable[int] | None = None,
+        sigma_xx: float,
+        sigma_yy: float,
+        sigma_zz: float,
+        ramp_steps: int,
+        lambda_install: float = 1.0,
+    ) -> None:
+        """Initialize an in-situ stress tensor on ASDPlasticMaterial3D elements.
+
+        Emits the OpenSees ``parameter`` / ``addToParameter`` /
+        ``updateParameter`` ramp pattern that STKO uses to inject a
+        pre-stressed state without applying gravity-driven body loads.
+        The factor ramps linearly 0 → 1 over ``ramp_steps`` analyze
+        calls and plateaus at 1.0 thereafter; the target stress baked
+        into the ramp is ``sigma_* × lambda_install``, so passing
+        ``lambda_install < 1.0`` produces a partial-installation
+        (convergence-confinement) result.
+
+        Exactly one of ``pg`` / ``elements`` must be supplied.  This
+        primitive is **declarative only** — the actual stress
+        advancement happens at analyze time, via the per-step
+        dispatcher this primitive registers with.  Call
+        ``ops.analyze(steps=ramp_steps, dt=...)`` or pass
+        ``analyze_steps=ramp_steps`` to :meth:`tcl` / :meth:`py` for
+        the ramp to take effect.
+
+        Parameters
+        ----------
+        name
+            Unique Tcl-identifier-safe label.  Used to name the
+            emitted proc / state container.
+        pg
+            Physical group whose elements receive the ramped stress.
+        elements
+            Explicit list of FEM element ids.  XOR with ``pg``.
+        sigma_xx, sigma_yy, sigma_zz
+            Target Cauchy stress per component (compression negative).
+        ramp_steps
+            Number of analyze steps over which the factor reaches 1.0.
+            Must be ``>= 1``.
+        lambda_install
+            Fraction of target to install (default 1.0).  Must be in
+            ``(0, 1]``.
+        """
+        if (pg is None) == (elements is None):
+            raise ValueError(
+                "apeSees.initial_stress: supply exactly one of pg= or "
+                f"elements= (got pg={pg!r}, elements={elements!r})."
+            )
+        if not name:
+            raise ValueError(
+                "apeSees.initial_stress: name= must be non-empty."
+            )
+        # Tcl identifier safety: alphanumeric + underscore, not starting
+        # with a digit.  Keeps the emitted ``proc <name>`` parsable.
+        if not name.replace("_", "").isalnum() or name[0].isdigit():
+            raise ValueError(
+                "apeSees.initial_stress: name must be a valid Tcl "
+                "identifier (alphanumeric + underscore, not starting "
+                f"with a digit). Got name={name!r}."
+            )
+        if ramp_steps < 1:
+            raise ValueError(
+                "apeSees.initial_stress: ramp_steps must be >= 1, "
+                f"got {ramp_steps}."
+            )
+        if not (0.0 < lambda_install <= 1.0):
+            raise ValueError(
+                "apeSees.initial_stress: lambda_install must be in "
+                f"(0, 1], got {lambda_install}."
+            )
+        elements_tuple = (
+            tuple(int(e) for e in elements) if elements is not None else None
+        )
+        self._initial_stress_records.append(
+            InitialStressRecord(
+                name=str(name),
+                pg=pg,
+                elements=elements_tuple,
+                sigma_xx=float(sigma_xx),
+                sigma_yy=float(sigma_yy),
+                sigma_zz=float(sigma_zz),
+                ramp_steps=int(ramp_steps),
+                lambda_install=float(lambda_install),
+            ),
+        )
+
     def region(
         self,
         *,
@@ -1639,13 +1799,25 @@ class apeSees:
         *,
         run: bool = False,
         bin: str | None = None,
+        analyze_steps: int | None = None,
+        analyze_dt: float | None = None,
     ) -> None:
-        """Emit a Tcl deck to ``path``; optionally subprocess OpenSees."""
+        """Emit a Tcl deck to ``path``; optionally subprocess OpenSees.
+
+        When ``analyze_steps`` is supplied, an ``analyze`` line is
+        appended to the deck after every other primitive — wrapped in
+        a hook-dispatching for-loop if any
+        :meth:`initial_stress` calls registered step hooks (Phase
+        SSI-1).  Without ``analyze_steps``, the emitted deck declares
+        the model but does not drive an analysis.
+        """
         from .emitter.tcl import TclEmitter
 
         bm = self.build()
         emitter = TclEmitter()
         bm.emit(emitter)
+        if analyze_steps is not None:
+            emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(emitter.lines()) + "\n")
 
@@ -1665,13 +1837,26 @@ class apeSees:
                 f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
             )
 
-    def py(self, path: str, *, run: bool = False) -> None:
-        """Emit an openseespy Python deck to ``path``; optionally run it."""
+    def py(
+        self,
+        path: str,
+        *,
+        run: bool = False,
+        analyze_steps: int | None = None,
+        analyze_dt: float | None = None,
+    ) -> None:
+        """Emit an openseespy Python deck to ``path``; optionally run it.
+
+        ``analyze_steps`` / ``analyze_dt`` semantics mirror :meth:`tcl`
+        (Phase SSI-1).
+        """
         from .emitter.py import PyEmitter
 
         bm = self.build()
         emitter = PyEmitter()
         bm.emit(emitter)
+        if analyze_steps is not None:
+            emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(emitter.lines()) + "\n")
 
@@ -1824,6 +2009,7 @@ class apeSees:
             fix_records=tuple(self._fix_records),
             mass_records=tuple(self._mass_records),
             region_records=tuple(self._region_records),
+            initial_stress_records=tuple(self._initial_stress_records),
         )
 
     # -- Internal helpers ------------------------------------------------

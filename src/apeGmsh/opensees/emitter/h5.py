@@ -74,7 +74,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from .._internal.tag_resolution import (
     ATTR_ELEMENT_NODES,
@@ -1148,6 +1148,34 @@ class H5Emitter:
         """
         self._analysis_attrs["system"] = primary
         self._analysis_attrs["system_runtime_fallback"] = fallback
+
+    # =====================================================================
+    # Protocol — Stress control (Phase SSI-1)
+    # =====================================================================
+    #
+    # H5 archival of parameter / addToParameter / step_hook_ramp is
+    # deferred for Phase SSI-1.  The bridge still drives these methods
+    # when an InitialStress composite is emitted, so the H5 emitter must
+    # accept them — it just discards them (no schema bump).  When a
+    # model.h5 round-trip is needed for staged-construction models, this
+    # is the spot to add the writers (and bump SCHEMA_VERSION).
+
+    def addToParameter(
+        self, tag: int, ele_tag: int, response: str,
+    ) -> None:
+        """No-op for Phase SSI-1 — archival deferred."""
+        del tag, ele_tag, response
+
+    def step_hook_ramp(
+        self,
+        name: str,
+        *,
+        targets: tuple[tuple[int, float], ...],
+        n_steps_to_full: float,
+        phase: Literal["before", "after"] = "before",
+    ) -> None:
+        """No-op for Phase SSI-1 — archival deferred."""
+        del name, targets, n_steps_to_full, phase
 
     # =====================================================================
     # Protocol — Analysis chain
