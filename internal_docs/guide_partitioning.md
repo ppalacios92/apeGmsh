@@ -517,38 +517,56 @@ is unbound, the shim defines it to return 0, and only the rank-0
 block executes. Other ranks' blocks are skipped by the
 `if {[getPID] == K}` gate.
 
-> **Current limitation (subject to change).** Today —
-> `apesees.py::_maybe_auto_emit_parallel_numberer`, commit
-> `c9a8b2c` — when `len(fem.partitions) > 1` the bridge
-> **unconditionally** emits `numberer ParallelPlain` + `system
-> Mumps` at the global scope. Those two commands are MP-only;
-> single-process OpenSees rejects them with
-> `No Numberer type exists, Plain, RCM only`. The shim handles the
-> per-rank brackets but not the global analysis chain.
->
-> Practical consequence: as of `c9a8b2c`, partitioned decks ship
-> **OpenSeesMP-runnable only.** To run a partitioned deck under
-> single-process OpenSees today, override before emit:
->
-> ```python
-> ops.numberer.RCM()
-> ops.system.UmfPack()
-> # ... rest of analysis chain ...
-> ops.tcl("model.tcl")     # MP-incompatible-user-choice warning fires
-> ```
->
-> The bridge fires a `UserWarning` ("serial numberer 'RCM' explicitly
-> declared … OpenSeesMP requires a parallel numberer") because your
-> override is no longer MP-compatible; that is by design — you've
-> opted into a single-process deck.
->
-> A runtime-conditional fix is in flight on
-> `feat/inv5-runtime-conditional` (task #17). When it lands, the
-> bridge will emit a `catch` / try-except fallback that picks
-> `ParallelPlain` / `Mumps` under MPI and `RCM` / `UmfPack`
-> otherwise, so a single deck runs under both. Re-check this section
-> against `_maybe_auto_emit_parallel_numberer` after that branch
-> merges.
+### Runtime-conditional numberer + system
+
+When `len(fem.partitions) > 1` and the user has not explicitly
+declared a numberer / system, the bridge auto-emits a **runtime
+conditional** (ADR 0027 INV-5, amended 2026-05-23) so the same deck
+runs under both OpenSeesMP and single-process OpenSees:
+
+```tcl
+# ParallelPlain only exists in OpenSeesMP; fall back to RCM under single-process OpenSees.
+if {[catch {numberer ParallelPlain} _err]} { numberer RCM }
+# Mumps requires OpenSeesMP + MPI; fall back to UmfPack under single-process OpenSees.
+if {[catch {system Mumps} _err]} { system UmfPack }
+```
+
+The Py emitter produces the equivalent `try / except Exception`
+shape. The LiveOps emitter performs the same try/fallback
+in-process, emitting one `UserWarning` per fallback.
+
+Under regular OpenSees, the runtime prints two `WARNING` lines
+(`No Numberer type exists (Plain, RCM only)`, `system Mumps is
+unknown or not installed`); Tcl `catch` swallows them and the
+fallback executes. The deck reaches end-of-file and `analyze`
+converges. Under OpenSeesMP the primary `ParallelPlain` +
+`Mumps` apply.
+
+### Overriding the auto-emit
+
+Declare the analysis chain explicitly before `ops.tcl(...)` /
+`ops.py(...)` / `ops.h5(...)` to suppress the auto-emit:
+
+```python
+ops.numberer.RCM()         # or ParallelPlain — your choice
+ops.system.UmfPack()       # or Mumps — your choice
+# ... rest of analysis chain ...
+ops.tcl("model.tcl")
+```
+
+If your explicit override is MP-incompatible (e.g. `RCM` with
+`len(fem.partitions) > 1`) the bridge fires a `UserWarning`
+("serial numberer 'RCM' explicitly declared … OpenSeesMP requires
+a parallel numberer") but respects your choice — you've opted
+into a single-process deck.
+
+### H5 emission
+
+The H5 emitter records the **primary** in `/opensees/analysis/`
+attrs (`numberer`, `system`) and the **fallback** in companion
+attrs (`numberer_runtime_fallback`, `system_runtime_fallback`).
+Readers see both choices; round-trip through `OpenSeesModel`
+preserves the pair.
 
 The shim itself, by contrast, has been stable since P4 and is not
 expected to change.
