@@ -259,6 +259,12 @@ class _MPCOFilterPlan:
     re-entering ``MPCO.materialize`` (which would otherwise allocate a
     new region tag and re-emit the region globally — the buggy pre-
     ADR-0027 INV-4 behaviour for the partitioned path).
+
+    ``elem_ids`` carries **FEM eids** (not OpenSees element tags).
+    Per-rank intersection in
+    :meth:`BuiltModel._emit_mpco_filter_regions_for_rank` is keyed by
+    ``element_owner`` which is FEM-eid keyed; the translation to
+    OpenSees tags happens at the final region-emit step on each rank.
     """
     region_tag: int
     node_ids: tuple[int, ...]
@@ -1025,6 +1031,7 @@ class BuiltModel:
                 self._emit_mpco_filter_regions_for_rank(
                     emitter, rank, mpco_filter_plan, rank_owned_nodes[rank],
                     element_owner,
+                    fem_eid_to_ops_tag,
                 )
 
                 # 7a. Broker nodal loads (re-partitioned per-rank).
@@ -1501,6 +1508,7 @@ class BuiltModel:
         plan: "dict[int, _MPCOFilterPlan]",
         owned_nodes: set[int],
         element_owner: dict[int, int],
+        fem_eid_to_ops_tag: dict[int, int],
     ) -> None:
         """Per-rank emission of MPCO recorder filter regions (INV-4).
 
@@ -1510,6 +1518,17 @@ class BuiltModel:
         intersections are empty the recorder's region is omitted on
         this rank (INV-4 §"empty intersection ⇒ no region emitted on
         that rank").
+
+        ``entry.elem_ids`` carries **FEM eids** (the planner deliberately
+        calls ``resolve_filter_ids(fem)`` without the
+        ``fem_eid_to_ops_tag`` map so the per-rank ``element_owner``
+        intersection — keyed by FEM eid — stays correct).  The
+        per-rank FEM-eid subset is translated to OpenSees element tags
+        via ``fem_eid_to_ops_tag`` just before emission so the
+        ``region <tag> -ele ...`` line carries OpenSees tags (which is
+        what the region command expects), not raw FEM eids.  Lookup
+        miss → :class:`BridgeError`, mirroring the
+        :meth:`Element.materialize` policy.
 
         The region tag is the SAME scalar across every emitting rank
         (carried on each plan entry); MPCO post-processing stitches the
@@ -1521,6 +1540,7 @@ class BuiltModel:
         """
         if not plan:
             return
+        from ._internal.build import BridgeError
         for entry in plan.values():
             # Per-rank node intersection — preserves original declaration order.
             rank_node_ids = tuple(
@@ -1530,18 +1550,31 @@ class BuiltModel:
             # is this rank.  Element ownership is single-rank
             # (build_element_partition_owner), so a missing key means
             # the element isn't on any rank — skip silently.
-            rank_elem_ids = tuple(
+            rank_fem_eids = tuple(
                 e for e in entry.elem_ids
                 if element_owner.get(int(e)) == rank
             )
-            if not rank_node_ids and not rank_elem_ids:
+            if not rank_node_ids and not rank_fem_eids:
                 # INV-4: empty intersection on this rank → no region line.
                 continue
             region_args: list[int | float | str] = []
             if rank_node_ids:
                 region_args += ["-node", *rank_node_ids]
-            if rank_elem_ids:
-                region_args += ["-ele", *rank_elem_ids]
+            if rank_fem_eids:
+                rank_ops_tags: list[int] = []
+                for eid in rank_fem_eids:
+                    ops_tag = fem_eid_to_ops_tag.get(int(eid))
+                    if ops_tag is None:
+                        raise BridgeError(
+                            f"MPCO recorder filter (rank {rank}): "
+                            f"resolves to FEM eid {eid} but no element "
+                            "was emitted at that eid — declare an "
+                            "``ops.element.X(pg=...)`` primitive whose "
+                            "pg includes the MPCO recorder's "
+                            "elements_pg."
+                        )
+                    rank_ops_tags.append(int(ops_tag))
+                region_args += ["-ele", *rank_ops_tags]
             emitter.region(entry.region_tag, *region_args)
 
     def _resolve_node_target(

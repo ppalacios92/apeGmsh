@@ -499,7 +499,9 @@ class MPCO(Recorder):
         )
 
     def resolve_filter_ids(
-        self, fem: "FEMData",
+        self,
+        fem: "FEMData",
+        fem_eid_to_ops_tag: "dict[int, int] | None" = None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Resolve ``nodes`` / ``nodes_pg`` / ``elements`` / ``elements_pg``
         to explicit id tuples — no emission, no tag allocation.
@@ -509,6 +511,17 @@ class MPCO(Recorder):
         (e.g. ``nodes_pg="X"`` resolving to zero nodes) raises
         :class:`BridgeError` to mirror the OpenSees runtime rejection of
         an empty region.
+
+        ``fem_eid_to_ops_tag`` is the bridge-built ``{fem_eid: ops_tag}``
+        map for element fan-out.  When supplied AND ``elements_pg`` is
+        set, the resolved FEM eids are translated to OpenSees element
+        tags before they flow into the region's ``-ele`` arg list
+        (same drift as the Element recorder, closed by
+        :meth:`Element.materialize`).  Lookup miss → :class:`BridgeError`.
+        When ``None`` (legacy direct callers) the FEM eids are returned
+        verbatim — the partition orchestrator uses this form so it can
+        intersect per-rank in FEM-eid space, then translate at the
+        final region-emit step.
 
         This is the partition-aware split-point of the legacy single-
         pass :meth:`materialize`: the partition orchestrator calls
@@ -548,10 +561,10 @@ class MPCO(Recorder):
         # Resolve element-side selector.
         elem_ids: tuple[int, ...] = ()
         if self.elements_pg is not None:
-            elem_ids = tuple(
+            fem_eids = tuple(
                 eid for eid, _conn in expand_pg_to_elements(fem, self.elements_pg)
             )
-            if not elem_ids:
+            if not fem_eids:
                 raise BridgeError(
                     f"MPCO recorder filter: elements_pg={self.elements_pg!r} "
                     "resolved to zero elements against the FEM snapshot. "
@@ -559,6 +572,28 @@ class MPCO(Recorder):
                     "check the PG name spelling and that elements were "
                     "registered against it before get_fem_data."
                 )
+            if fem_eid_to_ops_tag is None:
+                # Legacy / partition-orchestrator form: return FEM eids
+                # verbatim so the caller can intersect per-rank in
+                # FEM-eid space.  The bridge's flat path always supplies
+                # the map; the partition path translates at the final
+                # per-rank region-emit step.
+                elem_ids = fem_eids
+            else:
+                ops_tags: list[int] = []
+                for eid in fem_eids:
+                    ops_tag = fem_eid_to_ops_tag.get(int(eid))
+                    if ops_tag is None:
+                        raise BridgeError(
+                            f"MPCO recorder filter: elements_pg="
+                            f"{self.elements_pg!r} resolves to FEM eid "
+                            f"{eid} but no element was emitted at that "
+                            "eid — declare an "
+                            "``ops.element.X(pg=...)`` primitive whose "
+                            f"pg includes {self.elements_pg!r}."
+                        )
+                    ops_tags.append(int(ops_tag))
+                elem_ids = tuple(ops_tags)
         elif self.elements is not None:
             elem_ids = tuple(int(e) for e in self.elements)
             if not elem_ids:
@@ -615,16 +650,17 @@ class MPCO(Recorder):
                 "bypass the bridge must pass it explicitly."
             )
 
-        # TODO: when ``elements_pg=`` is set, ``elem_ids`` here are FEM
-        # eids, but the region's ``-ele`` arg needs OpenSees element
-        # tags.  Same drift as the Element recorder (closed by
-        # ``Element.materialize`` above).  Translation requires both
-        # the ``fem_eid_to_ops_tag`` map AND a reformulation of the
-        # partitioned ``element_owner`` intersection in
-        # ``_emit_mpco_filter_regions_for_rank`` (which is keyed by
-        # FEM eid today).  Tracked as a follow-up.
-        del fem_eid_to_ops_tag
-        node_ids, elem_ids = self.resolve_filter_ids(fem)
+        # ``elements_pg=`` resolution translates FEM eids → OpenSees
+        # element tags via the bridge-built map (same drift as the
+        # Element recorder, closed by ``Element.materialize`` above).
+        # The partitioned emit path drives this method-bypass via
+        # ``_plan_partitioned_mpco_recorders`` + ``_emit_mpco_filter_
+        # regions_for_rank`` (which keeps the resolution in FEM-eid
+        # space so the per-rank ``element_owner`` intersection works,
+        # then translates at the final region-emit step).
+        node_ids, elem_ids = self.resolve_filter_ids(
+            fem, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
 
         # Allocate one region tag for this MPCO recorder and emit it.
         # One ``region`` command can carry both ``-node`` and ``-ele``

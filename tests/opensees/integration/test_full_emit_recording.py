@@ -350,11 +350,22 @@ def test_mpco_explicit_nodes_matches_pg_form() -> None:
 
 
 def test_mpco_elements_pg_emits_region_with_ele_flag() -> None:
-    """``elements_pg=`` resolves to ``-ele e1 e2 ...`` inside the region."""
-    fem = make_two_column_frame()  # PG "Cols" -> elements (1, 2)
+    """``elements_pg=`` resolves to ``-ele e1 e2 ...`` inside the region.
+
+    The element primitive consumes element-kind tag 1 in ``_register``,
+    so the two fan-out instances for FEM eids (1, 2) land on OpenSees
+    tags (2, 3) — the region's ``-ele`` list MUST carry those ops tags,
+    not the FEM eids.
+    """
+    fem = make_two_column_frame()  # PG "Cols" -> FEM eids (1, 2)
 
     ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
     ops.model(ndm=3, ndf=6)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    ops.element.elasticBeamColumn(
+        pg="Cols", transf=transf,
+        A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
+    )
     ops.recorder.MPCO(
         file="run.mpco",
         elem_responses=("section.force",),
@@ -368,7 +379,105 @@ def test_mpco_elements_pg_emits_region_with_ele_flag() -> None:
     region_args = region_calls[0][1]
     assert "-ele" in region_args
     ele_flag_idx = region_args.index("-ele")
-    assert region_args[ele_flag_idx + 1: ele_flag_idx + 3] == (1, 2)
+    assert region_args[ele_flag_idx + 1: ele_flag_idx + 3] == (2, 3)
+
+
+def test_mpco_elements_pg_translates_fem_eids_to_ops_tags() -> None:
+    """Regression: the MPCO recorder's ``elements_pg=`` resolution must
+    translate FEM eids to the actual OpenSees element tags emitted by
+    the fan-out, not pass FEM eids verbatim.
+
+    Setup mirrors :func:`test_element_recorder_pg_translates_fem_eids_to_ops_tags`
+    on the Element-recorder side: one element primitive consumes
+    element-kind tag 1 via ``_register``; the single PG-element fans
+    out to tag 2.  An MPCO recorder targeting that PG must emit
+    ``-ele 2`` inside its region, never ``-ele 1`` (the FEM eid).  The
+    silent-buggy behaviour writes a region carrying the wrong element
+    and MPCO then records nothing for the intended target.
+    """
+    from tests.opensees.fixtures.fem_stub import (
+        FEMStub, _ElementGroupView, _ElementsStub, _NodesStub,
+    )
+
+    nodes = _NodesStub(
+        ids=[1, 2, 3, 4],
+        coords=[
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+        ],
+        node_pgs={"Corners": [1, 2, 3, 4]},
+    )
+    elements = _ElementsStub(
+        elem_pgs={
+            "Rock": _ElementGroupView(
+                ids=(1,), connectivity=((1, 2, 3, 4),),
+            ),
+        },
+    )
+    fem = FEMStub(nodes=nodes, elements=elements)
+
+    ops = apeSees(cast("object", fem), default_orientation=None)  # type: ignore[arg-type]
+    ops.model(ndm=2, ndf=2)
+    mat = ops.nDMaterial.ElasticIsotropic(E=4e6, nu=0.18, rho=4.5)
+    ops.element.FourNodeQuad(
+        pg="Rock", thickness=1.0, material=mat, plane_type="PlaneStrain",
+    )
+    ops.recorder.MPCO(
+        file="run.mpco",
+        elem_responses=("stresses",),
+        elements_pg="Rock",
+    )
+
+    bm = ops.build()
+    rec = RecordingEmitter()
+    bm.emit(rec)
+
+    element_calls = [c for c in rec.calls if c[0] == "element"]
+    region_calls = [c for c in rec.calls if c[0] == "region"]
+    assert len(element_calls) == 1
+    assert len(region_calls) == 1
+    # Element primitive consumed element-kind tag 1; fan-out instance
+    # for FEM eid 1 took tag 2.
+    emitted_ele_tag = element_calls[0][1][1]
+    assert emitted_ele_tag == 2
+    # The MPCO region MUST target the emitted ops tag (2), not the FEM
+    # eid (1).
+    region_args = region_calls[0][1]
+    ele_idx = region_args.index("-ele")
+    assert region_args[ele_idx + 1] == 2, (
+        f"MPCO region targets {region_args[ele_idx + 1]!r}, expected "
+        "2 (the OpenSees element tag); 1 = the FEM eid = the buggy "
+        "behaviour."
+    )
+
+
+def test_mpco_elements_pg_unmatched_pg_fails_loud() -> None:
+    """An MPCO ``elements_pg=`` whose resolved FEM eids aren't represented
+    in any element primitive's fan-out raises ``BridgeError`` at emit
+    time.  Without the bridge-built ``fem_eid_to_ops_tag`` entry, the
+    region would silently emit ``-ele <fem_eid>`` and MPCO would
+    record nothing for the intended target — the loud failure surfaces
+    the misuse immediately, mirroring the Element-recorder policy.
+    """
+    from apeGmsh.opensees._internal.build import BridgeError
+
+    fem = make_two_column_frame()  # PG "Cols" -> FEM eids (1, 2)
+
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    # Note: NO element primitive declared for "Cols", so the MPCO's
+    # elements_pg= resolves to FEM eids 1, 2 but the
+    # fem_eid_to_ops_tag map is empty — translation fails loud.
+    ops.recorder.MPCO(
+        file="run.mpco",
+        elem_responses=("section.force",),
+        elements_pg="Cols",
+    )
+
+    with pytest.raises(BridgeError, match=r"no element was emitted"):
+        ops.build().emit(RecordingEmitter())
 
 
 def test_mpco_both_nodes_and_elements_pg_emits_one_region() -> None:
@@ -381,12 +490,17 @@ def test_mpco_both_nodes_and_elements_pg_emits_one_region() -> None:
 
     ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
     ops.model(ndm=3, ndf=6)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    ops.element.elasticBeamColumn(
+        pg="Cols", transf=transf,
+        A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
+    )
     ops.recorder.MPCO(
         file="run.mpco",
         nodal_responses=("displacement",),
         elem_responses=("section.force",),
         nodes_pg="Top",        # PG "Top" -> nodes (2, 4)
-        elements_pg="Cols",    # PG "Cols" -> elements (1, 2)
+        elements_pg="Cols",    # PG "Cols" -> FEM eids (1, 2) -> ops tags (2, 3)
     )
     rec = RecordingEmitter()
     ops.build().emit(rec)

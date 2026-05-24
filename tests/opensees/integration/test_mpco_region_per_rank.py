@@ -187,8 +187,14 @@ def test_mpco_region_emitted_per_rank_under_partitioning() -> None:
     )
 
     # Per-rank node + element contents.  "Base" -> nodes (1, 3): rank
-    # 0 owns 1; rank 1 owns 3.  "Cols" -> elements (1, 2): rank 0 owns
-    # element 1; rank 1 owns element 2.
+    # 0 owns 1; rank 1 owns 3.  "Cols" -> FEM eids (1, 2): the
+    # elasticBeamColumn primitive consumed element-kind tag 1 in
+    # ``_register``, so the two fan-out instances for FEM eids (1, 2)
+    # land on OpenSees tags (2, 3).  Rank 0 owns FEM eid 1 → ops tag 2;
+    # rank 1 owns FEM eid 2 → ops tag 3.  The region's ``-ele`` list
+    # MUST carry those ops tags, not the FEM eids (see the locked
+    # regression test
+    # ``test_mpco_elements_pg_translates_fem_eids_to_ops_tags``).
     def _scan_flag(args: tuple, flag: str) -> list:
         if flag not in args:
             return []
@@ -206,8 +212,8 @@ def test_mpco_region_emitted_per_rank_under_partitioning() -> None:
     r1_eles = sorted(int(x) for x in _scan_flag(region_calls_r1[0][1], "-ele"))
     assert r0_nodes == [1], f"rank 0 expected -node [1], got {r0_nodes}"
     assert r1_nodes == [3], f"rank 1 expected -node [3], got {r1_nodes}"
-    assert r0_eles == [1], f"rank 0 expected -ele [1], got {r0_eles}"
-    assert r1_eles == [2], f"rank 1 expected -ele [2], got {r1_eles}"
+    assert r0_eles == [2], f"rank 0 expected -ele [2] (ops tag for FEM eid 1), got {r0_eles}"
+    assert r1_eles == [3], f"rank 1 expected -ele [3] (ops tag for FEM eid 2), got {r1_eles}"
 
 
 # ---------------------------------------------------------------------------
