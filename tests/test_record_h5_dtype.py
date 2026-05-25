@@ -65,9 +65,15 @@ def test_interpolation_payload_fields() -> None:
         "slave_node", "master_nodes", "weights", "dofs",
         "projected_point", "parametric_coords",
         "name",
+        # ASDEmbeddedNodeElement options (neutral schema 2.8.0)
+        "stiffness", "stiffness_p", "has_stiffness_p",
+        "rotational", "pressure", "excess",
     )
     assert dt["projected_point"].shape == (3,)
     assert dt["parametric_coords"].shape == (2,)
+    assert dt["stiffness"] == np.dtype(np.float64)
+    assert dt["has_stiffness_p"] == np.dtype(np.uint8)
+    assert dt["rotational"] == np.dtype(np.uint8)
 
 
 def test_surface_coupling_payload_fields() -> None:
@@ -81,6 +87,9 @@ def test_surface_coupling_payload_fields() -> None:
         "sr_weights", "sr_dof_counts", "sr_dofs",
         "sr_projected", "sr_parametric",
         "name",
+        # ASDEmbeddedNodeElement options per slave (neutral schema 2.8.0)
+        "sr_stiffness", "sr_stiffness_p", "sr_has_stiffness_p",
+        "sr_rotational", "sr_pressure", "sr_excess",
     )
     assert dt["mortar_operator_shape"].shape == (2,)
 

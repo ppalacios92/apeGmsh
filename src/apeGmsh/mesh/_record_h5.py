@@ -131,6 +131,19 @@ def interpolation_payload_dtype() -> np.dtype:
 
     The ``name`` field (added in neutral schema 2.5.0) carries the
     pre-mesh declaration name.  Old 2.4.0 files lack this field.
+
+    Schema 2.8.0 adds five typed columns so the
+    ASDEmbeddedNodeElement options carried on the record round-trip
+    through H5: ``stiffness`` (``-K``, float64), ``stiffness_p``
+    (``-KP``, float64, NaN when ``None``) + ``has_stiffness_p``
+    (uint8 presence flag — NaN isn't a clean sentinel because 0 is
+    valid penalty data), ``rotational`` (``-rot``, uint8 0/1),
+    ``pressure`` (``-p``, uint8 0/1), and ``excess`` (float64, NaN
+    when ``None`` — populated by ``resolve_embedded`` as the
+    barycentric excess of the slave w.r.t. its host).  Pre-2.8.0
+    files lack these columns; the reader probes presence via
+    ``p.dtype.names`` and falls back to dataclass defaults
+    (``stiffness=1e18``, the rest ``None``/``False``).
     """
     return np.dtype([
         ("slave_node", np.int64),
@@ -140,6 +153,13 @@ def interpolation_payload_dtype() -> np.dtype:
         ("projected_point", np.float64, (3,)),
         ("parametric_coords", np.float64, (2,)),
         ("name", _utf8()),
+        # ASDEmbeddedNodeElement options (schema 2.8.0)
+        ("stiffness", np.float64),
+        ("stiffness_p", np.float64),
+        ("has_stiffness_p", np.uint8),
+        ("rotational", np.uint8),
+        ("pressure", np.uint8),
+        ("excess", np.float64),
     ])
 
 
@@ -161,6 +181,17 @@ def surface_coupling_payload_dtype() -> np.dtype:
     reader detects their absence structurally (by payload-field
     signature, not schema version) and yields ``slave_records=[]``
     (the legacy behaviour) for them.
+
+    Schema 2.8.0 mirrors the ``interpolation_payload_dtype``
+    extension into the sr_* lane so the ASDEmbeddedNodeElement
+    options on each slave record round-trip too — without them, a
+    tied_contact / mortar whose slave records carry a custom ``-K``
+    silently reverts to the dataclass defaults on read, then the
+    bridge emits ``-K 1e18`` instead.  Pre-2.8.0 files lack
+    ``sr_stiffness`` / ``sr_stiffness_p`` / ``sr_has_stiffness_p`` /
+    ``sr_rotational`` / ``sr_pressure`` / ``sr_excess``; presence is
+    probed structurally (same pattern as the original ``sr_*``
+    detection).
     """
     return np.dtype([
         ("master_nodes", _vlen(np.int64)),
@@ -181,6 +212,13 @@ def surface_coupling_payload_dtype() -> np.dtype:
         # name (neutral schema 2.5.0): pre-mesh declaration name.
         # Old 2.4.0 files lack this field; reader probes presence.
         ("name", _utf8()),
+        # ASDEmbeddedNodeElement options per slave record (schema 2.8.0)
+        ("sr_stiffness", _vlen(np.float64)),       # (n_sr,)
+        ("sr_stiffness_p", _vlen(np.float64)),     # (n_sr,) NaN when None
+        ("sr_has_stiffness_p", _vlen(np.uint8)),   # (n_sr,) 0/1 presence
+        ("sr_rotational", _vlen(np.uint8)),        # (n_sr,) 0/1
+        ("sr_pressure", _vlen(np.uint8)),          # (n_sr,) 0/1
+        ("sr_excess", _vlen(np.float64)),          # (n_sr,) NaN when None
     ])
 
 
