@@ -389,6 +389,230 @@ def test_round_trip_surface_coupling_record(tmp_path: Path) -> None:
     assert [p.dofs for p in c.slave_records] == [[1, 2, 3], [1, 2, 3]]
 
 
+def test_round_trip_embedded_stiffness_and_flags(tmp_path: Path) -> None:
+    """Schema 2.8.0 — ASDEmbeddedNodeElement options on
+    InterpolationRecord round-trip through H5.
+
+    Pre-2.8.0 the kernel ``interpolation_payload_dtype`` lacked
+    ``stiffness`` / ``stiffness_p`` / ``rotational`` / ``pressure``
+    / ``excess``, so an ``embedded`` record with a non-default ``-K``
+    silently snapped back to the dataclass default (``1e18``) on
+    read — and the bridge then emitted ``-K 1e18`` unconditionally
+    (ADR 0035 made ``-K`` always emit).  This locks the fix.
+    """
+    embedded = InterpolationRecord(
+        kind=ConstraintKind.EMBEDDED,
+        name="embed_pile",
+        slave_node=5,
+        master_nodes=[2, 3, 4],
+        weights=np.array([0.3, 0.3, 0.4]),
+        dofs=[1, 2, 3],
+        projected_point=np.array([0.6, 0.6, 0.0]),
+        parametric_coords=np.array([0.3, 0.3]),
+        excess=0.0042,
+        stiffness=5.0e16,
+        stiffness_p=2.5e15,
+        rotational=True,
+        pressure=True,
+    )
+    # And a tied_contact-shaped coupling whose slave_records carry
+    # non-default options too, exercising the sr_* CSR lane in
+    # surface_coupling_payload_dtype.
+    sr_a = InterpolationRecord(
+        kind=ConstraintKind.TIE, slave_node=6, master_nodes=[2, 3],
+        weights=np.array([0.5, 0.5]), dofs=[1, 2, 3],
+        projected_point=np.array([0.5, 0.0, 0.0]),
+        parametric_coords=np.array([0.5, 0.0]),
+        stiffness=7.0e12, stiffness_p=None,
+        rotational=False, pressure=True, excess=None,
+    )
+    sr_b = InterpolationRecord(
+        kind=ConstraintKind.TIE, slave_node=7, master_nodes=[2, 3],
+        weights=np.array([0.25, 0.75]), dofs=[1, 2, 3],
+        projected_point=np.array([0.75, 0.0, 0.0]),
+        parametric_coords=np.array([0.75, 0.0]),
+        stiffness=3.0e13, stiffness_p=1.5e12,
+        rotational=True, pressure=False, excess=1.1e-3,
+    )
+    coupling = SurfaceCouplingRecord(
+        kind=ConstraintKind.TIED_CONTACT, name="tie_face",
+        master_nodes=[2, 3], slave_nodes=[6, 7], dofs=[1, 2, 3],
+        mortar_operator=None, slave_records=[sr_a, sr_b],
+    )
+
+    node_ids = np.array([1, 2, 3, 4, 5, 6, 7], dtype=np.int64)
+    node_coords = np.array([
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0], [0.5, 0.5, 1.0], [2.0, 0.5, 0.5],
+        [2.0, 0.5, 1.5],
+    ], dtype=np.float64)
+    tri_info = make_type_info(
+        code=2, gmsh_name="Triangle 3", dim=2, order=1, npe=3, count=1,
+    )
+    tri_group = ElementGroup(
+        element_type=tri_info, ids=np.array([20], dtype=np.int64),
+        connectivity=np.array([[2, 3, 5]], dtype=np.int64),
+    )
+    nodes = NodeComposite(
+        node_ids=node_ids, node_coords=node_coords,
+        physical=PhysicalGroupSet({}), labels=LabelSet({}),
+    )
+    elements = ElementComposite(
+        groups={2: tri_group},
+        physical=PhysicalGroupSet({}), labels=LabelSet({}),
+        constraints=[embedded, coupling],
+    )
+    info = MeshInfo(n_nodes=7, n_elems=1, bandwidth=0, types=[tri_info])
+    fem = FEMData(nodes=nodes, elements=elements, info=info)
+
+    out = tmp_path / "rt_embed.h5"
+    fem.to_h5(str(out), model_name="rt_embed")
+    rebuilt = FEMData.from_h5(str(out))
+
+    rebuilt_embeds = [
+        r for r in rebuilt.elements.constraints
+        if isinstance(r, InterpolationRecord)
+        and r.kind == ConstraintKind.EMBEDDED
+    ]
+    assert len(rebuilt_embeds) == 1
+    e = rebuilt_embeds[0]
+    assert e.stiffness == pytest.approx(5.0e16)
+    assert e.stiffness_p == pytest.approx(2.5e15)
+    assert e.rotational is True
+    assert e.pressure is True
+    assert e.excess == pytest.approx(0.0042)
+
+    coups = list(rebuilt.elements.constraints.couplings())
+    assert len(coups) == 1
+    srs = coups[0].slave_records
+    assert len(srs) == 2
+    by_node = {r.slave_node: r for r in srs}
+    a = by_node[6]
+    assert a.stiffness == pytest.approx(7.0e12)
+    assert a.stiffness_p is None
+    assert a.rotational is False
+    assert a.pressure is True
+    assert a.excess is None
+    b = by_node[7]
+    assert b.stiffness == pytest.approx(3.0e13)
+    assert b.stiffness_p == pytest.approx(1.5e12)
+    assert b.rotational is True
+    assert b.pressure is False
+    assert b.excess == pytest.approx(1.1e-3)
+
+
+def test_pre_2_8_0_interpolation_payload_decodes_with_defaults(
+    tmp_path: Path,
+) -> None:
+    """Backward compat: an InterpolationRecord written with the
+    pre-2.8.0 payload dtype (no stiffness/stiffness_p/rotational/
+    pressure/excess columns) decodes to the dataclass defaults,
+    instead of raising on the missing fields.
+
+    The reader probes ``p.dtype.names`` (same structural-detection
+    pattern as ``_opt_name`` and the original ``sr_*`` fallback) and
+    falls back when the columns are absent.  Synthesised by
+    rewriting the ``/constraints/embedded`` dataset with the older
+    field layout after a normal write.
+    """
+    embedded = InterpolationRecord(
+        kind=ConstraintKind.EMBEDDED, name="x",
+        slave_node=5, master_nodes=[2, 3, 4],
+        weights=np.array([0.3, 0.3, 0.4]),
+        dofs=[1, 2, 3],
+        projected_point=np.array([0.6, 0.6, 0.0]),
+        parametric_coords=np.array([0.3, 0.3]),
+        stiffness=5.0e16, stiffness_p=2.5e15,
+        rotational=True, pressure=True, excess=0.0042,
+    )
+    nodes = NodeComposite(
+        node_ids=np.array([1, 2, 3, 4, 5], dtype=np.int64),
+        node_coords=np.zeros((5, 3), dtype=np.float64),
+        physical=PhysicalGroupSet({}), labels=LabelSet({}),
+    )
+    tri_info = make_type_info(
+        code=2, gmsh_name="Triangle 3", dim=2, order=1, npe=3, count=1,
+    )
+    tri_group = ElementGroup(
+        element_type=tri_info, ids=np.array([20], dtype=np.int64),
+        connectivity=np.array([[2, 3, 5]], dtype=np.int64),
+    )
+    elements = ElementComposite(
+        groups={2: tri_group},
+        physical=PhysicalGroupSet({}), labels=LabelSet({}),
+        constraints=[embedded],
+    )
+    fem = FEMData(
+        nodes=nodes, elements=elements,
+        info=MeshInfo(n_nodes=5, n_elems=1, bandwidth=0, types=[tri_info]),
+    )
+
+    out = tmp_path / "pre_2_8_0.h5"
+    fem.to_h5(str(out))
+
+    # Re-write /constraints/embedded with the pre-2.8.0 payload dtype
+    # (just the 7 legacy columns: slave_node, master_nodes, weights,
+    # dofs, projected_point, parametric_coords, name).  Mirrors what
+    # any file from a 2.7.0 writer would look like.  Built with the
+    # public h5py vlen/string helpers — no need to reach into the
+    # private ``_record_h5`` helpers.
+    from apeGmsh.mesh._record_h5 import make_record_dtype
+
+    utf8 = h5py.string_dtype(encoding="utf-8")
+    vlen_i64 = h5py.special_dtype(vlen=np.dtype("int64"))
+    vlen_f64 = h5py.special_dtype(vlen=np.dtype("float64"))
+    legacy_payload = np.dtype([
+        ("slave_node", np.int64),
+        ("master_nodes", vlen_i64),
+        ("weights", vlen_f64),
+        ("dofs", vlen_i64),
+        ("projected_point", np.float64, (3,)),
+        ("parametric_coords", np.float64, (2,)),
+        ("name", utf8),
+    ])
+    legacy_outer = make_record_dtype(legacy_payload)
+    row = np.empty(1, dtype=legacy_outer)
+    row[0] = (
+        "node", "5", "embedded",
+        (
+            5,
+            np.asarray([2, 3, 4], dtype=np.int64),
+            np.asarray([0.3, 0.3, 0.4], dtype=np.float64),
+            np.asarray([1, 2, 3], dtype=np.int64),
+            (0.6, 0.6, 0.0),
+            (0.3, 0.3),
+            "x",
+        ),
+    )
+    with h5py.File(str(out), "r+") as f:
+        del f["constraints/embedded"]
+        f["constraints"].create_dataset("embedded", data=row)
+        # Down-stamp the neutral schema version into the prior minor
+        # so the two-version reader window still accepts the file.
+        f["meta"].attrs["schema_version"] = "2.7.0"
+        f["meta"].attrs["neutral_schema_version"] = "2.7.0"
+
+    rebuilt = FEMData.from_h5(str(out))
+    es = [
+        r for r in rebuilt.elements.constraints
+        if isinstance(r, InterpolationRecord)
+        and r.kind == ConstraintKind.EMBEDDED
+    ]
+    assert len(es) == 1
+    e = es[0]
+    # Legacy fields survived.
+    assert e.slave_node == 5
+    assert e.master_nodes == [2, 3, 4]
+    # Missing columns -> InterpolationRecord defaults (NOT the writer's
+    # original 5e16 / 2.5e15 / True / True / 0.0042 — that data is
+    # gone, but the reader doesn't crash).
+    assert e.stiffness == pytest.approx(1.0e18)
+    assert e.stiffness_p is None
+    assert e.rotational is False
+    assert e.pressure is False
+    assert e.excess is None
+
+
 def test_round_trip_nodal_loads(tmp_path: Path) -> None:
     fem = _make_full_fem()
     out = tmp_path / "rt.h5"

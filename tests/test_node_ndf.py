@@ -70,9 +70,13 @@ def _top_node_ids(top_tag: int) -> set[int]:
 # Schema bump pin
 # =====================================================================
 
-def test_schema_version_bumped_to_2_7_0():
-    """NEUTRAL_SCHEMA_VERSION advanced from 2.6.0 to 2.7.0."""
-    assert NEUTRAL_SCHEMA_VERSION == "2.7.0"
+def test_schema_version_pin():
+    """NEUTRAL_SCHEMA_VERSION pin — bump in lockstep with intentional
+    additive changes to the neutral zone (S1b added /nodes/ndf at
+    2.7.0; the ADR-0035 follow-up extended interpolation_payload_dtype
+    + surface_coupling sr_* lane to round-trip embedded -K/-KP/-rot/-p
+    at 2.8.0)."""
+    assert NEUTRAL_SCHEMA_VERSION == "2.8.0"
 
 
 # =====================================================================
@@ -182,21 +186,24 @@ def test_ndf_round_trip_through_h5(g, tmp_path: Path):
 
 
 # =====================================================================
-# 5. Forward compat 2.6.0 -> 2.7.0
+# 5. Forward compat 2.7.0 -> 2.8.0
 # =====================================================================
 
-def test_legacy_2_6_0_file_loads_with_synthesized_sentinel(g, tmp_path: Path):
-    """A 2.6.0-shaped file (no /nodes/ndf dataset) loads cleanly under
-    the 2.7.0 reader.
+def test_legacy_2_7_0_file_without_ndf_loads_with_none(g, tmp_path: Path):
+    """A 2.7.0-shaped file with no /nodes/ndf dataset loads cleanly
+    under the 2.8.0 reader, leaving ``_ndf=None``.
 
-    Bug 3 + 4 fix from the post-#317 audit: the reader synthesises an
-    all-zero sentinel array when ``/nodes/ndf`` is absent, so the
-    recomputed ``snapshot_id`` equals what was written.  This means
-    the stored ``snapshot_id`` survives the strip and the
-    integrity-check at ``_femdata_h5_io.py:~1272`` *actually fires*
-    — proving the loader handles 2.6.x backcompat for real, not by
-    short-circuiting the integrity check the way the original test
-    did (Bug 4)."""
+    Originally written for the 2.6.0 → 2.7.0 bump and asserted the
+    reader *synthesised* an all-zero sentinel.  After the 2.7.0 →
+    2.8.0 bump, 2.6.0 is outside the two-version window (the
+    synthesis branch at ``_femdata_h5_io.py:1224`` is now only
+    reachable for pre-2.7.0 files, which the schema-validation
+    gate refuses upstream — dead path).  What the reader is
+    actually expected to do for 2.7.0+ files with no ``/nodes/ndf``
+    is the second branch at line 1226: leave ``_ndf=None``.  Both
+    None and all-zero hash identically under the S2 fold gate, so
+    the snapshot_id integrity check still fires.
+    """
     g.model.geometry.add_box(0.0, 0.0, 0.0, 10.0, 10.0, 10.0, label='Body')
     g.model.sync()
     g.mesh.sizing.set_global_size(5.0)
@@ -204,41 +211,31 @@ def test_legacy_2_6_0_file_loads_with_synthesized_sentinel(g, tmp_path: Path):
     fem = g.mesh.queries.get_fem_data(dim=3)
     original_snap = fem.snapshot_id
 
-    out = tmp_path / "legacy_2_6_0.h5"
+    out = tmp_path / "legacy_2_7_0.h5"
     fem.to_h5(str(out))
 
-    # Reshape the on-disk file to look like a 2.6.0 emitter wrote it:
-    # strip the ndf dataset and stamp schema attrs back.  Crucially,
-    # we do NOT delete /meta/snapshot_id — under Bug 3's symmetric
-    # initialisation the stored hash must still validate against the
-    # rebuilt FEM (otherwise the loader's integrity guard raises).
     with h5py.File(out, "r+") as f:
         assert "ndf" in f["nodes"], (
             "writer regressed: /nodes/ndf was not stored for a "
             "no-declarations FEM."
         )
         del f["nodes"]["ndf"]
-        f["meta"].attrs["schema_version"] = "2.6.0"
-        f["meta"].attrs["neutral_schema_version"] = "2.6.0"
+        f["meta"].attrs["schema_version"] = "2.7.0"
+        f["meta"].attrs["neutral_schema_version"] = "2.7.0"
         assert "snapshot_id" in f["meta"].attrs, (
             "writer regressed: /meta/snapshot_id was not stored."
         )
 
-    # Load — the integrity check at _femdata_h5_io.py:~1272 must
-    # pass (recomputed hash == stored hash).  This proves the
-    # backcompat path is exercised, not bypassed (Bug 4 fix).
     rebuilt = FEMData.from_h5(str(out))
 
-    # Reader synthesised the all-zero sentinel array.
-    assert rebuilt.nodes._ndf is not None
-    assert rebuilt.nodes._ndf.dtype == np.int8
-    assert int(rebuilt.nodes._ndf.sum()) == 0
+    # 2.7.0+ with no /nodes/ndf → _ndf stays None (not synthesised).
+    assert rebuilt.nodes._ndf is None
     assert rebuilt.snapshot_id == original_snap, (
         "Rebuilt FEM's snapshot_id must equal the originally-stored "
-        "value — proving Bug 3's symmetric hash initialisation."
+        "value — proving the no-ndf path still hashes symmetrically."
     )
 
-    # Every ndf_for still raises (sentinel-0 means undeclared).
+    # _ndf=None means ndf_for still raises the helpful LookupError.
     nid = int(next(iter(rebuilt.nodes.ids)))
     with pytest.raises(LookupError):
         rebuilt.nodes.ndf_for(nid)

@@ -110,10 +110,27 @@ __all__ = [
 #: ``fem.nodes._ndf is None`` (every ``fem.nodes.ndf_for(...)`` call
 #: raises ``LookupError`` until the user re-declares).
 #:
+#: v2.8.0 (May 2026, ASDEmbeddedNodeElement option round-trip):
+#: additive — extends ``interpolation_payload_dtype`` and the sr_*
+#: lane of ``surface_coupling_payload_dtype`` with six typed
+#: columns each so the per-record ``stiffness`` (``-K``),
+#: ``stiffness_p`` (``-KP``, with a separate ``has_stiffness_p``
+#: presence flag because 0 is valid penalty data), ``rotational``
+#: (``-rot``), ``pressure`` (``-p``), and ``excess`` (barycentric
+#: excess from ``resolve_embedded``) survive H5 round-trip.  Pre-
+#: 2.8.0 files lacked these and silently snapped back to the
+#: :class:`InterpolationRecord` defaults (``stiffness=1e18``, the
+#: rest ``None`` / ``False``) on read, which the bridge then
+#: emitted unconditionally as ``-K 1e18`` after ADR 0035 made
+#: ``-K`` mandatory.  Per ADR 0023's two-version reader window,
+#: readers tolerate 2.7.x and 2.8.x; 2.7.x files probe
+#: ``p.dtype.names`` (the same structural-detection pattern that
+#: gates ``sr_*`` and ``name``) and decode with dataclass defaults.
+#:
 #: Broker-only files (no `/opensees/...`) still stamp the current
 #: minor — the field is additive and old readers tolerate its
 #: absence.
-NEUTRAL_SCHEMA_VERSION: str = "2.7.0"
+NEUTRAL_SCHEMA_VERSION: str = "2.8.0"
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +817,10 @@ def _encode_interpolation(rec: Any) -> tuple[Any, ...]:
         tuple(float(x) for x in np.asarray(pc).reshape(-1)[:2])
         if pc is not None else (nan, nan)
     )
+    # ASDEmbeddedNodeElement options (schema 2.8.0).  ``has_stiffness_p``
+    # is the presence flag because 0 is valid penalty data; ``excess``
+    # NaN-encodes None.
+    has_kp = rec.stiffness_p is not None
     return (
         int(rec.slave_node),
         np.asarray(rec.master_nodes, dtype=np.int64),
@@ -808,6 +829,12 @@ def _encode_interpolation(rec: Any) -> tuple[Any, ...]:
         pp_arr,
         pc_arr,
         rec.name or "",
+        float(rec.stiffness),
+        float(rec.stiffness_p) if has_kp else nan,
+        np.uint8(1 if has_kp else 0),
+        np.uint8(1 if rec.rotational else 0),
+        np.uint8(1 if rec.pressure else 0),
+        float(rec.excess) if rec.excess is not None else nan,
     )
 
 
@@ -834,6 +861,13 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
     sr_dofs: list[int] = []
     sr_projected: list[float] = []
     sr_parametric: list[float] = []
+    # ASDEmbeddedNodeElement options per slave record (schema 2.8.0)
+    sr_stiffness: list[float] = []
+    sr_stiffness_p: list[float] = []
+    sr_has_stiffness_p: list[int] = []
+    sr_rotational: list[int] = []
+    sr_pressure: list[int] = []
+    sr_excess: list[float] = []
     nan = float("nan")
     for ir in srs:
         m = [int(x) for x in np.asarray(ir.master_nodes).reshape(-1)]
@@ -856,6 +890,13 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
         sr_parametric.extend(
             tuple(float(x) for x in np.asarray(pc).reshape(-1)[:2])
             if pc is not None else (nan, nan))
+        has_kp = ir.stiffness_p is not None
+        sr_stiffness.append(float(ir.stiffness))
+        sr_stiffness_p.append(float(ir.stiffness_p) if has_kp else nan)
+        sr_has_stiffness_p.append(1 if has_kp else 0)
+        sr_rotational.append(1 if ir.rotational else 0)
+        sr_pressure.append(1 if ir.pressure else 0)
+        sr_excess.append(float(ir.excess) if ir.excess is not None else nan)
     return (
         np.asarray(rec.master_nodes, dtype=np.int64),
         np.asarray(rec.slave_nodes, dtype=np.int64),
@@ -871,6 +912,12 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
         np.asarray(sr_projected, dtype=np.float64),
         np.asarray(sr_parametric, dtype=np.float64),
         rec.name or "",
+        np.asarray(sr_stiffness, dtype=np.float64),
+        np.asarray(sr_stiffness_p, dtype=np.float64),
+        np.asarray(sr_has_stiffness_p, dtype=np.uint8),
+        np.asarray(sr_rotational, dtype=np.uint8),
+        np.asarray(sr_pressure, dtype=np.uint8),
+        np.asarray(sr_excess, dtype=np.float64),
     )
 
 
@@ -1665,6 +1712,23 @@ def _decode_interpolation(row: Any, cls: type) -> Any:
     p = row["payload"]
     weights_flat = np.asarray(p["weights"], dtype=np.float64).reshape(-1)
     weights = weights_flat if weights_flat.size > 0 else None
+    # ASDEmbeddedNodeElement options (schema 2.8.0).  Pre-2.8.0 files
+    # lack these columns; probe ``p.dtype.names`` (same pattern as
+    # ``_opt_name`` / the sr_* surface-coupling fallback) and fall
+    # back to InterpolationRecord dataclass defaults so old files
+    # decode as before.
+    names = set(p.dtype.names or ())
+    if "stiffness" in names:
+        kp_present = bool(int(p["has_stiffness_p"]))
+        extras: dict[str, Any] = dict(
+            stiffness=float(p["stiffness"]),
+            stiffness_p=float(p["stiffness_p"]) if kp_present else None,
+            rotational=bool(int(p["rotational"])),
+            pressure=bool(int(p["pressure"])),
+            excess=_opt_scalar(p["excess"]),
+        )
+    else:
+        extras = {}
     return cls(
         kind=_kind(row),
         name=_opt_name(p),
@@ -1676,6 +1740,7 @@ def _decode_interpolation(row: Any, cls: type) -> Any:
         dofs=[int(x) for x in np.asarray(p["dofs"]).reshape(-1)],
         projected_point=_opt_vec3(p["projected_point"]),
         parametric_coords=_opt_vec2(p["parametric_coords"]),
+        **extras,
     )
 
 
@@ -1705,6 +1770,17 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
         dofs_flat = np.asarray(p["sr_dofs"], dtype=np.int64).reshape(-1)
         proj = np.asarray(p["sr_projected"], dtype=np.float64).reshape(-1)
         para = np.asarray(p["sr_parametric"], dtype=np.float64).reshape(-1)
+        # ASDEmbeddedNodeElement options per slave (schema 2.8.0).
+        # Pre-2.8.0 files lack these — fall back to dataclass defaults
+        # the same way ``_decode_interpolation`` does at the top level.
+        has_sr_opts = "sr_stiffness" in names
+        if has_sr_opts:
+            sr_K = np.asarray(p["sr_stiffness"], dtype=np.float64).reshape(-1)
+            sr_KP = np.asarray(p["sr_stiffness_p"], dtype=np.float64).reshape(-1)
+            sr_hKP = np.asarray(p["sr_has_stiffness_p"], dtype=np.uint8).reshape(-1)
+            sr_rot = np.asarray(p["sr_rotational"], dtype=np.uint8).reshape(-1)
+            sr_p = np.asarray(p["sr_pressure"], dtype=np.uint8).reshape(-1)
+            sr_ex = np.asarray(p["sr_excess"], dtype=np.float64).reshape(-1)
         m_off = 0
         d_off = 0
         for i in range(sn.size):
@@ -1719,6 +1795,16 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
             d_off += dc
             pp = proj[3 * i:3 * i + 3]
             pc = para[2 * i:2 * i + 2]
+            if has_sr_opts:
+                opt_extras: dict[str, Any] = dict(
+                    stiffness=float(sr_K[i]),
+                    stiffness_p=(float(sr_KP[i]) if int(sr_hKP[i]) else None),
+                    rotational=bool(int(sr_rot[i])),
+                    pressure=bool(int(sr_p[i])),
+                    excess=_opt_scalar(sr_ex[i]),
+                )
+            else:
+                opt_extras = {}
             slave_records.append(InterpolationRecord(
                 kind=ConstraintKind.TIE,
                 slave_node=int(sn[i]),
@@ -1729,6 +1815,7 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
                                  else pp.astype(np.float64)),
                 parametric_coords=(None if np.all(np.isnan(pc))
                                    else pc.astype(np.float64)),
+                **opt_extras,
             ))
 
     return cls(

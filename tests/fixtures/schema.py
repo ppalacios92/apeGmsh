@@ -7,5 +7,5 @@ is a one-file edit.  Per ADR 0023's two-version reader window,
 """
 OPENSEES_CURRENT     = "2.12.0"  # ADR 0035 (ASDEmbeddedNodeElement option exposure)
 OPENSEES_PRIOR_MINOR = "2.11.0"  # fix: 0-based runtime ranks (was Gmsh 1-based)
-NEUTRAL_CURRENT      = "2.7.0"   # S1b: explicit-only per-node ndf channel
-NEUTRAL_PRIOR_MINOR  = "2.6.0"   # Phase 6 (lineage chain)
+NEUTRAL_CURRENT      = "2.8.0"   # ADR 0035 follow-up: embedded -K/-KP/-rot/-p round-trip
+NEUTRAL_PRIOR_MINOR  = "2.7.0"   # S1b: explicit-only per-node ndf channel
