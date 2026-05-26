@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._session import _SessionBase
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .mesh.MeshSelectionSet import MeshSelectionSet
     from .mesh.Partition import Partition  # noqa: F401 (backward compat)
     from .mesh.View import View
+    from .mesh._compose import Compose, ComposedModule
     from .viz.Plot import Plot
 
 
@@ -140,3 +141,55 @@ class apeGmsh(_SessionBase):
             model_name=self.name,
             apegmsh_version=_ver,
         )
+
+    # ------------------------------------------------------------------
+    # Compose facade — ADR 0038
+    # ------------------------------------------------------------------
+
+    def compose(
+        self,
+        source: "str | Path",
+        *,
+        label: str,
+        **kwargs: Any,
+    ) -> "ComposedModule":
+        """Merge a previously-saved apeGmsh model into this session.
+
+        See :meth:`apeGmsh.mesh._compose.Compose.compose` for the full
+        signature, validation contract, and exception types.  Phase
+        3B.1 scaffolds the facade — the merge engine itself lands in
+        Phase 3B.2.
+        """
+        return self._compose_facade().compose(source, label=label, **kwargs)
+
+    def compose_inspect(self, path: "str | Path") -> dict:
+        """Read a module's H5 header without composing it.
+
+        See :meth:`apeGmsh.mesh._compose.Compose.compose_inspect` for
+        the returned dict shape.
+        """
+        return self._compose_facade().compose_inspect(path)
+
+    def compose_list(self) -> "tuple[ComposedModule, ...]":
+        """Composed modules currently on this session.
+
+        See :meth:`apeGmsh.mesh._compose.Compose.compose_list`.
+        """
+        return self._compose_facade().compose_list()
+
+    def _compose_facade(self) -> "Compose":
+        """Lazy-instantiate the single per-session :class:`Compose` facade.
+
+        Compose is a session-level facade rather than a ``_COMPOSITES``
+        entry so the three public methods (``compose`` /
+        ``compose_inspect`` / ``compose_list``) read naturally on the
+        session.  The lazy pattern keeps unused sessions free of the
+        facade's import cost.
+        """
+        cached: "Compose | None" = getattr(self, "_compose", None)
+        if cached is not None:
+            return cached
+        from .mesh._compose import Compose
+        facade = Compose(self)
+        self._compose = facade
+        return facade

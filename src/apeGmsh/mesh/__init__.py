@@ -26,6 +26,20 @@ from .._kernel.record_sets import (
     NodeConstraintSet, SurfaceConstraintSet,
     NodalLoadSet, ElementLoadSet, MassSet,
 )
+# ADR 0038 Phase 3B.1 — re-export the public compose surface so callers
+# can write ``from apeGmsh.mesh import ComposedModule, ComposeError``.
+# The ``Compose`` facade itself is intentionally internal (mounted on
+# the session via ``g.compose`` / ``g.compose_inspect`` / ``g.compose_list``).
+from ._compose import (
+    ComposedModule,
+    ComposeError,
+    ComposeLabelError,
+    ComposeAnchorError,
+    ComposeCapacityError,
+    ComposeDepthExceededError,
+    ComposeNamespaceCollisionError,
+    ComposeFilterWarning,
+)
 
 __all__ = [
     "Mesh",
@@ -42,4 +56,13 @@ __all__ = [
     "ConstraintKind", "LoadKind",
     "NodeConstraintSet", "SurfaceConstraintSet",
     "NodalLoadSet", "ElementLoadSet", "MassSet",
+    # ADR 0038 compose surface
+    "ComposedModule",
+    "ComposeError",
+    "ComposeLabelError",
+    "ComposeAnchorError",
+    "ComposeCapacityError",
+    "ComposeDepthExceededError",
+    "ComposeNamespaceCollisionError",
+    "ComposeFilterWarning",
 ]

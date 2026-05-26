@@ -96,6 +96,7 @@ BASELINE = {
     ("mesh", "_kernel", "mesh/FEMData.py"),
     ("mesh", "_kernel", "mesh/PhysicalGroups.py"),
     ("mesh", "_kernel", "mesh/__init__.py"),
+    ("mesh", "_kernel", "mesh/_compose.py"),
     ("mesh", "_kernel", "mesh/_element_types.py"),
     ("mesh", "_kernel", "mesh/_mesh_selection.py"),
     ("results", "fem", "results/_gauss_extrapolation.py"),
