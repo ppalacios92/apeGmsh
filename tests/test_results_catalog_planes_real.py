@@ -95,6 +95,39 @@ def _build_unit_square_8node_quad() -> tuple[
     return node_ids, coords, 1, "EightNodeQuad"
 
 
+def _build_unit_triangle_sixnodetri() -> tuple[
+    np.ndarray, np.ndarray, int, str,
+]:
+    """6-node quadratic triangle. Tcl: ``element tri6n ... thick type matTag``.
+
+    Node order: 3 corners (1, 2, 3) then 3 mid-edge nodes (4 = mid
+    1-2, 5 = mid 2-3, 6 = mid 3-1). Matches both the OpenSees
+    SixNodeTri shape-function ordering and the Gmsh tri6 (etype 9)
+    ordering.
+    """
+    corners = np.array([
+        [0.0, 0.0], [1.0, 0.0], [0.5, 1.0],
+    ], dtype=np.float64)
+    midpts = np.array([
+        0.5 * (corners[0] + corners[1]),  # mid 1-2
+        0.5 * (corners[1] + corners[2]),  # mid 2-3
+        0.5 * (corners[2] + corners[0]),  # mid 3-1
+    ], dtype=np.float64)
+    coords = np.vstack([corners, midpts])
+    node_ids = np.arange(1, 7, dtype=np.int64)
+    for nid, xy in zip(node_ids, coords):
+        ops.node(int(nid), float(xy[0]), float(xy[1]))
+    # Pin the bottom edge: corners 1, 2 plus the bottom-edge midpoint
+    # at node 4.
+    for nid in (1, 2, 4):
+        ops.fix(int(nid), 1, 1)
+    ops.element(
+        "tri6n", 1, 1, 2, 3, 4, 5, 6,
+        1.0, "PlaneStress", 1,
+    )
+    return node_ids, coords, 1, "SixNodeTri"
+
+
 def _build_unit_square_sspquad() -> tuple[
     np.ndarray, np.ndarray, int, str,
 ]:
@@ -143,6 +176,13 @@ _CASES = [
         "Tri31", IntRule.Triangle_GL_1, 1,
         _build_unit_triangle_tri31, [3],
         id="Tri31",
+    ),
+    # Apex (node 3) carries the load alone for the 6-node tri — the
+    # quadratic shape functions still produce a uniform σ_yy field.
+    pytest.param(
+        "SixNodeTri", IntRule.Triangle_GL_2, 3,
+        _build_unit_triangle_sixnodetri, [3],
+        id="SixNodeTri",
     ),
     pytest.param(
         "SSPquad", IntRule.Quad_GL_1, 1,

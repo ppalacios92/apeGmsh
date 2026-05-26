@@ -34,6 +34,7 @@ _ETYPE_INFO: dict[int, tuple[int, int]] = {
     5:  (8, 3),   # 8-node hex
     6:  (6, 3),   # 6-node prism
     7:  (5, 3),   # 5-node pyramid
+    9:  (6, 2),   # 6-node second-order triangle
     11: (10, 3),  # 10-node second-order tet
     16: (8, 2),   # 8-node second-order quad
     17: (20, 3),  # 20-node second-order hex
@@ -200,6 +201,18 @@ _ELEM_REGISTRY: dict[str, _ElemSpec] = {
         slots=("nodes", "thick", "eleType", "matTag"),
         has_gauss=True,
         cpp_class_name="Tri31",
+    ),
+    # Gmsh tri6 (etype 9) node ordering matches the OpenSees SixNodeTri
+    # shape-function ordering 1-on-1 (corners 1-3, then mid-edges
+    # 1-2, 2-3, 3-1) — see SixNodeTri.cpp:1322 shape functions.
+    "tri6n": _ElemSpec(
+        mat_family="nd", needs_transf=False,
+        ndm_ok=frozenset({2}), ndf_ok=frozenset({2}),
+        gmsh_etypes=frozenset({9}),
+        node_reorder={9: (0,1,2,3,4,5)},
+        slots=("nodes", "thick", "eleType", "matTag"),
+        has_gauss=True,
+        cpp_class_name="SixNodeTri",
     ),
     "SSPquad": _ElemSpec(
         mat_family="nd", needs_transf=False,

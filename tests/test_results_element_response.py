@@ -240,10 +240,45 @@ class TestPlaneLookup:
             layout.natural_coords, [[0.0, 0.0]],
         )
 
+    def test_sixnodetri_uses_triangle_gl_2_three_points(self) -> None:
+        """Canonical 3-point rule at barycentric (2/3,1/6), (1/6,2/3),
+        (1/6,1/6) — matches SixNodeTri.cpp:127–142."""
+        from apeGmsh.opensees._response_catalog import ELE_TAG_SixNodeTri
+
+        layout = lookup("SixNodeTri", IntRule.Triangle_GL_2, "stress")
+        assert layout.n_gauss_points == 3
+        assert layout.flat_size_per_element == 9   # 3 GPs × 3 components
+        assert layout.coord_system == "barycentric_tri"
+        assert layout.class_tag == ELE_TAG_SixNodeTri
+        np.testing.assert_allclose(
+            layout.natural_coords,
+            [
+                [2.0 / 3.0, 1.0 / 6.0],
+                [1.0 / 6.0, 2.0 / 3.0],
+                [1.0 / 6.0, 1.0 / 6.0],
+            ],
+        )
+
+    def test_sixnodetri_custom_mirror_matches_canonical(self) -> None:
+        """The IntRule.Custom mirror exists for MPCO bracket-key
+        lookups (upstream MPCO falls through to CustomIntegrationRule
+        for unregistered class tags). It must carry the same layout
+        as the canonical Triangle_GL_2 entry."""
+        canon = lookup("SixNodeTri", IntRule.Triangle_GL_2, "stress")
+        custom = lookup("SixNodeTri", IntRule.Custom, "stress")
+        assert custom.n_gauss_points == canon.n_gauss_points
+        assert custom.flat_size_per_element == canon.flat_size_per_element
+        assert custom.component_layout == canon.component_layout
+        assert custom.class_tag == canon.class_tag
+        np.testing.assert_array_equal(
+            custom.natural_coords, canon.natural_coords,
+        )
+
     def test_2d_strain_entries_present(self) -> None:
         for cls, rule in (
             ("FourNodeQuad", IntRule.Quad_GL_2),
             ("Tri31", IntRule.Triangle_GL_1),
+            ("SixNodeTri", IntRule.Triangle_GL_2),
             ("SSPquad", IntRule.Quad_GL_1),
         ):
             layout = lookup(cls, rule, "strain")
@@ -256,6 +291,7 @@ class TestPlaneLookup:
         for cls, rule in (
             ("FourNodeQuad", IntRule.Quad_GL_2),
             ("Tri31", IntRule.Triangle_GL_1),
+            ("SixNodeTri", IntRule.Triangle_GL_2),
             ("SSPquad", IntRule.Quad_GL_1),
         ):
             layout = lookup(cls, rule, "stress")
@@ -568,6 +604,17 @@ def test_catalog_coverage_v1() -> None:
         ("FourNodeQuad", IntRule.Quad_GL_2, "strain"),
         ("Tri31", IntRule.Triangle_GL_1, "stress"),
         ("Tri31", IntRule.Triangle_GL_1, "strain"),
+        # SixNodeTri (6-node quadratic triangle, 3 GPs) — registered
+        # under BOTH the canonical Triangle_GL_2 rule (used by live
+        # capture / .out transcoder) AND IntRule.Custom (used by MPCO
+        # bracket-key lookups; upstream MPCORecorder.cpp falls
+        # through to CustomIntegrationRule for unregistered class
+        # tags). Remove the Custom mirror entries if/when upstream
+        # MPCO registers SixNodeTri → Triangle_GaussLegendre_2.
+        ("SixNodeTri", IntRule.Triangle_GL_2, "stress"),
+        ("SixNodeTri", IntRule.Triangle_GL_2, "strain"),
+        ("SixNodeTri", IntRule.Custom, "stress"),
+        ("SixNodeTri", IntRule.Custom, "strain"),
         ("SSPquad", IntRule.Quad_GL_1, "stress"),
         ("SSPquad", IntRule.Quad_GL_1, "strain"),
         ("EightNodeQuad", IntRule.Quad_GL_3, "stress"),

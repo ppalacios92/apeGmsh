@@ -1,13 +1,14 @@
 """
 Typed primitives for OpenSees solid (continuum) ``element`` commands.
 
-Phase 2δ ships five classes:
+Phase 2δ ships six classes:
 
 * :class:`FourNodeTetrahedron` — 4-node linear tet
 * :class:`TenNodeTetrahedron`  — 10-node quadratic tet
 * :class:`stdBrick`            — 8-node linear brick (``Brick`` / ``stdBrick``)
 * :class:`FourNodeQuad`        — 4-node 2D plane quad (Tcl token ``quad``)
 * :class:`Tri31`               — 3-node 2D plane tri  (Tcl token ``tri31``)
+* :class:`SixNodeTri`          — 6-node quadratic 2D plane tri (Tcl token ``tri6n``)
 
 Each class composes one :class:`NDMaterial` and is fan-out-driven by
 the bridge: the emitter is given the per-element node tags via
@@ -23,12 +24,13 @@ The OpenSees Tcl signatures these classes emit:
 * ``element stdBrick            $tag $i $j $k $l $m $n $o $p $matTag <$b1 $b2 $b3>``
 * ``element quad                $tag $i $j $k $l $thick $type $matTag <$pressure $rho $b1 $b2>``
 * ``element tri31               $tag $i $j $k $thick $type $matTag <$pressure $rho $b1 $b2>``
+* ``element tri6n               $tag $i $j $k $l $n5 $n6 $thick $type $matTag <$pressure $rho $b1 $b2>``
 
 Note that for the 2D elements the **Python class name and the OpenSees
-type token differ**: ``FourNodeQuad`` emits ``"quad"`` and ``Tri31``
-emits ``"tri31"``. The Python class name is the user-facing identity
-(matches the OpenSees C++ class name); the lowercase token is what the
-OpenSees Tcl parser expects.
+type token differ**: ``FourNodeQuad`` emits ``"quad"``, ``Tri31``
+emits ``"tri31"``, and ``SixNodeTri`` emits ``"tri6n"``. The Python
+class name is the user-facing identity (matches the OpenSees C++ class
+name); the lowercase token is what the OpenSees Tcl parser expects.
 
 Priority-2 classes (``bbarBrick``, ``SSPbrick``, ``SSPquad``) are
 deferred — their parameters / penalty parameters need an OpenSees-
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
 __all__ = [
     "FourNodeQuad",
     "FourNodeTetrahedron",
+    "SixNodeTri",
     "TenNodeTetrahedron",
     "Tri31",
     "stdBrick",
@@ -56,6 +59,15 @@ __all__ = [
 
 
 _PLANE_TYPES: tuple[str, ...] = ("PlaneStrain", "PlaneStress")
+
+# SixNodeTri's upstream parser accepts the ``*2D``-suffixed variants in
+# addition to the canonical pair (SixNodeTri.cpp:144). Tri31 and
+# FourNodeQuad lock the typed surface to only ``PlaneStrain``/
+# ``PlaneStress``; SixNodeTri intentionally diverges per user request
+# (some advanced NDMaterials register only the ``*2D`` spelling).
+_PLANE_TYPES_SIXNODETRI: tuple[str, ...] = (
+    "PlaneStrain", "PlaneStress", "PlaneStrain2D", "PlaneStress2D",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +369,93 @@ class Tri31(Element):
         )
         args.extend(tail)
         emitter.element("tri31", tag, *args)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SixNodeTri(Element):
+    """``element tri6n`` — 6-node quadratic plane (2D) triangle.
+
+    Tcl signature::
+
+        element tri6n $tag $i $j $k $l $n5 $n6 $thick $type $matTag \\
+            <$pressure $rho $b1 $b2>
+
+    Six nodes ordered as three corners (``i, j, k``) followed by the
+    three mid-edge nodes ``l`` (mid-edge ``i-j``), ``n5`` (mid-edge
+    ``j-k``), and ``n6`` (mid-edge ``k-i``) — identical to the Gmsh
+    ``tri6`` (etype 9) ordering. Three integration points at
+    barycentric coordinates ``(2/3, 1/6)``, ``(1/6, 2/3)``,
+    ``(1/6, 1/6)`` with weights ``1/6``.
+
+    Parameters
+    ----------
+    pg
+        Physical-group label whose surface cells are realized as
+        :class:`SixNodeTri` elements at fan-out time.
+    thickness
+        Out-of-plane thickness. Must be strictly positive.
+    material
+        The :class:`NDMaterial` that supplies the constitutive law.
+    plane_type
+        One of ``"PlaneStrain"``, ``"PlaneStress"``,
+        ``"PlaneStrain2D"``, or ``"PlaneStress2D"``. Defaults to
+        ``"PlaneStrain"``. (SixNodeTri's upstream parser accepts the
+        ``*2D`` variants in addition to the canonical pair — see
+        :data:`_PLANE_TYPES_SIXNODETRI`.)
+    pressure
+        Optional surface pressure. Defaults to ``None``.
+    rho
+        Optional mass density. Defaults to ``None``.
+    body_force
+        Optional ``(b1, b2)`` body-force vector. Defaults to ``None``.
+
+    Notes
+    -----
+    See :class:`FourNodeQuad` for the optional-tail handling —
+    SixNodeTri follows the same rule.
+    """
+
+    pg: str
+    thickness: float
+    material: NDMaterial
+    plane_type: str = "PlaneStrain"
+    pressure: float | None = None
+    rho: float | None = None
+    body_force: tuple[float, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.thickness <= 0:
+            raise ValueError(
+                f"SixNodeTri: thickness must be > 0, got {self.thickness!r}."
+            )
+        if self.plane_type not in _PLANE_TYPES_SIXNODETRI:
+            raise ValueError(
+                f"SixNodeTri: plane_type must be one of "
+                f"{_PLANE_TYPES_SIXNODETRI}, got {self.plane_type!r}."
+            )
+        if self.rho is not None and self.rho < 0:
+            raise ValueError(
+                f"SixNodeTri: rho must be >= 0 if supplied, got {self.rho!r}."
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return (self.material,)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        nodes = current_element_nodes(emitter)
+        if len(nodes) != 6:
+            raise ValueError(
+                f"SixNodeTri: expected 6 node tags, got {len(nodes)}."
+            )
+        mat_tag = resolve_tag(emitter, self.material)
+        args: list[int | float | str] = [
+            *nodes, self.thickness, self.plane_type, mat_tag,
+        ]
+        tail = _quad_tri_optional_tail(
+            self.pressure, self.rho, self.body_force, body_force_dim=2
+        )
+        args.extend(tail)
+        emitter.element("tri6n", tag, *args)
 
 
 # ---------------------------------------------------------------------------

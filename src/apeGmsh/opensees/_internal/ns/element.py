@@ -26,6 +26,7 @@ from ...element.shell import (
 from ...element.solid import (
     FourNodeQuad,
     FourNodeTetrahedron,
+    SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
     stdBrick,
@@ -367,6 +368,29 @@ class _ElementNS(_BridgeNamespace):
     ) -> Tri31:
         return self._bridge._register(
             Tri31(
+                pg=pg,
+                thickness=thickness,
+                material=material,
+                plane_type=plane_type,
+                pressure=pressure,
+                rho=rho,
+                body_force=body_force,
+            )
+        )
+
+    def SixNodeTri(
+        self,
+        *,
+        pg: str,
+        thickness: float,
+        material: NDMaterial,
+        plane_type: str = "PlaneStrain",
+        pressure: float | None = None,
+        rho: float | None = None,
+        body_force: tuple[float, float] | None = None,
+    ) -> SixNodeTri:
+        return self._bridge._register(
+            SixNodeTri(
                 pg=pg,
                 thickness=thickness,
                 material=material,

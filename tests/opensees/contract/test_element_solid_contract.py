@@ -31,6 +31,7 @@ from apeGmsh.opensees._internal.types import Element, Primitive
 from apeGmsh.opensees.element.solid import (
     FourNodeQuad,
     FourNodeTetrahedron,
+    SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
     stdBrick,
@@ -45,6 +46,7 @@ ALL_SOLID_ELEMENTS: list[type[Element]] = [
     stdBrick,
     FourNodeQuad,
     Tri31,
+    SixNodeTri,
 ]
 
 
@@ -60,6 +62,7 @@ _NODE_COUNT: dict[type[Element], int] = {
     stdBrick: 8,
     FourNodeQuad: 4,
     Tri31: 3,
+    SixNodeTri: 6,
 }
 
 
@@ -72,6 +75,7 @@ _TYPE_TOKEN: dict[type[Element], str] = {
     # rationale.
     FourNodeQuad:        "quad",
     Tri31:               "tri31",
+    SixNodeTri:          "tri6n",
 }
 
 
@@ -80,7 +84,7 @@ def _make_minimal(cls: type[Element]) -> Element:
     m = ElasticIsotropic(E=30e9, nu=0.2)
     if cls in (FourNodeTetrahedron, TenNodeTetrahedron, stdBrick):
         return cls(pg="Body", material=m)  # type: ignore[call-arg]
-    if cls in (FourNodeQuad, Tri31):
+    if cls in (FourNodeQuad, Tri31, SixNodeTri):
         return cls(pg="Plate", thickness=0.1, material=m)  # type: ignore[call-arg]
     raise NotImplementedError(
         f"Contract test needs a minimal-instance factory for {cls!r}."

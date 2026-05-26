@@ -48,6 +48,7 @@ from .shell import (
 from .solid import (
     FourNodeQuad,
     FourNodeTetrahedron,
+    SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
     stdBrick,
@@ -82,4 +83,5 @@ __all__ = [
     "stdBrick",
     "FourNodeQuad",
     "Tri31",
+    "SixNodeTri",
 ]

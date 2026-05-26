@@ -246,14 +246,27 @@ def _gauss_record_tokens(record: "ResolvedDomainCaptureRecord") -> tuple[str, st
 
 
 def _class_int_rule(class_name: str) -> int | None:
-    """Return the catalog's int_rule for a class (or None if ambiguous/unknown).
+    """Return the catalog's int_rule for a class (or None if unknown/ambiguous).
 
-    v1 catalog: each class has one int_rule. When future entries add
-    multiple rules per class (e.g. force-based beams with different
-    IP counts), this helper will need richer context — but for the
-    standard rules this scope covers, one rule per class is the truth.
+    Most classes have exactly one int_rule. A few (currently
+    :class:`SixNodeTri`) register both their canonical rule AND
+    :attr:`IntRule.Custom` as a mirror — the Custom mirror exists for
+    MPCO bracket-key reads where upstream MPCO falls through to
+    ``CustomIntegrationRule`` for unregistered class tags. The live-
+    capture path only needs the canonical rule, so we prefer any
+    non-Custom rule when both are present.
+
+    When future entries add multiple genuinely distinct rules per
+    class (e.g. force-based beams with different IP counts), this
+    helper will need richer context — but for the standard rules this
+    scope covers, one canonical rule per class is the truth.
     """
     rules = {rule for (cls, rule, _tok) in RESPONSE_CATALOG if cls == class_name}
+    if not rules:
+        return None
+    non_custom = rules - {IntRule.Custom}
+    if len(non_custom) == 1:
+        return next(iter(non_custom))
     if len(rules) == 1:
         return next(iter(rules))
     return None

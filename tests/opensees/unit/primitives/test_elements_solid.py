@@ -30,6 +30,7 @@ from apeGmsh.opensees._internal.types import Primitive
 from apeGmsh.opensees.element.solid import (
     FourNodeQuad,
     FourNodeTetrahedron,
+    SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
     stdBrick,
@@ -537,6 +538,123 @@ class TestTri31:
 
 
 # ===========================================================================
+# SixNodeTri
+# ===========================================================================
+
+class TestSixNodeTri:
+    def test_construction_minimal(self) -> None:
+        m = _make_material()
+        e = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        assert e.pg == "Plate"
+        assert e.thickness == 0.05
+        assert e.material is m
+        assert e.plane_type == "PlaneStrain"
+        assert e.pressure is None
+        assert e.rho is None
+        assert e.body_force is None
+
+    def test_validation_rejects_non_positive_thickness(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="thickness must be > 0"):
+            SixNodeTri(pg="Plate", thickness=0.0, material=m)
+
+    def test_validation_rejects_invalid_plane_type(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="plane_type must be one of"):
+            SixNodeTri(
+                pg="Plate", thickness=0.1, material=m, plane_type="bogus",
+            )
+
+    @pytest.mark.parametrize(
+        "plane_type",
+        ["PlaneStrain", "PlaneStress", "PlaneStrain2D", "PlaneStress2D"],
+    )
+    def test_validation_accepts_all_four_plane_types(
+        self, plane_type: str
+    ) -> None:
+        """SixNodeTri's parser accepts the ``*2D``-suffixed variants
+        too, unlike Tri31/FourNodeQuad."""
+        m = _make_material()
+        e = SixNodeTri(
+            pg="Plate", thickness=0.1, material=m, plane_type=plane_type,
+        )
+        assert e.plane_type == plane_type
+
+    def test_validation_rejects_negative_rho(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="rho must be >= 0"):
+            SixNodeTri(pg="Plate", thickness=0.1, material=m, rho=-2.0)
+
+    def test_dependencies_returns_material(self) -> None:
+        m = _make_material()
+        e = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        assert e.dependencies() == (m,)
+
+    def test_repr_includes_type_token(self) -> None:
+        m = _make_material()
+        e = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        assert "SixNodeTri" in repr(e)
+
+    def test_emit_minimal_uses_tri6n_token(self) -> None:
+        """Type token is lowercase ``"tri6n"`` (not ``"SixNodeTri"``)."""
+        m = _make_material()
+        elem = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        rec = _emit_with(
+            elem, tag=2, nodes=(11, 12, 13, 14, 15, 16),
+            mat_tag=4, material=m,
+        )
+        assert rec.calls == [
+            (
+                "element",
+                ("tri6n", 2, 11, 12, 13, 14, 15, 16,
+                 0.05, "PlaneStrain", 4),
+                {},
+            )
+        ]
+
+    def test_emit_with_full_optional_tail(self) -> None:
+        m = _make_material()
+        elem = SixNodeTri(
+            pg="Plate", thickness=0.05, material=m,
+            plane_type="PlaneStress2D",
+            pressure=200.0, rho=2200.0, body_force=(0.0, -9.81),
+        )
+        rec = _emit_with(
+            elem, tag=20, nodes=(1, 2, 3, 4, 5, 6),
+            mat_tag=3, material=m,
+        )
+        assert rec.calls == [
+            (
+                "element",
+                (
+                    "tri6n", 20, 1, 2, 3, 4, 5, 6,
+                    0.05, "PlaneStress2D", 3,
+                    200.0, 2200.0, 0.0, -9.81,
+                ),
+                {},
+            )
+        ]
+
+    def test_emit_without_element_nodes_raises(self) -> None:
+        m = _make_material()
+        elem = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_for(m, 1))
+        with pytest.raises(RuntimeError, match="element-nodes"):
+            elem._emit(e, tag=1)
+
+    @pytest.mark.parametrize("bad_count", [0, 1, 3, 5, 7])
+    def test_emit_with_wrong_node_count_raises(self, bad_count: int) -> None:
+        m = _make_material()
+        elem = SixNodeTri(pg="Plate", thickness=0.05, material=m)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_for(m, 1))
+        set_element_nodes(e, tuple(range(1, bad_count + 1)))
+        with pytest.raises(ValueError, match="expected 6 node tags"):
+            elem._emit(e, tag=1)
+
+
+# ===========================================================================
 # Cross-cutting: namespace integration
 # ===========================================================================
 
@@ -582,6 +700,17 @@ class TestSolidElementNamespace:
         m = ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2)
         e = ops.element.Tri31(pg="Plate", thickness=0.05, material=m)
         assert isinstance(e, Tri31)
+        assert ops.tag_for(e) == 1
+
+    def test_SixNodeTri_via_namespace(self) -> None:
+        ops = _stub_bridge()
+        m = ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2)
+        e = ops.element.SixNodeTri(
+            pg="Plate", thickness=0.05, material=m,
+            plane_type="PlaneStrain2D",
+        )
+        assert isinstance(e, SixNodeTri)
+        assert e.plane_type == "PlaneStrain2D"
         assert ops.tag_for(e) == 1
 
     def test_distinct_elements_get_distinct_tags(self) -> None:

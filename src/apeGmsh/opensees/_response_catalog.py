@@ -109,6 +109,7 @@ ELE_TAG_Tri31 = 33
 ELE_TAG_SSPquad = 119
 ELE_TAG_Twenty_Node_Brick = 49
 ELE_TAG_EightNodeQuad = 208
+ELE_TAG_SixNodeTri = 209
 # Shells
 ELE_TAG_ShellMITC4 = 53
 ELE_TAG_ShellMITC9 = 54
@@ -531,6 +532,17 @@ _TRI_GL_1_COORDS: ndarray = np.array(
     [[1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64,
 )
 
+# Triangle_GL_2 — the canonical 3-point Gauss-Legendre rule on the
+# triangle, degree-2 exact. Points at barycentric (2/3, 1/6, 1/6),
+# (1/6, 2/3, 1/6), (1/6, 1/6, 2/3) — listed here as (L1, L2) with L3
+# implicit. Weights are 1/6 each (sum = 1/2 = unit-triangle area).
+# Matches SixNodeTri.cpp:127–142.
+_TRI_GL_2_COORDS: ndarray = np.array([
+    [2.0 / 3.0, 1.0 / 6.0],  # gp 0: near corner 1
+    [1.0 / 6.0, 2.0 / 3.0],  # gp 1: near corner 2
+    [1.0 / 6.0, 1.0 / 6.0],  # gp 2: near corner 3
+], dtype=np.float64)
+
 # Hex_GL_3 — 27 GPs in OpenSees Twenty_Node_Brick's corner-edge-face-
 # centroid order (NOT a tensor product). The element shares its
 # 27-GP rule with the 27-node hex via ``shp3dv.cpp::brcshl``
@@ -781,6 +793,51 @@ RESPONSE_CATALOG: dict[tuple[str, int, str], ResponseLayout] = {
         coord_system="barycentric_tri",
         component_names=STRAIN_2D,
         class_tag=ELE_TAG_Tri31,
+    ),
+
+    # ── SixNodeTri (6-node quadratic triangle, 3 GPs Triangle_GL_2) ──
+    # C++ class: SixNodeTri (Tcl element name: ``tri6n``).
+    # Plane element: 3 stress components per GP × 3 GPs = 9 floats.
+    # SixNodeTri.cpp:1091/1133 accept both ``stresses``/``stress`` and
+    # ``strain``/``strains`` element-level tokens (no per-material
+    # fallback needed, unlike Tri31).
+    #
+    # We register the SAME layout under BOTH IntRule keys:
+    # - ``Triangle_GL_2`` (101) — the canonical 3-point rule key. Used
+    #   by direct ``ops.eleResponse(...)`` queries and the .out
+    #   transcoder.
+    # - ``Custom`` (1000) — what MPCO actually emits in bracket keys
+    #   for this class. Upstream MPCO (``MPCORecorder.cpp:3930-4090``)
+    #   has a ``Triangle_6N`` enum slot but **does not register
+    #   ELE_TAG_SixNodeTri in its class-tag dispatch**, so SixNodeTri
+    #   falls through to the ``CustomIntegrationRule`` default branch
+    #   and MPCO discovers the 3 GPs at runtime via
+    #   ``setResponse("integrationPoints")``. Remove this Custom
+    #   mirror entry if/when upstream patches MPCO to register
+    #   SixNodeTri → Triangle_GaussLegendre_2.
+    ("SixNodeTri", IntRule.Triangle_GL_2, "stress"): _continuum_layout(
+        n_gp=3, natural_coords=_TRI_GL_2_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRESS_2D,
+        class_tag=ELE_TAG_SixNodeTri,
+    ),
+    ("SixNodeTri", IntRule.Triangle_GL_2, "strain"): _continuum_layout(
+        n_gp=3, natural_coords=_TRI_GL_2_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRAIN_2D,
+        class_tag=ELE_TAG_SixNodeTri,
+    ),
+    ("SixNodeTri", IntRule.Custom, "stress"): _continuum_layout(
+        n_gp=3, natural_coords=_TRI_GL_2_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRESS_2D,
+        class_tag=ELE_TAG_SixNodeTri,
+    ),
+    ("SixNodeTri", IntRule.Custom, "strain"): _continuum_layout(
+        n_gp=3, natural_coords=_TRI_GL_2_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRAIN_2D,
+        class_tag=ELE_TAG_SixNodeTri,
     ),
 
     # ── SSPquad (4-node, 1 GP Quad_GL_1) ─────────────────────────────
