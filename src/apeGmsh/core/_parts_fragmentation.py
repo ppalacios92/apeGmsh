@@ -188,6 +188,24 @@ class _PartsFragmentationMixin:
             pg.set_result(input_ents, result_map)
             self._remap_from_result(input_ents, result_map)
 
+        # ADR 0038 §"Tag-collision verifier" — safety-net call site.
+        # Today ``fragment_all`` only sees host-side geometry (no
+        # composed modules in flight), so the verifier runs with an
+        # empty ``module_imports`` mapping and trivially short-circuits
+        # via the no-op fast path.  Phase 3 (``g.compose()`` facade,
+        # ``src/apeGmsh/mesh/_compose.py``) will populate the
+        # reservations + module imports here so the verifier's five
+        # checks fire against real merge data.  Leaving the call wired
+        # now keeps the integration point obvious and exercises the
+        # import path so a misnamed verifier surfaces at every
+        # fragment instead of only at the first compose call.
+        from ._tag_collision_verifier import tag_collision_verify
+        tag_collision_verify(
+            reservations=(),
+            host_pg_names=(),
+            module_imports={},
+        )
+
         # Return surviving tags at the highest requested dim.  When
         # the caller passed multiple dims (shell-on-solid), the highest
         # dim is the most "complete" answer; lower-dim survivors are
