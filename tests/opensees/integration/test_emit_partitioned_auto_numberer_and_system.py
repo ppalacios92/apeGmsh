@@ -174,3 +174,47 @@ def test_analysis_commands_emitted_globally_not_inside_partition_block() -> None
         f"expected runtime-conditional numberer + system emitted "
         f"globally; got {seen_outside}"
     )
+
+
+# -----------------------------------------------------------------------
+# ADR 0027 INV-5 — Amendment 2026-05-26 drift sentinels
+#
+# The runtime-conditional ``catch {numberer ParallelPlain} { numberer RCM }``
+# fallback (introduced in the 2026-05-23 amendment) is dead code on the
+# installed single-process OpenSees: ``ops.numberer('ParallelPlain')``
+# silently no-ops instead of raising, so the ``catch`` branch never
+# fires.  The ``system Mumps`` half DOES raise as documented.  The two
+# tests below pin that observed runtime behaviour so a future upstream
+# change that begins raising on ``ParallelPlain`` flips the xfail to
+# pass and surfaces the drift.
+# -----------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    reason=(
+        "ADR 0027 INV-5 amendment 2026-05-26: numberer ParallelPlain "
+        "does not raise under single-process OpenSees on the installed "
+        "build. When upstream OpenSees starts raising, this test will "
+        "pass and the catch/try fallback becomes load-bearing."
+    ),
+    strict=False,
+)
+def test_numberer_parallel_plain_does_not_raise_under_single_process() -> None:
+    ops = pytest.importorskip("openseespy.opensees")
+
+    ops.wipe()
+    ops.model("basic", "-ndm", 2, "-ndf", 2)
+    with pytest.raises(Exception):
+        ops.numberer("ParallelPlain")
+
+
+def test_system_mumps_raises_under_single_process() -> None:
+    """The ``system Mumps`` half of INV-5 DOES raise under
+    single-process — verify it stays that way.
+    """
+    ops = pytest.importorskip("openseespy.opensees")
+
+    ops.wipe()
+    ops.model("basic", "-ndm", 2, "-ndf", 2)
+    with pytest.raises(Exception):
+        ops.system("Mumps")

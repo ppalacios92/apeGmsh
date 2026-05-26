@@ -501,3 +501,30 @@ attribute additions per ADR 0023's additive-minor rule. Readers
 that ignore the new attributes degrade gracefully — they reconstruct
 the canonical numberer / system without the runtime fallback wrapper
 (matching pre-2.10.0 behaviour).
+the canonical numberer / system without the runtime fallback wrapper
+(matching pre-2.10.0 behaviour).
+
+## Amendment 2026-05-26 — numberer fallback dead-code on installed runtime
+
+The runtime-conditional fallback for `numberer ParallelPlain → RCM`
+(introduced in the 2026-05-23 amendment) is dead code on the
+installed OpenSees build. `ops.numberer('ParallelPlain')` does not
+raise under single-process OpenSees — it silently no-ops. The deck
+retains `ParallelPlain` as the numberer at solve time under
+single-process; behaviour under that combo is unclear (likely a
+degenerate identity numbering).
+
+The `catch {system Mumps} { system UmfPack }` half of the fallback
+still works as originally intended — `ops.system('Mumps')` does
+raise on installs without MPI / Mumps. INV-5's runtime-portability
+claim is therefore PARTIAL on the installed build: system falls
+back, numberer does not.
+
+The deck is not changed. A future OpenSees release may begin
+raising on `ParallelPlain` under single-process — at which point
+the existing `catch` / `try` is correct and fires. Until then, the
+`catch` / `try` is documented-dead-code; an xfail test (see test
+path below) serves as a drift sentinel.
+
+Test path:
+`tests/opensees/integration/test_emit_partitioned_auto_numberer_and_system.py::test_numberer_parallel_plain_does_not_raise_under_single_process`
