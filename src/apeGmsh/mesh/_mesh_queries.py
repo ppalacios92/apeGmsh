@@ -139,6 +139,21 @@ class _Queries:
             Nodes referenced by constraints, loads, or masses are
             always kept.  Default False.
 
+        Caching (Phase 3B.2b-prep / ADR 0038)
+        ------------------------------------
+        Repeat calls return the same :class:`FEMData` object identity
+        until a broker mutation invalidates the cache (every
+        ``g.constraints.X`` / ``g.loads.X`` / ``g.masses.X`` call bumps
+        an internal counter; the cache is fresh iff the counter has
+        not advanced since the last extraction).  This means the
+        session has a single canonical "chain head" snapshot that
+        ``FEMData.with_*`` transforms and the upcoming
+        ``FEMData.compose(...)`` engine (Phase 3B.2c) will update.
+
+        Vanilla sessions (no ``_fem_counter`` attribute — direct
+        ``FEMData.from_gmsh`` fixtures or test stubs) skip the cache
+        entirely and behave like the pre-cache extraction call.
+
         Example
         -------
         ::
@@ -147,6 +162,25 @@ class _Queries:
             fem = g.mesh.queries.get_fem_data(dim=3)     # 3D only
         """
         parent = self._mesh._parent
+
+        # ── Cache path — Phase 3B.2b-prep ────────────────────────
+        # Only honoured for the default extraction signature: caching
+        # a ``dim=`` / ``remove_orphans=`` variant alongside the
+        # canonical full snapshot would silently swap between
+        # ``dim=2`` and ``dim=3`` slices.  Variant calls always
+        # re-extract and never poison the cache.
+        is_default = (dim is None and remove_orphans is False)
+        has_cache = hasattr(parent, "_fem_is_fresh")
+        if is_default and has_cache and parent._fem_is_fresh():
+            cached = parent._fem
+            self._mesh._log(
+                f"get_fem_data(dim={dim}) -> cached "
+                f"{cached.info.n_nodes} nodes, "
+                f"{cached.info.n_elems} elements, "
+                f"bw={cached.info.bandwidth}"
+            )
+            return cached
+
         result = FEMData.from_gmsh(
             dim=dim, session=parent, remove_orphans=remove_orphans)
 
@@ -156,6 +190,12 @@ class _Queries:
             f"{result.info.n_elems} elements, "
             f"bw={result.info.bandwidth}"
         )
+
+        # Only the canonical extraction populates the cache; variant
+        # calls (dim=, remove_orphans=) are returned uncached.
+        if is_default and has_cache:
+            parent._fem = result
+            parent._mark_fem_fresh()
 
         return result
 

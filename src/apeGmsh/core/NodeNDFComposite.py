@@ -142,6 +142,12 @@ class NodeNDFComposite:
         self._warn_if_post_extraction("set")
         defn = NodeNDFDef(target=target, ndf=ndf_int, name=name)
         self._defs.append(defn)
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache
+        # so the next ``get_fem_data()`` re-extracts with the new
+        # ndf declaration folded in.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     def set_default(
@@ -179,6 +185,10 @@ class NodeNDFComposite:
             self._default_idx = len(self._defs) - 1
         else:
             self._defs[self._default_idx] = defn
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     # ------------------------------------------------------------------
@@ -204,6 +214,10 @@ class NodeNDFComposite:
         self._warn_if_post_extraction("clear")
         self._defs.clear()
         self._default_idx = None
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
 
     # ------------------------------------------------------------------
     # Internal — used by the resolver path

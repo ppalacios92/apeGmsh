@@ -585,6 +585,10 @@ class MassesComposite:
                 f"reduction={defn.reduction!r}.  Supported: {list(cfg.keys())}"
             )
         self.mass_defs.append(defn)
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     def validate_pre_mesh(self) -> None:

@@ -1570,6 +1570,184 @@ class FEMData:
         from ._femdata_mpco_io import read_fem_from_mpco
         return read_fem_from_mpco(group)
 
+    # ------------------------------------------------------------------
+    # Pure transforms — Phase 3B.2b-prep / ADR 0038
+    # ------------------------------------------------------------------
+    #
+    # ``with_constraint`` / ``with_load`` / ``with_mass`` append a single
+    # already-resolved record to the right sub-composite and return a
+    # new :class:`FEMData` snapshot.  ``self`` is unchanged; the result
+    # shares the heavy node / element arrays via shallow-copy but
+    # carries a fresh record set (and a fresh
+    # :class:`NodeComposite` / :class:`ElementComposite` wrapper).  The
+    # :attr:`snapshot_id` cache is dropped on the result so the new
+    # records actually fold into the next hash.
+    #
+    # These are the canonical mutation primitives behind the upcoming
+    # ``FEMData.compose(...)`` engine (Phase 3B.2c) and the chain-phase
+    # session shim retrofit.  They never touch gmsh — the caller is
+    # responsible for producing a fully-resolved record.
+
+    def _replaced_nodes(self, **overrides):
+        """Return a shallow-copied :class:`NodeComposite` with overrides.
+
+        Internal helper for the ``with_*`` transforms.  Copies are kept
+        shallow so the heavy ``_ids`` / ``_coords`` / ``_ndf`` /
+        ``physical`` / ``labels`` references are shared with the
+        predecessor — only the named composite attribute is swapped.
+        """
+        import copy
+        new_nodes = copy.copy(self.nodes)
+        for k, v in overrides.items():
+            setattr(new_nodes, k, v)
+        return new_nodes
+
+    def _replaced_elements(self, **overrides):
+        """Return a shallow-copied :class:`ElementComposite` with overrides.
+
+        Mirrors :meth:`_replaced_nodes` for the element-side
+        sub-composite.
+        """
+        import copy
+        new_elements = copy.copy(self.elements)
+        for k, v in overrides.items():
+            setattr(new_elements, k, v)
+        return new_elements
+
+    def _replaced(self, *, nodes=None, elements=None) -> "FEMData":
+        """Shallow-copy this :class:`FEMData` with one or both of
+        ``nodes`` / ``elements`` swapped.
+
+        Pure transform helper.  Drops the cached ``snapshot_id`` on the
+        new instance so the changed records actually fold into the
+        next hash.  All other attributes (``info`` / ``inspect`` /
+        ``composed_from`` / ``partitions`` / ``mesh_selection``) are
+        carried over by reference — they are not affected by a single
+        record append.
+        """
+        import copy
+        new = copy.copy(self)
+        if nodes is not None:
+            new.nodes = nodes
+        if elements is not None:
+            new.elements = elements
+        # Rewire the ElementComposite → NodeComposite back-reference
+        # (FEMData.__init__ sets ``elements._apegmsh_nodes_ref = nodes``;
+        # since we may have swapped one or both, re-pin it from the
+        # final attributes).
+        new.elements._apegmsh_nodes_ref = new.nodes
+        # The InspectComposite holds a back-ref to the predecessor;
+        # rebind it so e.g. ``new.inspect.summary()`` sees the new
+        # record sets.
+        new.inspect = InspectComposite(new)
+        # Drop the snapshot_id cache — record set changed.
+        if hasattr(new, "_snapshot_id_cache"):
+            del new._snapshot_id_cache
+        return new
+
+    def with_constraint(self, record) -> "FEMData":
+        """Return a new :class:`FEMData` with ``record`` appended.
+
+        Pure transform.  ``self`` is unchanged.  Dispatch is by record
+        type:
+
+        =====================================  =================================
+        Record subclass                        Appended to
+        =====================================  =================================
+        ``NodePairRecord``                     ``nodes.constraints``
+        ``NodeGroupRecord``                    ``nodes.constraints``
+        ``NodeToSurfaceRecord``                ``nodes.constraints``
+        ``InterpolationRecord``                ``elements.constraints``
+        ``SurfaceCouplingRecord``              ``elements.constraints``
+        ``SPRecord``                           ``nodes.sp``
+        =====================================  =================================
+
+        Routing an unknown record subclass raises ``TypeError`` — this
+        is a fail-loud contract because the compose engine needs every
+        record to land in a known broker bucket.
+        """
+        # Imports are deferred so callers using only ``with_load`` /
+        # ``with_mass`` don't pay the cost.
+        from .._kernel.records._constraints import (
+            NodePairRecord, NodeGroupRecord, NodeToSurfaceRecord,
+            InterpolationRecord, SurfaceCouplingRecord,
+        )
+        from .._kernel.records._loads import SPRecord
+
+        if isinstance(record, (NodePairRecord, NodeGroupRecord,
+                               NodeToSurfaceRecord)):
+            new_set = self.nodes.constraints._with_record(record)
+            return self._replaced(
+                nodes=self._replaced_nodes(constraints=new_set))
+        if isinstance(record, (InterpolationRecord, SurfaceCouplingRecord)):
+            new_set = self.elements.constraints._with_record(record)
+            return self._replaced(
+                elements=self._replaced_elements(constraints=new_set))
+        if isinstance(record, SPRecord):
+            new_set = self.nodes.sp._with_record(record)
+            return self._replaced(
+                nodes=self._replaced_nodes(sp=new_set))
+        raise TypeError(
+            f"FEMData.with_constraint: unsupported record type "
+            f"{type(record).__name__!r} — expected a ConstraintRecord "
+            f"subclass or SPRecord."
+        )
+
+    def with_load(self, record) -> "FEMData":
+        """Return a new :class:`FEMData` with ``record`` appended.
+
+        Pure transform.  ``self`` is unchanged.  Dispatch is by record
+        type:
+
+        =====================================  =================================
+        Record subclass                        Appended to
+        =====================================  =================================
+        ``NodalLoadRecord``                    ``nodes.loads``
+        ``ElementLoadRecord``                  ``elements.loads``
+        ``SPRecord``                           ``nodes.sp``
+        =====================================  =================================
+        """
+        from .._kernel.records._loads import (
+            NodalLoadRecord, ElementLoadRecord, SPRecord,
+        )
+
+        if isinstance(record, NodalLoadRecord):
+            new_set = self.nodes.loads._with_record(record)
+            return self._replaced(
+                nodes=self._replaced_nodes(loads=new_set))
+        if isinstance(record, ElementLoadRecord):
+            new_set = self.elements.loads._with_record(record)
+            return self._replaced(
+                elements=self._replaced_elements(loads=new_set))
+        if isinstance(record, SPRecord):
+            new_set = self.nodes.sp._with_record(record)
+            return self._replaced(
+                nodes=self._replaced_nodes(sp=new_set))
+        raise TypeError(
+            f"FEMData.with_load: unsupported record type "
+            f"{type(record).__name__!r} — expected NodalLoadRecord, "
+            f"ElementLoadRecord, or SPRecord."
+        )
+
+    def with_mass(self, record) -> "FEMData":
+        """Return a new :class:`FEMData` with ``record`` appended to
+        ``nodes.masses``.
+
+        Pure transform.  ``self`` is unchanged.  Only
+        :class:`~apeGmsh._kernel.records._masses.MassRecord` is
+        accepted; anything else raises ``TypeError``.
+        """
+        from .._kernel.records._masses import MassRecord
+
+        if isinstance(record, MassRecord):
+            new_set = self.nodes.masses._with_record(record)
+            return self._replaced(
+                nodes=self._replaced_nodes(masses=new_set))
+        raise TypeError(
+            f"FEMData.with_mass: unsupported record type "
+            f"{type(record).__name__!r} — expected MassRecord."
+        )
+
     def viewer(self, *, blocking: bool = False) -> None:
         """Open a non-interactive mesh viewer from this snapshot.
 

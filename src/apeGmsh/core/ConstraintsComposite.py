@@ -302,6 +302,13 @@ class ConstraintsComposite:
                             f"Available: {list(parts._instances)}"
                         )
         self.constraint_defs.append(defn)
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the session's
+        # cached FEMData so the next ``get_fem_data()`` re-extracts
+        # with the new declaration folded in.  Vanilla sessions
+        # without the counter hook are skipped silently.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     # ── Tier 0 — Single-point (fix to ground) ────────────────────────
@@ -370,6 +377,12 @@ class ConstraintsComposite:
                      dofs=list(dofs) if dofs is not None else [1, 1, 1],
                      name=name)
         self._bc_defs.append(defn)
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache
+        # (mirrors ``_add_def``; ``bc()`` writes to a separate
+        # ``_bc_defs`` list so the bump has to happen here too).
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     def resolve_bcs(self, node_tags, *, node_map=None) -> list:

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .mesh.Partition import Partition  # noqa: F401 (backward compat)
     from .mesh.View import View
     from .mesh._compose import Compose, ComposedModule
+    from .mesh.FEMData import FEMData
     from .viz.Plot import Plot
 
 
@@ -97,6 +98,60 @@ class apeGmsh(_SessionBase):
         # before finalizing gmsh.  Manual ``g.save()`` uses the same path.
         self._save_to: Path | None = Path(save_to) if save_to else None
         self._overwrite: bool = overwrite
+        # ── FEMData cache (Phase 3B.2b-prep / ADR 0038) ──────────
+        # The session caches the most recent ``get_fem_data()`` result
+        # so repeat calls return the same broker object identity (and
+        # downstream consumers — chain-phase shims, future
+        # ``g.compose()`` — have a single canonical snapshot to update
+        # via ``FEMData.with_*`` transforms).  Every broker mutation
+        # (``g.constraints.X`` / ``g.loads.X`` / ``g.masses.X``) bumps
+        # ``_fem_counter``; the cached snapshot is fresh iff
+        # ``_fem_counter == _fem_counter_at_build``.  The first
+        # extraction stamps ``_fem_counter_at_build``; any mutation
+        # afterwards invalidates the cache and the next
+        # ``get_fem_data()`` re-extracts from gmsh + the def lists.
+        self._fem: "FEMData | None" = None
+        self._fem_counter: int = 0
+        self._fem_counter_at_build: int | None = None
+
+    # ------------------------------------------------------------------
+    # FEMData cache + dirty-bit (Phase 3B.2b-prep / ADR 0038)
+    # ------------------------------------------------------------------
+
+    def _bump_fem_counter(self) -> None:
+        """Mark the FEMData cache dirty.
+
+        Called by every broker mutation on
+        :class:`~.core.ConstraintsComposite.ConstraintsComposite` /
+        :class:`~.core.LoadsComposite.LoadsComposite` /
+        :class:`~.core.MassesComposite.MassesComposite` after the
+        underlying def-list is appended.  Next ``get_fem_data()`` will
+        re-extract from gmsh + the updated def lists instead of
+        returning the stale cached snapshot.
+        """
+        self._fem_counter += 1
+
+    def _fem_is_fresh(self) -> bool:
+        """True iff the cached :attr:`_fem` matches the current counter.
+
+        Used by ``g.mesh.queries.get_fem_data`` to decide between
+        returning the cached snapshot (identity-stable across repeat
+        calls) and re-extracting from gmsh.
+        """
+        return (
+            self._fem is not None
+            and self._fem_counter_at_build is not None
+            and self._fem_counter == self._fem_counter_at_build
+        )
+
+    def _mark_fem_fresh(self) -> None:
+        """Snapshot the counter so :meth:`_fem_is_fresh` reports True
+        until the next mutation.
+
+        Called by ``g.mesh.queries.get_fem_data`` immediately after a
+        successful extraction populates :attr:`_fem`.
+        """
+        self._fem_counter_at_build = self._fem_counter
 
     # ------------------------------------------------------------------
     # Persistence

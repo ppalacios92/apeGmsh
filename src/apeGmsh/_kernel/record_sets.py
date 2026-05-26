@@ -80,6 +80,26 @@ class _RecordSetBase(Generic[_R]):
         return [r for r in self._records
                 if getattr(r, 'kind', None) == kind]
 
+    # ── Pure transform ──────────────────────────────────────
+    #
+    # Phase 3B.2b-prep / ADR 0038 — used by ``FEMData.with_constraint``
+    # / ``with_load`` / ``with_mass`` to build a new record set with
+    # one extra record appended.  The original set is unchanged
+    # (defensive copy of the underlying list); the new set carries a
+    # fresh list, so further mutations on either side do not bleed
+    # across.
+    def _with_record(self, record: _R) -> "_RecordSetBase[_R]":
+        """Return a new record set with ``record`` appended.
+
+        Pure transform.  ``self`` is unchanged.  The returned set is
+        the same concrete subclass as ``self`` (so a
+        ``NodalLoadSet._with_record(...)`` is still a
+        ``NodalLoadSet``).
+        """
+        new_records = list(self._records)
+        new_records.append(record)
+        return type(self)(new_records)
+
     # ── Dunder ──────────────────────────────────────────────
 
     def __iter__(self) -> Iterator[_R]:

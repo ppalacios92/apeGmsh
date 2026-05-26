@@ -886,6 +886,11 @@ class LoadsComposite:
                 f"Supported: {list(cfg.keys())}"
             )
         self.load_defs.append(defn)
+        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache
+        # so the next ``get_fem_data()`` picks up the new load.
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
         return defn
 
     def validate_pre_mesh(self) -> None:
