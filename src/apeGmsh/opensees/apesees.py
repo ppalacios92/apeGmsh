@@ -52,6 +52,7 @@ from ._internal.build import (
     expand_pg_to_elements,
     expand_pg_to_nodes,
     is_partitioned,
+    runtime_rank_from_partition_record,
     topological_order,
 )
 from ._internal.build import _element_transf as _build_element_transf
@@ -1158,10 +1159,10 @@ class BuiltModel:
         # order).  Broker's ``part.id`` stays Gmsh's 1-based label and
         # is preserved verbatim on the records themselves; only the
         # runtime-rank seam is 0-based.
-        rank_owned_nodes: dict[int, set[int]] = {
-            rank: {int(n) for n in rec.node_ids}
-            for rank, rec in enumerate(partitions)
-        }
+        rank_owned_nodes: dict[int, set[int]] = {}
+        for idx, rec in enumerate(partitions):
+            rank = runtime_rank_from_partition_record(rec, idx)
+            rank_owned_nodes[rank] = {int(n) for n in rec.node_ids}
 
         # Cross-rank tag identity caches (region tags, broker
         # timeSeries / pattern tags, ADR 0027 §"Tag determinism").
@@ -1197,7 +1198,8 @@ class BuiltModel:
         # ``partitions`` so it does not collide with Gmsh's 1-based
         # ``part.id``.  See the bug fix in commit titled
         # ``fix(opensees-bridge): emit 0-based runtime ranks``.
-        for rank, part in enumerate(partitions):
+        for idx, part in enumerate(partitions):
+            rank = runtime_rank_from_partition_record(part, idx)
             emitter.partition_open(rank)
             try:
                 # 1a. Owned nodes — emit in node-id order for stable
@@ -1543,7 +1545,8 @@ class BuiltModel:
             # Empty-bracket ranks are skipped so the Py emitter never
             # produces an empty ``if getPID() == K:`` block.
             if has_activation or has_bcs or has_removals:
-                for rank, part in enumerate(partitions):
+                for idx, part in enumerate(partitions):
+                    rank = runtime_rank_from_partition_record(part, idx)
                     rank_owned = {int(n) for n in part.node_ids}
                     rank_stage_nodes = sorted(
                         rank_owned & owned_nodes_this_stage
@@ -1680,7 +1683,8 @@ class BuiltModel:
                 name_to_param_tags = emit_initial_stress_global(
                     stage.initial_stress_records, emitter, tags,
                 )
-                for rank, _part in enumerate(partitions):
+                for idx, _part in enumerate(partitions):
+                    rank = runtime_rank_from_partition_record(_part, idx)
                     emitter.partition_open(rank)
                     try:
                         emit_initial_stress_addtoparameter(

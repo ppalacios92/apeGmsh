@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     # similarly-named submodule ``apeGmsh.mesh.FEMData`` under mypy.
     from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh._kernel.records._constraints import ConstraintRecord
+    from apeGmsh._kernel.records._partitions import PartitionRecord
 
     from ..emitter.base import Emitter
 
@@ -83,6 +84,7 @@ __all__ = [
     "allocate_element_tags",
     "build_element_partition_owner",
     "build_node_partition_owners",
+    "runtime_rank_from_partition_record",
     "compute_vecxz_for_element",
     "emit_element_spec",
     "emit_element_spec_partitioned",
@@ -2077,6 +2079,45 @@ def is_partitioned(fem: "FEMData") -> bool:
         return False
 
 
+def runtime_rank_from_partition_record(
+    record: "PartitionRecord", index: int,
+) -> int:
+    """Return the 0-based OpenSeesMP runtime rank for a ``PartitionRecord``.
+
+    Gmsh-side :attr:`PartitionRecord.id` is **1-based** (``P1, P2, ...``);
+    the OpenSeesMP runtime ``getPID()`` (and MPI rank) is **0-based**
+    (``0, 1, ...``).  The conversion is the ``enumerate`` index over
+    ``fem.partitions`` (which iterates in sorted Gmsh-id order, so the
+    assignment is stable and deterministic) — **NOT** ``record.id - 1``.
+
+    This function is the **single source of truth** for the conversion.
+    Any future caller that converts the seam elsewhere violates the
+    contract — it should call this helper instead.  The body is
+    intentionally trivial: the value is the documentation.  A
+    maintainer tempted to change to ``record.id - 1`` only has to
+    update one function instead of every call site.
+
+    Parameters
+    ----------
+    record
+        The :class:`PartitionRecord` at this position in
+        ``fem.partitions``.  Not consulted today — present so the
+        call site reads with intent (``runtime_rank_from_partition_record(rec, idx)``
+        rather than a bare ``idx``) and so a future change to the
+        convention has a record-shaped lever available without
+        touching call sites.
+    index
+        The ``enumerate`` index over ``fem.partitions``.
+
+    Returns
+    -------
+    int
+        The 0-based OpenSeesMP runtime rank.
+    """
+    del record  # intentionally unused — see docstring
+    return index
+
+
 def build_node_partition_owners(fem: "FEMData") -> dict[int, set[int]]:
     """Return ``{node_tag: set[rank_id]}`` covering every owning rank.
 
@@ -2099,7 +2140,8 @@ def build_node_partition_owners(fem: "FEMData") -> dict[int, set[int]]:
     parts = getattr(fem, "partitions", None)
     if parts is None:
         return owners
-    for rank, rec in enumerate(parts):
+    for idx, rec in enumerate(parts):
+        rank = runtime_rank_from_partition_record(rec, idx)
         for nid in rec.node_ids:
             owners.setdefault(int(nid), set()).add(rank)
     return owners
@@ -2124,7 +2166,8 @@ def build_element_partition_owner(fem: "FEMData") -> dict[int, int]:
     parts = getattr(fem, "partitions", None)
     if parts is None:
         return owners
-    for rank, rec in enumerate(parts):
+    for idx, rec in enumerate(parts):
+        rank = runtime_rank_from_partition_record(rec, idx)
         for eid in rec.element_ids:
             # If an element appears in two partitions (degenerate input),
             # the first-seen partition wins.  This is a deterministic
