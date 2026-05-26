@@ -333,3 +333,128 @@ Don't implement until at least one consumer needs in-plane
 orientation metadata — the silent-drop interpretation is
 indistinguishable from no orientation at all.
 
+## Higher-order embedded coupling via `HostProjector` (RFC)
+
+`g.constraints.embedded(...)` today couples each embedded node to
+3 or 4 corner nodes of a sub-tri / sub-tet via linear barycentric
+shape functions (ADR 0036 — the "linear-over-corners" contract).
+The decomposition makes non-simplex / higher-order hosts
+*structurally* embeddable, but the embedded node never feels the
+host's native interpolation richness:
+
+- An LST plate's quadratic curvature is discarded.
+- A hex8's bilinear twist mode is discarded.
+- A quad9 / hex20's biquadratic / triquadratic field is discarded.
+
+For most rebar-in-concrete cases this is fine — the embed is so
+much stiffer than the host that the global kinematic link
+dominates. For cases where the host's higher-order field is doing
+real work (LST plate intentionally chosen for bending; fibre in a
+quad9 stress-concentration patch), the linear projection throws
+away the accuracy gain.
+
+The `host_coupling=` keyword on
+[`EmbeddedDef`][apeGmsh._kernel.defs.constraints.EmbeddedDef] is
+reserved for this: only `"linear"` is accepted today, but the
+field, factory keyword, and `__post_init__` guard are all in
+place so a future `"trilinear"` / `"biquadratic"` option can
+land without breaking old models.
+
+### What "doing it properly" requires
+
+The clean architectural fix is a `HostProjector` strategy
+interface — each gmsh etype gets its own projector that owns:
+
+1. **Point location** in the host's natural coordinates
+   (trilinear inverse-map for hex8; biquadratic inverse for
+   quad9; etc.). Today's `_barycentric_tri3` /
+   `_barycentric_tet4` only cover the simplex case.
+2. **Coupling weights** evaluated against the host's native
+   shape functions at the located parametric point. Today the
+   weights are linear barycentric over 3 / 4 corners; the
+   higher-fidelity branch would produce 8 weights for hex8
+   trilinear coupling, 9 for quad9 biquadratic, etc.
+
+### What it requires on the OpenSees side
+
+Native N-node retained-set coupling needs new element classes:
+
+- **`ASDEmbeddedHex8Element`** — 1 constrained + 8 retained =
+  9 nodes total. `getTangentStiff` builds the penalty matrix
+  using trilinear shape functions evaluated at the embedded
+  node's local (ξ, η, ζ) coordinates. Mirrors the existing
+  `TET_3D_U` / `TET_3D_UR` / `TET_3D_UP` triplet but on a
+  9-node `m_nodes` vector.
+- **`ASDEmbeddedQuad4Element`** — 1 + 4 = 5 nodes; bilinear
+  shape functions. The 2D analogue.
+- (Optional) `ASDEmbeddedHex20Element` / `ASDEmbeddedQuad9Element`
+  for true higher-order coupling. Lower priority — most users
+  who need higher-fidelity embed will be on hex8 / quad4 hosts.
+
+Element-registration burden per new class:
+
+- `classTags.h` entry.
+- `OPS_ASDEmbeddedHex8` factory in `elementAPI.h`.
+- `FEM_ObjectBroker::getNewElement` dispatch.
+- `sendSelf` / `recvSelf` for parallel runs (mirroring the
+  existing `ASDEmbeddedNodeElement::sendSelf` at
+  [cpp:649-714](https://github.com/OpenSees/OpenSees/blob/master/SRC/element/CEqElement/ASDEmbeddedNodeElement.cpp)).
+- CMake registration (`SRC/element/CEqElement/CMakeLists.txt`).
+
+Coordinate-management with ASDEA (Massimo Petracca authored the
+original `ASDEmbeddedNodeElement`) before opening upstream PRs.
+
+### What it requires on the apeGmsh side
+
+Once the OpenSees side has the new element classes:
+
+- Accept `host_coupling="trilinear"` / `"biquadratic"` on
+  `EmbeddedDef.__post_init__` (drop the current
+  `host_coupling != "linear"` raise).
+- In `_collect_host_subelements`, skip decomposition for hosts
+  whose coupling mode is `"trilinear"` (return the native hex8
+  rows of shape `(n, 8)`) or `"biquadratic"` (return native
+  quad9 rows of shape `(n, 9)`).
+- Widen the resolver's `npe in (3, 4)` check to `npe in (3, 4,
+  8, 9)` with dispatch to new `_inverse_map_hex8` /
+  `_inverse_map_quad9` functions. The inverse maps are
+  iterative (Newton on the host shape functions); not trivial
+  but well-trodden territory — see Hughes §3.7 or any FEM text.
+- Emitter side (`opensees/emitter/*.py`): route
+  `InterpolationRecord` with `n_masters in (8, 9)` to the new
+  element class instead of `ASDEmbeddedNodeElement`.
+
+### Trigger conditions
+
+Don't start until one of these lands:
+
+- A real user model where the linear-over-corners projection is
+  measurably wrong (mesh-refinement study shows the embed
+  results don't converge to the higher-order host's reference
+  solution). Saying "this is theoretically lossy" is not enough
+  — Cerro Lindo-style tunnel models with rebar in rock have
+  shipped on the linear coupling and converged.
+- A research project that explicitly needs the higher-order
+  coupling (e.g., a paper on fibre-reinforced composite
+  modelling where the matrix's quadratic field matters for
+  the fibre's stress state).
+- ASDEA volunteers to maintain a trilinear coupling element
+  upstream (would change the cost calculus by removing the
+  coordination burden).
+
+The reserved `host_coupling=` keyword is the no-cost hook that
+makes this future PR a non-breaking change. The work itself is
+~2-3 months of coordinated OpenSees + apeGmsh changes plus a
+real test suite (convergence study against a known
+trilinear-coupled reference) — only worth it when a real model
+needs it.
+
+### See also
+
+- ADR 0036 — Embedded-host decomposition: linear coupling over
+  corner nodes.
+- ADR 0022 — MP-constraint emission fan-out (the single primitive
+  this work would replace for hex/quad hosts).
+- ADR 0035 — `ASDEmbeddedNodeElement` C++ optionals exposure
+  (the pattern this work follows for the new element classes).
+

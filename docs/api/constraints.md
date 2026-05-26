@@ -190,6 +190,120 @@ A slave node is constrained to the displacement field of a master
 surface or volume through shape-function interpolation. Handles
 non-matching meshes, distributed loads, and embedded reinforcement.
 
+### Embedded — host mesh compatibility
+
+`g.constraints.embedded(host_label, embedded_label, ...)` accepts any
+standard structural mesh on the host side. The collector decomposes
+non-simplex and higher-order hosts into linear sub-tris / sub-tets
+using corner nodes only, then dispatches to the existing C++
+`ASDEmbeddedNodeElement` (which accepts 3- or 4-node retained sets).
+
+| Gmsh etype       | Code  | Host-side decomposition                                  |
+| ---------------- | ----- | -------------------------------------------------------- |
+| tri3 (CST)       | 2     | identity (1 tri per host)                                |
+| tet4             | 4     | identity (1 tet per host)                                |
+| quad4            | 3     | 2 tris via (0,2) diagonal split                          |
+| hex8             | 5     | 6 right-handed Kuhn tets (shared main diagonal)          |
+| prism6           | 6     | 3 tets                                                   |
+| pyramid5         | 7     | 2 tets                                                   |
+| tri6 (LST)       | 9     | corners only → 1 tri (midsides discarded)                |
+| tet10            | 11    | corners only → 1 tet                                     |
+| pyramid13        | 14    | corners only → 2 tets                                    |
+| quad8 / quad9    | 16/10 | corners only → 2 tris                                    |
+| hex20            | 17    | corners only → 6 Kuhn tets                               |
+| prism15          | 18    | corners only → 3 tets                                    |
+
+Sub-element rows are **virtual** — they do not correspond to elements
+in the gmsh mesh. They exist purely as a coupling-layer fabrication
+so the linear-shape-function coupling of `ASDEmbeddedNodeElement`
+works against any supported host topology.
+
+#### The linear-coupling contract (`host_coupling="linear"`)
+
+The embedded coupling is always **linear** over 3 or 4 corner nodes,
+regardless of the host's native interpolation order. An LST plate's
+quadratic curvature, a hex8's bilinear twist mode, a quad9's
+biquadratic field — none are seen by the embedded node. The embed
+sees only the linear corner-to-corner stretch of whichever sub-tri /
+sub-tet contains it.
+
+`EmbeddedDef.host_coupling` is a reserved keyword that pins this
+behaviour. Only `"linear"` is currently accepted. The keyword is
+reserved (not just documented) so a future `"trilinear"` /
+`"biquadratic"` option — which would require a new OpenSees element
+class supporting N-node retained sets — can land without breaking
+existing models.
+
+#### Warning on midside-bearing hosts
+
+The first time the collector decomposes a host that carries midside
+nodes (tri6, tet10, quad8, quad9, hex20, prism15, pyramid13), one
+`UserWarning` fires per `(etype, entity)` pointing at the
+linear-coupling consequence. Acknowledge by setting
+`host_coupling="linear"` explicitly on the `embedded(...)` call.
+
+If you chose LST / quad8 / hex20 specifically for curvature fidelity,
+the embed will not give it to you — either accept the linear coupling
+or wait for the `HostProjector` work (deferred; see ADR 0036).
+
+#### Per-hex coupling asymmetry
+
+Two embedded nodes inside the same hex8 may couple to **different**
+4-corner subsets depending on which of the 6 Kuhn sub-tets contains
+each one. This is geometrically correct under linear coupling but
+can surprise readers of the resolved records. The Kuhn decomposition
+is symmetric (orientation-independent across adjacent hexes), so
+there is no neighbour-hex-dependence in the choice.
+
+#### Mixed-dim host fail-loud
+
+A host part / physical group that combines 2D entities (shell, quad
+plate) and 3D entities (brick, tet volume) raises at collection
+time. The linear coupling cannot pick between sub-tris and sub-tets
+deterministically (kNN centroid search would dispatch based on
+opaque proximity, which is opaque physics). Split the host into two
+separate `g.constraints.embedded(...)` calls — one for the 2D part,
+one for the 3D part.
+
+#### Off-host fail-loud
+
+An embedded node that falls outside every host sub-element by more
+than `EmbeddedDef.tolerance` (default `1.0` from the factory; the
+class default is `0.0` for strictly-inside) raises naming the
+offending slave node and its barycentric excess. Either fix the
+geometry / mesh so the embed lies inside the host, or widen
+`tolerance=` explicitly if extrapolation is intentional.
+
+See [ADR 0036](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0036-embedded-host-decomposition.md)
+for the full decision record (Kuhn-table orientation invariants,
+alternatives rejected, `HostProjector` RFC deferral).
+
+#### Example — rebar in hex-meshed concrete
+
+```python
+from apeGmsh import apeGmsh
+
+with apeGmsh(model_name="rc_block") as g:
+    # ... CAD import, parts, etc. ...
+
+    # Hex-meshed concrete host, line-meshed rebar curve
+    g.constraints.embedded(
+        host_label="concrete_block_hex",
+        embedded_label="rebar_curve",
+        stiffness=1.0e8,        # STKO-parity penalty (ADR 0035)
+        # host_coupling="linear" is the default; setting it
+        # explicitly acknowledges the linear-coupling contract
+        # if your host carries midside nodes.
+    )
+
+    g.mesh.generation.generate(dim=3)
+    fem = g.mesh.queries.get_fem_data(dim=3)
+    # Embedded records land on fem.elements.constraints as
+    # InterpolationRecord; each rebar node couples to 4 of the
+    # 8 corners of the hex that contains it (one of 6 Kuhn
+    # sub-tets — see the per-hex asymmetry note above).
+```
+
 ::: apeGmsh._kernel.defs.constraints.TieDef
     options:
       heading_level: 3
