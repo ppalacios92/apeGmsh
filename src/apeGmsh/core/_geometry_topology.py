@@ -34,45 +34,57 @@ if TYPE_CHECKING:
 DimTag = tuple[int, int]
 
 
-def _gather_volume_boundary_dimtags() -> set[DimTag]:
-    """Return every dimtag that bounds a registered volume at any depth.
+def _gather_keep_set(model: "Model") -> set[DimTag]:
+    """Return every dimtag that the sweep must preserve.
+
+    Two protection seeds:
+
+    1. **Every registered volume** plus its full boundary closure
+       (surfaces → curves → points).  Volumes are always kept; the
+       sweep is dim<=2 only.
+    2. **Every user-intentional non-volume entity** (in
+       ``model._metadata`` or carrying a label) plus its own boundary
+       closure.  This is what protects standalone embedded shells
+       and pure 2D meshable surfaces — their boundary curves and
+       points bound no volume, but they bound a user-intentional
+       surface, which is the same load-bearing semantics.
 
     ``gmsh.model.getBoundary(..., recursive=True)`` returns ONLY the
     leaf points, not the intermediate surfaces/curves — so the walk
     is done explicitly dim-by-dim with ``recursive=False``.
     """
     keep: set[DimTag] = set()
-    vols = gmsh.model.getEntities(3)
-    if not vols:
-        return keep
 
-    for d_v, v in vols:
-        keep.add((int(d_v), int(v)))
+    # Seed: every volume + every user-intentional non-volume.
+    seed_by_dim: dict[int, list[int]] = {0: [], 1: [], 2: [], 3: []}
+    for _, v in gmsh.model.getEntities(3):
+        seed_by_dim[3].append(int(v))
+        keep.add((3, int(v)))
+    for d in (2, 1, 0):
+        for _, t in gmsh.model.getEntities(d):
+            if _user_intentional(model, d, int(t)):
+                seed_by_dim[d].append(int(t))
+                keep.add((d, int(t)))
 
-    # Surfaces of every volume.
-    surfaces = gmsh.model.getBoundary(
-        [(3, int(v)) for _, v in vols],
-        oriented=False, recursive=False, combined=False,
-    )
-    surf_dts = [(abs(int(d)), abs(int(t))) for d, t in surfaces]
-    keep.update(surf_dts)
-    if not surf_dts:
-        return keep
+    # Walk boundary closure of every seeded dim — dim-by-dim, top down.
+    # ``getBoundary`` requires inputs at the same dim, so feed one dim
+    # at a time.  Each iteration accumulates its children into the
+    # next-lower dim's seed list, so a dim=3 seed propagates all the
+    # way down to dim=0 in three passes.
+    for parent_dim in (3, 2, 1):
+        parents = seed_by_dim[parent_dim]
+        if not parents:
+            continue
+        children = gmsh.model.getBoundary(
+            [(parent_dim, t) for t in parents],
+            oriented=False, recursive=False, combined=False,
+        )
+        for d_c, t_c in children:
+            d_c_abs, t_c_abs = abs(int(d_c)), abs(int(t_c))
+            if (d_c_abs, t_c_abs) not in keep:
+                keep.add((d_c_abs, t_c_abs))
+                seed_by_dim[d_c_abs].append(t_c_abs)
 
-    # Curves of every surface.
-    curves = gmsh.model.getBoundary(
-        surf_dts, oriented=False, recursive=False, combined=False,
-    )
-    curve_dts = [(abs(int(d)), abs(int(t))) for d, t in curves]
-    keep.update(curve_dts)
-    if not curve_dts:
-        return keep
-
-    # Points of every curve.
-    points = gmsh.model.getBoundary(
-        curve_dts, oriented=False, recursive=False, combined=False,
-    )
-    keep.update((abs(int(d)), abs(int(t))) for d, t in points)
     return keep
 
 
@@ -143,7 +155,7 @@ def sweep_dangling(
     gmsh.model.occ.synchronize()
 
     also = set(also_remove or ())
-    keep_dimtags = _gather_volume_boundary_dimtags()
+    keep_dimtags = _gather_keep_set(model)
 
     removed: dict[int, list[int]] = {d: [] for d in range(max_dim + 1)}
     removed_dts: list[DimTag] = []

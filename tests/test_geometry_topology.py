@@ -68,6 +68,45 @@ class TestFindOrphansDryRun:
 class TestSweepProtectsUserGeometry:
     """The sweep must not delete entities the user explicitly created."""
 
+    def test_sweep_protects_2d_only_model_boundary(self, g):
+        """In a 2D-only model the user's surface is the highest dim.
+        Its bounding curves and points are NOT in volume-boundary
+        (there ARE no volumes), but they ARE in the surface's own
+        boundary closure — they must survive the sweep.
+
+        Regression: an earlier version of the sweep protected only
+        volume-bounding entities, so every 2D mesh setup tripped
+        ``validate_pre_mesh`` because the surface's corner points and
+        edges showed up as "orphans".
+        """
+        surf = g.model.geometry.add_rectangle(0, 0, 0, 1, 1, label='quad')
+        # No volumes; the surface, its 4 edges, its 4 points are all
+        # legitimate model state.
+        assert g.model.geometry.find_orphans() == {0: [], 1: [], 2: []}, (
+            "2D-only model misreports surface's boundary as orphan"
+        )
+        # validate_pre_mesh must also accept this clean 2D model.
+        g.model.geometry.validate_pre_mesh()
+
+    def test_sweep_protects_embedded_shell_boundary(self, g):
+        """3D model with a standalone shell (embedded surface, not
+        bounding any volume) — the shell's own boundary curves and
+        points must survive even though they bound no volume.
+
+        Regression: the earlier sweep used a "bounds a volume" filter
+        only.  Embedded-shell workflows (cohesive crack planes,
+        diaphragm shells inside soil) would lose the shell's
+        boundary curves and points.
+        """
+        g.model.geometry.add_box(0, 0, 0, 10, 10, 10, label='soil')
+        # An embedded planar shell inside the box.  add_rectangle
+        # registers it in metadata so the shell itself is protected;
+        # its bounding curves and points must follow.
+        g.model.geometry.add_rectangle(2, 2, 5, 6, 6, label='diaphragm')
+        assert g.model.geometry.find_orphans() == {0: [], 1: [], 2: []}, (
+            "embedded shell's boundary curves/points misreported as orphans"
+        )
+
     def test_sweep_dangling_protects_user_labeled_surface(self, g):
         """A surface that is in ``_metadata`` (created via
         ``add_rectangle``) survives a manual sweep even when it bounds
