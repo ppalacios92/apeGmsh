@@ -302,10 +302,18 @@ class ConstraintsComposite:
                             f"Available: {list(parts._instances)}"
                         )
         self.constraint_defs.append(defn)
-        # Phase 3B.2b-prep / ADR 0038 — invalidate the session's
-        # cached FEMData so the next ``get_fem_data()`` re-extracts
-        # with the new declaration folded in.  Vanilla sessions
-        # without the counter hook are skipped silently.
+        # Phase 3B.2d / ADR 0038 — chain-phase routing.  Constraint
+        # defs (equalDOF / rigidLink / rigidDiaphragm / embedded /
+        # tied_contact) need element-side resolution that the
+        # minimum-viable router does not yet cover; the call falls
+        # through to the bump-counter pattern with a documented gap
+        # (the def is stored on ``self.constraint_defs`` but not
+        # applied to ``_fem`` until a build-phase
+        # ``get_fem_data()`` re-extraction).
+        from apeGmsh._kernel.resolvers._chain_phase_router import (
+            try_chain_phase_route,
+        )
+        try_chain_phase_route(self._parent, defn)
         bump = getattr(self._parent, "_bump_fem_counter", None)
         if bump is not None:
             bump()
@@ -377,9 +385,12 @@ class ConstraintsComposite:
                      dofs=list(dofs) if dofs is not None else [1, 1, 1],
                      name=name)
         self._bc_defs.append(defn)
-        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache
-        # (mirrors ``_add_def``; ``bc()`` writes to a separate
-        # ``_bc_defs`` list so the bump has to happen here too).
+        # Phase 3B.2d / ADR 0038 — chain-phase routing.  See
+        # ``MassesComposite._add_def`` for the contract.
+        from apeGmsh._kernel.resolvers._chain_phase_router import (
+            try_chain_phase_route,
+        )
+        try_chain_phase_route(self._parent, defn)
         bump = getattr(self._parent, "_bump_fem_counter", None)
         if bump is not None:
             bump()

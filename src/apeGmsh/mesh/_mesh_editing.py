@@ -35,6 +35,16 @@ class _Editing:
     def __init__(self, parent_mesh: "Mesh") -> None:
         self._mesh = parent_mesh
 
+    def _guard(self, op: str) -> None:
+        """Phase 3B.2d / ADR 0038 — chain-phase freeze guard.
+
+        Every public mutation method on ``_Editing`` calls this at its
+        entry point; centralising the check keeps the error messages
+        consistent and the surface auditable.
+        """
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, f"g.mesh.editing.{op}")
+
     # ------------------------------------------------------------------
     # Embedding
     # ------------------------------------------------------------------
@@ -60,6 +70,7 @@ class _Editing:
             g.mesh.editing.embed("crack_surf", "body", dim=2, in_dim=3)
             g.mesh.editing.embed([p1, p2, p3], surf_tag, dim=0, in_dim=2)
         """
+        self._guard("embed")
         from apeGmsh.core._helpers import resolve_to_tags
         tag_list = resolve_to_tags(tags, dim=dim, session=self._mesh._parent)
         in_tags = resolve_to_tags(in_tag, dim=in_dim, session=self._mesh._parent)
@@ -95,6 +106,7 @@ class _Editing:
                       master -> slave coordinates
         dim         : entity dimension (1 = curves, 2 = surfaces)
         """
+        self._guard("set_periodic")
         from apeGmsh.core._helpers import resolve_to_tags
         slave_resolved = resolve_to_tags(
             tags, dim=dim, session=self._mesh._parent,
@@ -128,6 +140,7 @@ class _Editing:
         Classify an STL mesh previously loaded into the gmsh model via
         ``gmsh.merge`` as a discrete surface mesh.
         """
+        self._guard("import_stl")
         gmsh.model.mesh.importStl()
         self._mesh._log("import_stl()")
         return self
@@ -145,6 +158,7 @@ class _Editing:
         Partition a discrete STL mesh into surface patches based on
         dihedral angle.
         """
+        self._guard("classify_surfaces")
         gmsh.model.mesh.classifySurfaces(
             angle,
             boundary=boundary,
@@ -166,6 +180,7 @@ class _Editing:
         Create a proper CAD-like geometry from classified discrete surfaces.
         Must be called after ``classify_surfaces``.
         """
+        self._guard("create_geometry")
         gmsh.model.mesh.createGeometry(dimTags=dim_tags or [])
         self._mesh._log("create_geometry()")
         return self
@@ -190,6 +205,7 @@ class _Editing:
             g.mesh.editing.clear("col.body")        # clear a labelled volume
             g.mesh.editing.clear([(2, 5), "fillet"]) # mixed refs
         """
+        self._guard("clear")
         if dim_tags is None:
             dts: list[DimTag] = []
         else:
@@ -215,6 +231,7 @@ class _Editing:
             g.mesh.editing.reverse("inverted_face")
             g.mesh.editing.reverse([(2, 5), (2, 6)])
         """
+        self._guard("reverse")
         if dim_tags is None:
             dts: list[DimTag] = []
         else:
@@ -246,6 +263,7 @@ class _Editing:
             g.mesh.editing.relocate_nodes(tag="col.faces")  # whole label
             g.mesh.editing.relocate_nodes(tag=(2, 5))
         """
+        self._guard("relocate_nodes")
         if tag == -1:
             gmsh.model.mesh.relocateNodes(dim=dim, tag=-1)
             self._mesh._log(f"relocate_nodes(dim={dim}, tag=-1)")
@@ -270,6 +288,7 @@ class _Editing:
         destructive operation; the visibility floor is intentional so
         that an unexpected dedup never hides in a long pipeline log.
         """
+        self._guard("remove_duplicate_nodes")
         before = len(gmsh.model.mesh.getNodes()[0])
         gmsh.model.mesh.removeDuplicateNodes()
         after  = len(gmsh.model.mesh.getNodes()[0])
@@ -285,6 +304,7 @@ class _Editing:
 
     def remove_duplicate_elements(self, verbose: bool = True) -> "_Editing":
         """Remove elements with identical node connectivity."""
+        self._guard("remove_duplicate_elements")
         def _count() -> int:
             _, tags, _ = gmsh.model.mesh.getElements()
             return sum(len(t) for t in tags)
@@ -393,6 +413,7 @@ class _Editing:
                 "Crack", dim=1, open_boundary="CrackBase",
             )
         """
+        self._guard("crack")
         physical = getattr(self._mesh._parent, 'physical', None)
         if physical is None:
             raise RuntimeError(
@@ -679,6 +700,7 @@ class _Editing:
             ops = apeSees(fem)
             ops.element.elasticBeamColumn(pg="Beams", ...)  # works now
         """
+        self._guard("split_higher_order_lines")
         if policy not in ("forbid", "split", "constrain"):
             raise ValueError(
                 f"split_higher_order_lines: policy must be 'forbid', "
@@ -871,6 +893,7 @@ class _Editing:
             identity = [1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0]
             g.mesh.editing.affine_transform(identity, "col.body")
         """
+        self._guard("affine_transform")
         if dim_tags is None:
             dts: list[DimTag] = []
         else:

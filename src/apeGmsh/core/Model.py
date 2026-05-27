@@ -96,6 +96,13 @@ class Model(_HasLogging):
         return as_dimtags(tags, default_dim)
 
     def _register(self, dim: int, tag: Tag, label: str | None, kind: str) -> Tag:
+        # Phase 3B.2d / ADR 0038 — fail-loud on geometry mutation after
+        # the broker has been extracted.  Every geometry primitive
+        # (add_*, boolean ops, transforms, model.io.load_*) funnels
+        # through here, so this single gate covers ~all geometry
+        # mutation surfaces.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(self._parent, f"g.model.<geometry>({kind})")
         # Metadata only — labels live exclusively in g.labels (Gmsh PGs).
         self._metadata[(dim, tag)] = {'kind': kind}
 

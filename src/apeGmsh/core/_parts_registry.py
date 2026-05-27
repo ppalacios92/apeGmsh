@@ -173,6 +173,13 @@ class PartsRegistry(_PartsFragmentationMixin):
         SectionsBuilder) funnel through here so every Instance has
         ``inst.edit`` wired up at registration time.
         """
+        # Phase 3B.2d / ADR 0038 — parts registration is build-phase
+        # only; the chain-phase broker carries its own immutable
+        # ``parts.maps`` snapshot.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._parent, f"g.parts.<register>({inst.label})"
+        )
         from ._instance_edit import InstanceEdit
 
         self._instances[inst.label] = inst

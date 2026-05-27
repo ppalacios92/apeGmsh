@@ -886,8 +886,12 @@ class LoadsComposite:
                 f"Supported: {list(cfg.keys())}"
             )
         self.load_defs.append(defn)
-        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache
-        # so the next ``get_fem_data()`` picks up the new load.
+        # Phase 3B.2d / ADR 0038 — chain-phase routing.  See
+        # ``MassesComposite._add_def`` for the contract.
+        from apeGmsh._kernel.resolvers._chain_phase_router import (
+            try_chain_phase_route,
+        )
+        try_chain_phase_route(self._parent, defn)
         bump = getattr(self._parent, "_bump_fem_counter", None)
         if bump is not None:
             bump()

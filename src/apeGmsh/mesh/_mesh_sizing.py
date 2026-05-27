@@ -23,6 +23,11 @@ class _Sizing:
     def __init__(self, parent_mesh: "Mesh") -> None:
         self._mesh = parent_mesh
 
+    def _guard(self, op: str) -> None:
+        """Phase 3B.2d / ADR 0038 — chain-phase freeze guard."""
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, f"g.mesh.sizing.{op}")
+
     # ------------------------------------------------------------------
     # Global size
     # ------------------------------------------------------------------
@@ -51,6 +56,7 @@ class _Sizing:
             m1.mesh.sizing.set_global_size(6000)            # ceiling only
             m1.mesh.sizing.set_global_size(6000, 200)       # band [200, 6000]
         """
+        self._guard("set_global_size")
         gmsh.option.setNumber("Mesh.MeshSizeMax", max_size)
         gmsh.option.setNumber("Mesh.MeshSizeMin", min_size)
         self._mesh._log(f"set_global_size(max={max_size}, min={min_size})")
@@ -82,6 +88,7 @@ class _Sizing:
                                  extend_from_boundary=False)
                .set_global_size(6000))
         """
+        self._guard("set_size_sources")
         if from_points is not None:
             gmsh.option.setNumber("Mesh.MeshSizeFromPoints", int(bool(from_points)))
         if from_curvature is not None:
@@ -112,6 +119,7 @@ class _Sizing:
             g.mesh.sizing.set_size_global(min_size=15, max_size=25)
             g.mesh.sizing.set_size_global(max_size=50)
         """
+        self._guard("set_size_global")
         if min_size is not None:
             gmsh.option.setNumber("Mesh.MeshSizeMin", min_size)
         if max_size is not None:
@@ -166,6 +174,7 @@ class _Sizing:
             # Dimtag form for an explicit volume
             g.mesh.sizing.set_size([(3, vol_tag)], 10.0)
         """
+        self._guard("set_size")
         from apeGmsh.core._helpers import resolve_to_dimtags
 
         # Resolve to dimtags at native dim (label/PG aware).
@@ -228,6 +237,7 @@ class _Sizing:
                .set_size_all_points(6000)
                .set_global_size(6000))
         """
+        self._guard("set_size_all_points")
         pts = gmsh.model.getEntities(dim=0)
         if pts:
             gmsh.model.mesh.setSize(pts, size)
@@ -248,6 +258,7 @@ class _Sizing:
 
         Callback signature ``func(dim, tag, x, y, z, lc) -> float``.
         """
+        self._guard("set_size_callback")
         gmsh.model.mesh.setSizeCallback(func)
         self._mesh._directives.append({
             'kind': 'set_size_callback',
@@ -277,6 +288,7 @@ class _Sizing:
         dim  : optional dimension filter; ``None`` resolves at the
                PG's native dim.
         """
+        self._guard("set_size_by_physical")
         # If dim is given, restrict resolution; otherwise let set_size
         # auto-resolve via the string path (label-then-PG).
         if dim is not None:

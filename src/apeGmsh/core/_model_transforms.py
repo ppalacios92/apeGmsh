@@ -26,6 +26,15 @@ class _Transforms:
         any mix; bare ints fall back to *dim* when the live model has
         no entry for that tag.
         """
+        # Phase 3B.2d / ADR 0038 — every public transform method
+        # routes through ``_resolve_dt`` to translate its tag
+        # argument; centralising the freeze guard here covers
+        # translate / rotate / scale / mirror / copy / extrude /
+        # revolve / sweep / thru_sections in one place.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._model._parent, "g.model.transforms.<mutate>"
+        )
         return resolve_to_dimtags(
             refs, default_dim=dim, session=self._model._parent,
         )

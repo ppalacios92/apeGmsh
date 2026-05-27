@@ -173,6 +173,46 @@ class _SessionBase:
         self.end()
 
     # ------------------------------------------------------------------
+    # Chain-phase freeze guard (Phase 3B.2d / ADR 0038)
+    # ------------------------------------------------------------------
+
+    def _check_chain_phase(self, operation: str) -> None:
+        """Raise :class:`ChainPhaseError` when the session is post-extraction.
+
+        A session is in *chain phase* once it has produced its first
+        :class:`FEMData` snapshot (``self._fem is not None``).  After
+        that the broker is canonical and any geometry / mesh / PG /
+        label / parts / sections mutation would silently desync the
+        broker from gmsh.  Build-phase APIs guard themselves by
+        calling this helper at their entry point with a short
+        ``operation`` name for the error message.
+
+        Vanilla sessions / subclasses without ``_fem`` (e.g. low-level
+        test fixtures) are not gated — the attribute is treated as
+        ``None`` when absent, mirroring the rest of the cache helpers.
+
+        Parameters
+        ----------
+        operation : str
+            Short identifier of the API being called (e.g.
+            ``"g.model.geometry.add_box"``, ``"g.mesh.generation.generate"``).
+            Surfaces in the error message so users can pinpoint the
+            offending call.
+        """
+        if getattr(self, "_fem", None) is None:
+            return
+        from .core._compose_errors import ChainPhaseError
+        raise ChainPhaseError(
+            f"{operation}: model frozen after first get_fem_data() / "
+            f"compose; reload from H5 or restart to mutate geometry. "
+            f"Chain-phase composition (g.compose) and the "
+            f"interface-bridging constraints "
+            f"(g.constraints.embedded / tied_contact / equalDOF / "
+            f"rigid_link / rigid_diaphragm) remain available."
+        )
+
+
+    # ------------------------------------------------------------------
     # Composite creation
     # ------------------------------------------------------------------
 

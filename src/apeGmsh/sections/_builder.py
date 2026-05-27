@@ -81,6 +81,10 @@ class SectionsBuilder(_HasLogging):
         """Shared helper: snapshot entities before/after the build
         function, register the delta as an Instance, apply transforms.
         """
+        # Phase 3B.2d / ADR 0038 — section-builder mutates gmsh state +
+        # the parts registry, both forbidden in chain phase.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._parent, f"g.sections.<build>({label})")
         from apeGmsh.core._parts_registry import Instance
 
         parts = getattr(self._parent, 'parts', None)

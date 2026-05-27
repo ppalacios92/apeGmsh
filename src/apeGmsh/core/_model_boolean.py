@@ -40,6 +40,11 @@ class _Boolean:
         label         : str | None = None,
     ) -> list[Tag]:
         parent = self._model._parent
+        # Phase 3B.2d / ADR 0038 — every boolean operation
+        # (fuse / cut / intersect / fragment) routes through ``_bool_op``;
+        # one guard covers the whole composite.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(parent, f"g.model.boolean.{fn_name}")
         obj_dt  = resolve_to_dimtags(
             objects, default_dim=default_dim, session=parent,
         )

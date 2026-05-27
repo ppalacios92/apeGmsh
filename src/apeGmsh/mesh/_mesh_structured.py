@@ -25,6 +25,11 @@ class _Structured:
     def __init__(self, parent_mesh: "Mesh") -> None:
         self._mesh = parent_mesh
 
+    def _guard(self, op: str) -> None:
+        """Phase 3B.2d / ADR 0038 — chain-phase freeze guard."""
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, f"g.mesh.structured.{op}")
+
     # ------------------------------------------------------------------
     # Transfinite constraints
     # ------------------------------------------------------------------
@@ -36,6 +41,10 @@ class _Structured:
         structured methods accept the same ref shapes used elsewhere in
         the API.
         """
+        # Phase 3B.2d / ADR 0038 — every structured-meshing public
+        # method routes through ``_resolve`` to translate its tag
+        # argument, so this is the central chokepoint for the freeze.
+        self._guard("<structured-mutation>")
         from apeGmsh.core._helpers import resolve_to_tags
         return resolve_to_tags(tag, dim=dim, session=self._mesh._parent)
 
@@ -870,6 +879,7 @@ class _Structured:
 
     def recombine(self) -> "_Structured":
         """Globally recombine all triangular elements into quads."""
+        self._guard("recombine")
         gmsh.model.mesh.recombine()
         self._mesh._log("recombine()")
         return self
@@ -944,6 +954,7 @@ class _Structured:
         ``(dim, tag)``, or list thereof).  ``None`` clears every
         entity in the model.
         """
+        self._guard("remove_constraints")
         if dim_tags is None:
             dts: list[DimTag] = []
         else:

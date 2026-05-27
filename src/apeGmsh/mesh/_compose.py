@@ -1473,6 +1473,8 @@ def _previous_reservations(
 def _merge_bundle_into_fem(
     fem: "FEMData",
     bundle: "_RewrittenBundle",
+    *,
+    compose_size_per_module: int | None = None,
 ) -> "FEMData":
     """Return a new :class:`FEMData` extending ``fem`` with ``bundle``.
 
@@ -1495,6 +1497,14 @@ def _merge_bundle_into_fem(
       label (empty string for host-owned rows, prior compose label
       for prior-composed rows); bundle's rows are stamped with the
       bundle's label.
+
+    Phase 3B.2d / ADR 0038 — verifier wiring.  Before any merge work
+    runs, the five tag-collision verifier checks fire against the
+    bundle's reservation + import data against the host's existing
+    reservations + PG inventory.  Failures raise the typed exceptions
+    :class:`~apeGmsh.core._compose_errors.PartTagCollisionError` /
+    :class:`~apeGmsh.core._compose_errors.ComposeInvariantError` /
+    :class:`~apeGmsh.core._compose_errors.ComposeCapacityError`.
     """
     from .FEMData import (
         FEMData, NodeComposite, ElementComposite, MeshInfo,
@@ -1503,6 +1513,13 @@ def _merge_bundle_into_fem(
     from ._element_types import ElementGroup
     from .._kernel.records._compose import ComposeRecord
     from .._kernel.record_sets import ComposeSet
+
+    # ── 0. Verifier (Phase 2.2 wiring — ADR 0038 §"Tag-collision
+    #      verifier") ──────────────────────────────────────────────
+    _run_compose_verifier(
+        fem=fem, bundle=bundle,
+        compose_size_per_module=compose_size_per_module,
+    )
 
     # ── 1. Concatenate node ids + coords ─────────────────────────
     host_node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)
@@ -1720,6 +1737,361 @@ def _merge_bundle_into_fem(
         new_fem = new_fem.with_mass(rec)
 
     return new_fem
+
+
+def _rebuild_partitions_from_modules(fem: "FEMData") -> "FEMData":
+    """Phase 3B.2d / ADR 0038 §"Rank model" — eager populator.
+
+    Walks the host's :attr:`fem.composed_from` chain and writes a
+    ``module_label → partition_rank`` map onto the host's node /
+    element ``_partitions`` back-stores so the broker reports the
+    composed modules as separate partitions.
+
+    Three layers of rank assignment (ADR 0038 §"Rank model"):
+
+    * **Layer 1 (default)** — auto-assign one rank per module in
+      compose order: host nodes/elements land on rank 0, the
+      first composed module on rank 1, the second on rank 2, etc.
+      Activated when every ``ComposeRecord.partition_rank`` is
+      ``None``.
+    * **Layer 2 (hint)** — when one or more modules carry an
+      explicit ``partition_rank=K`` hint on their ``ComposeRecord``,
+      those ranks override the Layer-1 default for that module.
+      Other modules get auto-assigned around the hints to avoid
+      collisions (sequential lowest-unused integer).
+    * **Layer 3 (METIS override)** — when the user later runs
+      partition refinement that overrides module ranks, the caller
+      is responsible for emitting a :class:`UserWarning` noting the
+      override.  This populator emits the warning itself when it
+      detects that ``fem`` already carries explicit per-node /
+      per-element partition assignments AND a Layer-1/2 module map
+      would disagree.
+
+    Pure-ish helper: ``fem`` is not deep-copied — the partition
+    back-stores are replaced in place on the existing composite
+    instances + a new :class:`PartitionSet` is built on the result.
+    Returns a new :class:`FEMData` carrying the rebuilt partitions
+    so callers can chain transforms.
+    """
+    composed = getattr(fem, "composed_from", None)
+    if not composed:
+        return fem
+
+    # Layer 1 / 2 — assign each module a rank.
+    rank_by_label: dict[str, int] = {}
+    used: set[int] = {0}  # host always owns rank 0
+    # First pass — honour Layer-2 hints.
+    for rec in composed:
+        if rec.partition_rank is not None:
+            r = int(rec.partition_rank)
+            if r in used:
+                # Collision between two Layer-2 hints OR between a hint
+                # and the host rank.  Raise a clear error rather than
+                # silently overriding — ADR 0038 §"Rank model".
+                raise ValueError(
+                    f"rank model: module {rec.label!r} has "
+                    f"partition_rank={r} which collides with another "
+                    f"module's hint or the host's rank-0 reservation."
+                )
+            used.add(r)
+            rank_by_label[rec.label] = r
+    # Second pass — auto-assign the unhinted modules from the lowest
+    # unused integer.
+    auto_cursor = 1
+    for rec in composed:
+        if rec.label in rank_by_label:
+            continue
+        while auto_cursor in used:
+            auto_cursor += 1
+        rank_by_label[rec.label] = auto_cursor
+        used.add(auto_cursor)
+        auto_cursor += 1
+
+    # Layer 3 — detect METIS override.  We only warn when the existing
+    # partition record on the host carries IDs that this compose's
+    # rank assignment does NOT cover (i.e. the user ran METIS at some
+    # point AND the partition IDs don't match the rank set the
+    # populator would assign).  A prior compose's partition record
+    # uses {0, rank_by_label...} which by construction matches; only a
+    # user-driven METIS run would produce a different set.
+    existing_node_parts = getattr(fem.nodes, "_partitions", {}) or {}
+    existing_elem_parts = getattr(fem.elements, "_partitions", {}) or {}
+    if existing_node_parts or existing_elem_parts:
+        expected = {0, *rank_by_label.values()}
+        existing = (
+            set(existing_node_parts.keys())
+            | set(existing_elem_parts.keys())
+        )
+        if not existing.issubset(expected):
+            import warnings
+            warnings.warn(
+                "compose rank model: overriding existing partition "
+                "assignment with one rank per composed module per "
+                "ADR 0038 §'Rank model — Layer 3'. Re-run partition "
+                "refinement (g.mesh.partitioning.partition) AFTER "
+                "compose to keep a METIS-driven partition.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    # ── Build the partition dicts ────────────────────────────────
+    node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)
+    node_ml_arr = (
+        np.asarray(fem.nodes._module_label, dtype=object)
+        if fem.nodes._module_label is not None
+        else np.array([""] * node_ids.size, dtype=object)
+    )
+
+    new_node_parts: dict[int, dict] = {0: {"node_ids": [], "element_ids": []}}
+    for r in rank_by_label.values():
+        new_node_parts[r] = {"node_ids": [], "element_ids": []}
+
+    for i, nid in enumerate(node_ids):
+        lbl = str(node_ml_arr[i]) if i < node_ml_arr.size else ""
+        r = rank_by_label.get(lbl, 0)
+        new_node_parts[r]["node_ids"].append(int(nid))
+
+    new_elem_parts: dict[int, dict] = {0: {"node_ids": [], "element_ids": []}}
+    for r in rank_by_label.values():
+        new_elem_parts[r] = {"node_ids": [], "element_ids": []}
+
+    elem_ml = getattr(fem.elements, "_module_label", None) or {}
+    for code, grp in fem.elements._groups.items():
+        eids = np.asarray(grp.ids, dtype=np.int64)
+        ml_arr = (
+            np.asarray(elem_ml.get(code), dtype=object)
+            if elem_ml.get(code) is not None
+            else np.array([""] * eids.size, dtype=object)
+        )
+        for i, eid in enumerate(eids):
+            lbl = str(ml_arr[i]) if i < ml_arr.size else ""
+            r = rank_by_label.get(lbl, 0)
+            new_elem_parts[r]["element_ids"].append(int(eid))
+
+    # Convert lists → int64 arrays for the broker's contract.
+    for r, info in new_node_parts.items():
+        info["node_ids"] = np.array(info["node_ids"], dtype=np.int64)
+        info["element_ids"] = np.array(info["element_ids"], dtype=np.int64)
+    for r, info in new_elem_parts.items():
+        info["element_ids"] = np.array(info["element_ids"], dtype=np.int64)
+        info["node_ids"] = np.array(info["node_ids"], dtype=np.int64)
+
+    # Mutate the existing composites in place (private back-stores
+    # are documented as the broker's source of truth for partitions).
+    fem.nodes._partitions = new_node_parts
+    fem.elements._partitions = new_elem_parts
+
+    # Rebuild the public PartitionSet by constructing a fresh
+    # :class:`FEMData` — its ``__init__`` reads the partition dicts
+    # straight off the composites' ``_partitions`` back-stores, so
+    # the returned snapshot exposes the just-assigned ranks via
+    # ``fem.partitions``.  Pass mesh_selection + composed_from + info
+    # through unchanged so the chain head is otherwise intact.
+    from .FEMData import FEMData as _FEMData
+    return _FEMData(
+        nodes=fem.nodes,
+        elements=fem.elements,
+        info=fem.info,
+        mesh_selection=fem.mesh_selection,
+        composed_from=fem.composed_from,
+    )
+
+
+def _run_compose_verifier(
+    *,
+    fem: "FEMData",
+    bundle: "_RewrittenBundle",
+    compose_size_per_module: int | None,
+) -> None:
+    """Run the 5 ADR 0038 tag-collision checks for one bundle merge.
+
+    Pulls reservations + import data from the host FEMData + the
+    rewritten bundle and dispatches to
+    :func:`apeGmsh.core._tag_collision_verifier.tag_collision_verify`.
+
+    Reservation reconstruction
+    --------------------------
+    Each :class:`~apeGmsh._kernel.records._compose.ComposeRecord` does
+    not yet carry on-disk ``(base, size)`` extents — the schema can
+    grow that in a follow-up — so previously-composed modules'
+    reservations are reconstructed as ``[host_max_tag + 1, total]``
+    sweeps over the host's ``module_label`` arrays.  This is a
+    conservative approximation: the verifier's check 2 (disjoint
+    reservations) is the only check that uses the historical
+    reservations, and reconstructing from the actual occupied tag
+    range gives the same disjointness verdict the writer's offset
+    formula did at the time.
+    """
+    from ..core._tag_collision_verifier import (
+        ImportedRecords,
+        ReservationRecord,
+        tag_collision_verify,
+    )
+
+    # New reservation — the bundle's own (base, size) pair.
+    new_reservation = ReservationRecord(
+        label=bundle.label, base=bundle.base, size=bundle.size,
+    )
+    # Reconstruct prior reservations from the host's composed_from
+    # chain.  When the chain is empty (first compose) this is the
+    # only reservation handed to the verifier.
+    prior: list[ReservationRecord] = []
+    composed = getattr(fem, "composed_from", None)
+    if composed:
+        for prev_rec in composed:
+            base, size = _reconstruct_reservation_for_label(
+                fem, prev_rec.label,
+            )
+            if size > 0:
+                prior.append(ReservationRecord(
+                    label=prev_rec.label, base=base, size=size,
+                ))
+    reservations: tuple[ReservationRecord, ...] = (*prior, new_reservation)
+
+    # Host PG name inventory — node-side + element-side.
+    host_pg_names = _collect_pg_names(fem)
+
+    # Imports — the bundle's rewritten tag inventory.
+    imported_tags: list[int] = []
+    imported_tags.extend(int(x) for x in bundle.node_ids)
+    for grp in bundle.element_groups.values():
+        imported_tags.extend(int(x) for x in grp.ids)
+    # Source-side PG name inventory before namespacing (so check 4's
+    # ``{label}.``-prefix can run uniformly).
+    source_pg_names: list[str] = []
+    for entry in bundle.node_physical.values():
+        n = entry.get("name", "")
+        # Bundle entries already carry namespace-prefixed names
+        # (``_rewrite_named_groups`` applied ``{label}.`` to them);
+        # strip the prefix for the verifier so check 4 reproduces
+        # the prefix itself.
+        if isinstance(n, str) and n.startswith(f"{bundle.label}."):
+            source_pg_names.append(n[len(bundle.label) + 1:])
+        elif isinstance(n, str):
+            source_pg_names.append(n)
+    for entry in bundle.elem_physical.values():
+        n = entry.get("name", "")
+        if isinstance(n, str) and n.startswith(f"{bundle.label}."):
+            source_pg_names.append(n[len(bundle.label) + 1:])
+        elif isinstance(n, str):
+            source_pg_names.append(n)
+
+    constraint_refs = tuple(
+        _bundle_constraint_refs(bundle)
+    )
+
+    module_imports = {
+        bundle.label: ImportedRecords(
+            tags=imported_tags,
+            pg_names=source_pg_names,
+            constraint_refs=constraint_refs,
+            source_span=bundle.source_span,
+        ),
+    }
+
+    tag_collision_verify(
+        reservations=reservations,
+        host_pg_names=host_pg_names,
+        module_imports=module_imports,
+        compose_size_per_module=compose_size_per_module,
+    )
+
+
+def _reconstruct_reservation_for_label(
+    fem: "FEMData", label: str,
+) -> tuple[int, int]:
+    """Return ``(base, size)`` covering the tag range owned by ``label``.
+
+    Walks the host's ``module_label`` parallel arrays on nodes +
+    elements, gathers every tag stamped with ``label``, and computes
+    ``(min, max - min + 1)``.  Returns ``(0, 0)`` when ``label`` owns
+    no rows (defensive — empty module).
+    """
+    mins: list[int] = []
+    maxs: list[int] = []
+    node_ml = getattr(fem.nodes, "_module_label", None)
+    if node_ml is not None:
+        node_ml_arr = np.asarray(node_ml, dtype=object)
+        mask = np.array(
+            [str(x) == label for x in node_ml_arr], dtype=bool,
+        )
+        if mask.any():
+            node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)[mask]
+            if node_ids.size > 0:
+                mins.append(int(node_ids.min()))
+                maxs.append(int(node_ids.max()))
+    elem_ml = getattr(fem.elements, "_module_label", None)
+    if elem_ml is not None:
+        for code, grp in fem.elements._groups.items():
+            arr = elem_ml.get(code)
+            if arr is None:
+                continue
+            ml_arr = np.asarray(arr, dtype=object)
+            mask = np.array(
+                [str(x) == label for x in ml_arr], dtype=bool,
+            )
+            if mask.any():
+                eids = np.asarray(grp.ids, dtype=np.int64)[mask]
+                if eids.size > 0:
+                    mins.append(int(eids.min()))
+                    maxs.append(int(eids.max()))
+    if not mins:
+        return 0, 0
+    base = min(mins)
+    size = max(maxs) - base + 1
+    return base, size
+
+
+def _collect_pg_names(fem: "FEMData") -> tuple[str, ...]:
+    """Gather every PG name from the host (node + element side)."""
+    out: list[str] = []
+    for entry in fem.nodes.physical._groups.values():
+        n = entry.get("name", "")
+        if isinstance(n, str) and n:
+            out.append(n)
+    for entry in fem.elements.physical._groups.values():
+        n = entry.get("name", "")
+        if isinstance(n, str) and n:
+            out.append(n)
+    return tuple(out)
+
+
+def _bundle_constraint_refs(bundle: "_RewrittenBundle"):
+    """Yield :class:`ConstraintReference` for every tag-bearing field on
+    every constraint record in ``bundle``.
+
+    Iterates ``tag_rewrite_spec`` to find which fields are tags so the
+    verifier can confirm each lands inside the bundle's reservation
+    window (check 3 — cover-set drift detection).
+    """
+    from ..core._tag_collision_verifier import ConstraintReference
+
+    record_streams = (
+        bundle.node_constraints,
+        bundle.elem_constraints,
+    )
+    for stream in record_streams:
+        for rec in stream:
+            spec = getattr(rec, "tag_rewrite_spec", None)
+            if spec is None:
+                continue
+            kind = type(rec).__name__
+            for fname in spec.get("tag_fields_scalar", ()):
+                val = getattr(rec, fname, None)
+                if val is None:
+                    continue
+                yield ConstraintReference(
+                    kind=kind, field_name=fname, tag=int(val),
+                )
+            for fname in spec.get("tag_fields_array", ()):
+                vals = getattr(rec, fname, None)
+                if vals is None:
+                    continue
+                for i, v in enumerate(vals):
+                    yield ConstraintReference(
+                        kind=kind, field_name=f"{fname}[{i}]",
+                        tag=int(v),
+                    )
 
 
 def _merged_named_groups(

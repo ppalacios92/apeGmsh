@@ -433,6 +433,11 @@ class Labels(_HasLogging):
         int
             The Gmsh physical-group tag backing this label.
         """
+        # Phase 3B.2d / ADR 0038 — labels round-trip via the
+        # FEMData broker; mutating them post-extraction would diverge
+        # the broker from gmsh.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(self._parent, f"g.labels.add({name!r})")
         prefixed = add_prefix(name)
 
         # Build a name→(dim, pg_tag) index in one pass over all label

@@ -64,3 +64,42 @@ class ComposeInvariantError(RuntimeError):
     kind, the field that holds the bad reference, and the
     out-of-range tag value.
     """
+
+
+def chain_phase_guard(session, operation: str) -> None:
+    """Tolerant wrapper around ``session._check_chain_phase``.
+
+    Used at every build-phase chokepoint so the call is a no-op for
+    stub parents (test fixtures created via ``type("_Stub", (), ...)``
+    that don't carry the helper).  Real :class:`_SessionBase`
+    subclasses delegate to :meth:`_SessionBase._check_chain_phase`.
+    """
+    guard = getattr(session, "_check_chain_phase", None)
+    if guard is not None:
+        guard(operation)
+
+
+class ChainPhaseError(RuntimeError):
+    """Raised when a build-phase API is called on a chain-phase session.
+
+    Phase 3B.2d / ADR 0038.  Once the session has produced its first
+    :class:`FEMData` (``apeGmsh._fem is not None``) the session enters
+    *chain phase*: the canonical model is the broker snapshot, not the
+    live gmsh state.  Geometry / mesh / PG / label / parts / sections
+    mutations would diverge the broker from gmsh and silently corrupt
+    downstream consumers, so the session refuses them.
+
+    The interface-bridging primitives ``g.constraints.embedded`` /
+    ``tied_contact`` / ``equalDOF`` / ``rigid_link`` / ``rigid_diaphragm``
+    plus ``g.loads.X`` / ``g.masses.X`` are NOT gated — these are
+    documented per ADR 0038 line 45 as the chain-phase composition
+    surface and route through ``FEMData.with_*`` transforms.
+
+    Recovery
+    --------
+    Reload the session from disk (``apeGmsh.from_h5(path)``) or restart
+    the build phase before applying the mutation.  Chain-phase
+    composition (``g.compose(...)``) is the supported way to extend a
+    saved model.
+    """
+

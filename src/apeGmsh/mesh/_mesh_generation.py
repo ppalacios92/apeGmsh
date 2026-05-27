@@ -36,6 +36,10 @@ class _Generation:
         ----------
         dim : 1 = edges only, 2 = surface mesh, 3 = volume mesh (default)
         """
+        # Phase 3B.2d / ADR 0038 — meshing in chain phase would diverge
+        # the FEMData snapshot from the live gmsh model.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, "g.mesh.generation.generate")
         self._validate_pre_mesh()
         gmsh.model.mesh.generate(dim)
         self._mesh._log(f"generate(dim={dim})")
@@ -64,6 +68,10 @@ class _Generation:
                  False → serendipity / incomplete (e.g. Q8, T6).
                  Global Gmsh flag — applies to the entire mesh.
         """
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.generation.set_order"
+        )
         if order >= 2:
             gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 0 if bubble else 1)
         gmsh.model.mesh.setOrder(order)
@@ -72,6 +80,8 @@ class _Generation:
 
     def refine(self) -> "_Generation":
         """Uniformly refine by splitting every element once."""
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, "g.mesh.generation.refine")
         gmsh.model.mesh.refine()
         self._mesh._log("refine()")
         return self
@@ -100,6 +110,8 @@ class _Generation:
 
             g.mesh.generation.generate(3).optimize(OptimizeMethod.NETGEN, niter=5)
         """
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(self._mesh._parent, "g.mesh.generation.optimize")
         gmsh.model.mesh.optimize(method, force=force, niter=niter,
                                   dimTags=dim_tags or [])
         self._mesh._log(f"optimize(method={method!r}, niter={niter})")
@@ -130,6 +142,10 @@ class _Generation:
             g.mesh.generation.set_algorithm("col.web", "frontal_delaunay_quads")
             g.mesh.generation.set_algorithm(0, "hxt", dim=3)
         """
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.generation.set_algorithm"
+        )
         from apeGmsh.core._helpers import resolve_to_tags
 
         if dim not in (2, 3):

@@ -102,6 +102,12 @@ class PhysicalGroups(_HasLogging):
             different dimension.  Multi-dimensional physical groups
             are not supported — pick a distinct name per dimension.
         """
+        # Phase 3B.2d / ADR 0038 — PG mutation in chain phase would
+        # diverge the FEMData snapshot from the live gmsh model.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._parent, f"g.physical.add(dim={dim}, name={name!r})"
+        )
         from typing import cast
         from apeGmsh.core._helpers import resolve_to_tags
         if isinstance(tags, (str, int)):

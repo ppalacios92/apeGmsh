@@ -200,6 +200,11 @@ class _Partitioning:
         -------
         RenumberResult
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.partitioning.renumber"
+        )
         from ._fem_extract import extract_raw
         from .FEMData import _compute_bandwidth
         from ._fem_factory import _build_element_groups
@@ -328,6 +333,11 @@ class _Partitioning:
             When the selected backend is not installed (with a
             ``pip install apeGmsh[partition-pymetis]`` hint).
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.partitioning.partition"
+        )
         if n_parts < 1:
             raise ValueError(f"n_parts must be >= 1, got {n_parts}")
 
@@ -374,6 +384,11 @@ class _Partitioning:
         -------
         PartitionInfo
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.partitioning.partition_explicit"
+        )
         if len(elem_tags) != len(parts):
             raise ValueError(
                 f"len(elem_tags)={len(elem_tags)} != "
@@ -394,6 +409,11 @@ class _Partitioning:
 
     def unpartition(self) -> "_Partitioning":
         """Remove the partition structure and restore a monolithic mesh."""
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from apeGmsh.core._compose_errors import chain_phase_guard
+        chain_phase_guard(
+            self._mesh._parent, "g.mesh.partitioning.unpartition"
+        )
         self._last_weights = None
         gmsh.model.mesh.unpartition()
         self._mesh._log("unpartition()")

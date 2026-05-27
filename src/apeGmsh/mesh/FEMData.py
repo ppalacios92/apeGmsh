@@ -1889,9 +1889,22 @@ class FEMData:
         # 5. Emit FILTER warnings (stages / time-series / patterns).
         _emit_filter_warnings(source, label)
 
-        # 6. Merge bundle into self → new FEMData.  Cache the bundle
-        #    on the result for the session shim's replay machinery.
-        new_fem = _merge_bundle_into_fem(self, bundle)
+        # 6. Merge bundle into self → new FEMData.  The merge engine
+        #    runs the Phase 2.2 tag-collision verifier first
+        #    (ADR 0038 §"Tag-collision verifier") and raises a typed
+        #    error on violation.  Cache the bundle on the result for
+        #    the session shim's replay machinery.
+        new_fem = _merge_bundle_into_fem(
+            self, bundle, compose_size_per_module=compose_size_per_module,
+        )
+
+        # 7. Phase 3B.2d / ADR 0038 §"Rank model" — eager populator.
+        #    Assign one partition per composed module (Layer 1) +
+        #    honour partition_rank hints (Layer 2).  Existing
+        #    METIS-driven partitions trigger a UserWarning (Layer 3).
+        from ._compose import _rebuild_partitions_from_modules
+        new_fem = _rebuild_partitions_from_modules(new_fem)
+
         new_fem._last_compose_bundle = bundle  # type: ignore[attr-defined]
         return new_fem
 

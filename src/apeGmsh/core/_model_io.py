@@ -380,6 +380,12 @@ class _IO:
             imported = g.model.io.load_step("legacy_part.step")
             g.model.io.heal_shapes(tolerance=1e-3)
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.  ``heal_shapes``
+        # mutates the OCC kernel even for entities already in the
+        # broker, so it's gated unconditionally rather than relying on
+        # ``_register`` (which only runs for new outputs).
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(self._model._parent, "g.model.io.heal_shapes")
         if tags is not None:
             dt = self._model._as_dimtags(tags, dim)
         else:
@@ -534,6 +540,9 @@ class _IO:
         dict[int, list[Tag]]
             ``{dim: [tag, ...]}`` of all entities after merge.
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(self._model._parent, "g.model.io.load_msh")
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"MSH file not found: {file_path}")
@@ -574,6 +583,9 @@ class _IO:
         dict[int, list[Tag]]
             ``{dim: [tag, ...]}`` of all entities after merge.
         """
+        # Phase 3B.2d / ADR 0038 — chain-phase freeze.
+        from ._compose_errors import chain_phase_guard
+        chain_phase_guard(self._model._parent, "g.model.io.load_geo")
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"GEO file not found: {file_path}")

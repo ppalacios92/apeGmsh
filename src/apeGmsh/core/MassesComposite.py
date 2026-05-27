@@ -585,7 +585,18 @@ class MassesComposite:
                 f"reduction={defn.reduction!r}.  Supported: {list(cfg.keys())}"
             )
         self.mass_defs.append(defn)
-        # Phase 3B.2b-prep / ADR 0038 — invalidate the FEMData cache.
+        # Phase 3B.2d / ADR 0038 — chain-phase routing.  When the
+        # session is post-extraction, try resolving the def directly
+        # against the FEMData broker via the chain-phase router; on
+        # success update ``_fem`` in place.  When the router doesn't
+        # cover the def shape (e.g. distributed line/face/body masses
+        # that need element connectivity), fall back to the bump-
+        # counter pattern — the def is still stored on
+        # ``self.mass_defs`` for future re-extraction paths.
+        from apeGmsh._kernel.resolvers._chain_phase_router import (
+            try_chain_phase_route,
+        )
+        try_chain_phase_route(self._parent, defn)
         bump = getattr(self._parent, "_bump_fem_counter", None)
         if bump is not None:
             bump()
