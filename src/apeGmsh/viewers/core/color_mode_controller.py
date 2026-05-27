@@ -80,6 +80,66 @@ _DEFAULT_QUALITY_METRIC = "minSICN"
 _QUALITY_CMAP = "viridis"
 
 
+def _split_joined_module_label(label: str) -> tuple[str, ...]:
+    """Inverse of the compose-side ``_join_module_label`` rule —
+    inlined locally so the viewer layer doesn't reach into
+    ``apeGmsh.mesh`` (forbidden by the layering invariant test
+    ``test_viewers_pure_h5_consumer.py``).
+
+    Joined-label format: components separated by `.` at odd depths
+    and `/` at even depths, with the LEFTMOST separator at depth N
+    (the outermost join) and the RIGHTMOST at depth 2. A depth-1
+    label has no separator.
+
+    Returns the component tuple in outer-to-inner order. Raises
+    ``ValueError`` if a separator at any position violates the
+    alternation rule — fail-loud, since a malformed label in the
+    broker indicates upstream corruption (``ComposeLabelError``
+    should have prevented it at write time).
+
+    Canonical implementation lives at
+    ``apeGmsh.mesh._compose._split_joined_label``. Keep this copy in
+    lock-step; the round-trip property is tested on both sides.
+    """
+    if not label:
+        return ()
+    # Find separator positions
+    seps = [i for i, ch in enumerate(label) if ch in ("/", ".")]
+    if not seps:
+        return (label,)
+    depth = len(seps) + 1
+    # Validate alternation: leftmost sep is depth N, next is N-1,
+    # ..., rightmost is depth 2. The depth-k separator must be `.`
+    # for odd k and `/` for even k.
+    for i, pos in enumerate(seps):
+        k = depth - i  # depth of this separator (decreasing left to right)
+        expected = "." if (k % 2 == 1) else "/"
+        if label[pos] != expected:
+            raise ValueError(
+                f"malformed joined module label {label!r}: "
+                f"separator at position {pos} is {label[pos]!r}, "
+                f"alternation rule requires {expected!r} at depth {k}"
+            )
+    # Split at separator positions; reject any empty component
+    parts = []
+    start = 0
+    for pos in seps:
+        comp = label[start:pos]
+        if not comp:
+            raise ValueError(
+                f"malformed joined module label {label!r}: empty component"
+            )
+        parts.append(comp)
+        start = pos + 1
+    tail = label[start:]
+    if not tail:
+        raise ValueError(
+            f"malformed joined module label {label!r}: empty component"
+        )
+    parts.append(tail)
+    return tuple(parts)
+
+
 class ColorModeController:
     """Switch the mesh viewer between named color modes."""
 
@@ -142,6 +202,10 @@ class ColorModeController:
             self._color_mgr.set_idle_fn(self._partition_idle)
         elif mode == "Module":
             self._color_mgr.set_idle_fn(self._module_idle)
+        elif mode == "Module: Root":
+            self._color_mgr.set_idle_fn(self._module_idle_by_root)
+        elif mode == "Module: Leaf":
+            self._color_mgr.set_idle_fn(self._module_idle_by_leaf)
         elif mode == "Quality":
             self._enter_quality_mode()
             self._mode = mode
@@ -261,6 +325,74 @@ class ColorModeController:
         # get different colors in different sessions. crc32 is stable.
         # `_phys_group_idle` above still uses hash() — pre-existing
         # behavior, separate followup.
+        idx = zlib.crc32(dominant.encode("utf-8")) % len(_GROUP_PALETTE_RGB)
+        return _GROUP_PALETTE_RGB[idx]
+
+    def _module_idle_by_root(self, dt: "DimTag") -> np.ndarray:
+        """Color by **root** module of a nested compose label.
+
+        Phase 3F.2d. Projects each owning element's joined label
+        (e.g. ``"bayP/frameA"``) onto its root component (``"bayP"``)
+        before the dominant-label / palette lookup. All modules sharing
+        the same depth-1 ancestor color identically — useful for "show
+        me the top-level subsystems" inspection on deeply-nested
+        composes.
+
+        Single-level (depth-1) labels project to themselves, so this
+        mode behaves identically to ``"Module"`` on flat composes.
+        Uncomposed sources degrade to ``_FALLBACK_RGB`` (same as
+        :meth:`_module_idle`).
+        """
+        return self._module_idle_projected(
+            dt, lambda label: _split_joined_module_label(label)[0]
+        )
+
+    def _module_idle_by_leaf(self, dt: "DimTag") -> np.ndarray:
+        """Color by **leaf** module of a nested compose label.
+
+        Phase 3F.2d. Projects each owning element's joined label
+        (e.g. ``"bayP/frameA"``) onto its leaf component (``"frameA"``)
+        before the dominant-label / palette lookup. All modules
+        sharing the same leaf name across sub-trees color identically
+        — useful for "where do all the ``frameA`` instances live?"
+        cross-cuts.
+
+        Single-level (depth-1) labels project to themselves. Uncomposed
+        sources degrade to ``_FALLBACK_RGB``.
+        """
+        return self._module_idle_projected(
+            dt, lambda label: _split_joined_module_label(label)[-1]
+        )
+
+    def _module_idle_projected(self, dt: "DimTag", projector) -> np.ndarray:
+        """Shared body for ``_module_idle_by_root`` / ``_by_leaf``.
+
+        Mirrors :meth:`_module_idle`'s degraded-fallback contract:
+        same short-circuits on missing ViewerData / ``has_modules`` /
+        no owning elements / all-host-owned. The only difference is
+        that each label is run through ``projector(label) -> str``
+        before being collected into the Counter for dominant-label
+        resolution.
+
+        ``projector`` is called only on non-``None`` labels (host-
+        owned rows are filtered before projection); a malformed label
+        (one that doesn't match the alternation rule) propagates
+        ``ComposeError`` upward — fail-loud, not silent.
+        """
+        view = self._view
+        if view is None or not view.elements.has_modules:
+            return _FALLBACK_RGB
+        eids = self._scene.brep_to_elems.get(dt)
+        if not eids:
+            return _FALLBACK_RGB
+        labels: list[str] = []
+        for eid in eids:
+            label = view.elements.module_for(int(eid))
+            if label is not None:
+                labels.append(projector(label))
+        if not labels:
+            return _FALLBACK_RGB
+        dominant = Counter(labels).most_common(1)[0][0]
         idx = zlib.crc32(dominant.encode("utf-8")) % len(_GROUP_PALETTE_RGB)
         return _GROUP_PALETTE_RGB[idx]
 
