@@ -285,19 +285,20 @@ class TestValidatePreMesh:
         with pytest.raises(GeometryValidationError):
             g.model.geometry.validate_pre_mesh()
 
-    def test_mesh_generate_invokes_geometry_validate_pre_mesh(self, g):
-        """``Mesh.generate`` must run the geometry validator alongside
-        the loads / constraints / masses ones, otherwise the new
-        public API is decorative.  Pin the wiring with an orphan that
-        is invisible to the other validators.
-        """
-        from apeGmsh.core._geometry_errors import GeometryValidationError
+    def test_mesh_generate_does_not_auto_invoke_geometry_validator(self, g):
+        """``Mesh.generate`` does NOT auto-invoke
+        ``g.model.geometry.validate_pre_mesh()``.  The geometry
+        validator is opt-in because raw ``gmsh.model.geo.*`` /
+        ``gmsh.model.occ.*`` workflows and raw user PGs bypass the
+        ``_metadata`` and label channels the validator uses to
+        decide "user-intentional".  Auto-wiring would false-positive
+        on every such workflow.
 
-        # Real solid so meshing has something to chew on.
+        Pin the contract: build a model whose orphans would trigger
+        ``validate_pre_mesh`` if called, and confirm
+        ``Mesh.generate`` succeeds without raising.
+        """
         g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label='box')
-        # Force-orphan a rectangle (strip metadata + label) — neither
-        # loads/constraints/masses know about geometry, so only the
-        # geometry validator can catch this.
         rect = g.model.geometry.add_rectangle(5, 5, 5, 1, 1)
         g.model._metadata.pop((2, rect), None)
         for name in list(g.labels.get_all(dim=2)):
@@ -307,5 +308,9 @@ class TestValidatePreMesh:
             except KeyError:
                 pass
 
-        with pytest.raises(GeometryValidationError):
-            g.mesh.generation.generate(3)
+        # find_orphans would flag the rect; mesh.generate must NOT
+        # raise GeometryValidationError on its own.
+        orphans = g.model.geometry.find_orphans()
+        assert orphans[2], "test precondition: orphan rect should be flagged"
+        # Should not raise.
+        g.mesh.generation.generate(3)

@@ -18,7 +18,7 @@
 
 - **`find_orphans() -> dict[int, list[int]]`** — inspect the model for orphan geometry without modifying it. Returns the dimtags the post-op sweep would reap.
 - **`remove_orphans(*, dry_run=False) -> dict[int, list[int]]`** — manual sweep entry point. Same algorithm slice / cut_by_* / fragment run internally.
-- **`validate_pre_mesh()`** — raise `GeometryValidationError` if any orphans exist. Mirrors `MassesComposite.validate_pre_mesh` / `LoadsComposite.validate_pre_mesh` / `ConstraintsComposite.validate_pre_mesh`; called by `Mesh.generate` so orphan geometry fails fast instead of silently corrupting downstream mesh tags.
+- **`validate_pre_mesh()`** — raise `GeometryValidationError` if any orphans exist. Mirrors `MassesComposite.validate_pre_mesh` / `LoadsComposite.validate_pre_mesh` / `ConstraintsComposite.validate_pre_mesh`. **Opt-in**: users call it explicitly. `Mesh.generate` does NOT auto-invoke it because raw `gmsh.model.geo.*` / `gmsh.model.occ.*` workflows bypass the `_metadata` channel and raw user PGs bypass the label channel — both would trigger false positives. Auto-wiring stays on the follow-up backlog until those channels are unified.
 
 ### ADDED — coincident-face advisory + one-sided-cut warning
 
