@@ -529,12 +529,30 @@ class MeshViewer:
         # Mirrors the explicit post-add re-dock model.viewer performs
         # via splitDockWidget().
         from qtpy import QtCore as _QtC_dock
-        win.window.restoreDockWidget(outline_dock)
+        from .ui._layout_metrics import LAYOUT
+        # Enforce a sensible minimum width so the dock can never be
+        # clamped down to its title-bar (~30 px) by a stale persisted
+        # state. Even when ``restoreDockWidget`` re-applies a previously
+        # saved tiny width, Qt clamps up to ``minimumWidth`` on layout.
+        # Users can still freely resize the dock above this floor.
+        outline_dock.setMinimumWidth(LAYOUT.outline_min_width)
+        restored = win.window.restoreDockWidget(outline_dock)
         if outline_dock.isFloating():
             outline_dock.setFloating(False)
             win.window.addDockWidget(
                 _QtC_dock.Qt.LeftDockWidgetArea, outline_dock,
             )
+        if not restored:
+            # No persisted placement — give the dock a sensible initial
+            # width (mirrors ``ResultsWindow``'s built-in left dock).
+            try:
+                win.window.resizeDocks(
+                    [outline_dock],
+                    [LAYOUT.outline_initial_width],
+                    _QtC_dock.Qt.Horizontal,
+                )
+            except Exception:
+                pass
 
         # ── Clipping tab ────────────────────────────────────────────
         from .core.clipping_controller import ClippingController
