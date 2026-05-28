@@ -173,6 +173,17 @@ class PyVistaQtBackend:
         self._plotter = plotter
         self._scalar_bars: dict[str, Any] = {}
 
+    @property
+    def plotter(self) -> Any:
+        """The wrapped pyvista plotter.
+
+        Escape hatch for the R-B transition: the diagram base derives
+        ``self._plotter`` from this so un-migrated diagrams keep driving
+        the raw plotter directly. Removed at R-B.final once every
+        diagram emits through the backend.
+        """
+        return self._plotter
+
     # -- RenderBackend ------------------------------------------------
 
     def add_layer(self, layer: SceneLayer) -> _PvHandle:
@@ -221,6 +232,13 @@ class PyVistaQtBackend:
     def set_visibility(self, handle: _PvHandle, mask: VisibilityMask) -> None:
         if handle.dataset is not None and handle.kind == "mesh":
             apply_visibility_mask(handle.dataset, mask)
+
+    def set_layer_visible(self, handle: _PvHandle, visible: bool) -> None:
+        if handle.actor is not None:
+            try:
+                handle.actor.SetVisibility(bool(visible))
+            except Exception:
+                pass
 
     def add_scalar_bar(self, spec: ScalarBarSpec) -> None:
         bar = self._plotter.add_scalar_bar(title=spec.title)

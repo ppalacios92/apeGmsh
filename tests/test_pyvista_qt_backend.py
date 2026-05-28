@@ -115,3 +115,45 @@ def test_token_map_covers_canonical_tokens() -> None:
         "vertex", "line", "triangle", "quad",
         "tetra", "hexahedron", "wedge", "pyramid",
     }
+
+
+# --- Render-path integration (needs an offscreen GL context) -------------
+
+
+@pytest.fixture
+def offscreen():
+    try:
+        p = pv.Plotter(off_screen=True)
+    except Exception:  # pragma: no cover - depends on GL availability
+        pytest.skip("no offscreen render context available")
+    yield p
+    p.close()
+
+
+def test_backend_add_and_remove_mesh_layer(offscreen) -> None:
+    from apeGmsh.viewers.scene_ir import VisibilityMask
+
+    backend = PyVistaQtBackend(offscreen)
+    handle = backend.add_layer(_two_block_layer())
+    assert handle.actor is not None
+    backend.set_visibility(handle, VisibilityMask(hidden_cells=frozenset({0})))
+    backend.remove_layer(handle)
+    assert handle.actor is None
+
+
+def test_backend_add_glyph_layer(offscreen) -> None:
+    from apeGmsh.viewers.scene_ir import GlyphLayer
+
+    backend = PyVistaQtBackend(offscreen)
+    layer = GlyphLayer(
+        layer_id="g",
+        positions=PointSet(np.array([[0, 0, 0], [1, 0, 0]], dtype=float)),
+        kind="arrow",
+        orientations=np.array([[1, 0, 0], [0, 1, 0]], dtype=float),
+        scales=np.array([1.0, 2.0]),
+    )
+    handle = backend.add_layer(layer)
+    assert handle.actor is not None
+    backend.set_layer_visible(handle, False)
+    backend.remove_layer(handle)
+    assert handle.actor is None
