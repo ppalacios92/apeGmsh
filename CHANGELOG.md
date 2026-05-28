@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased — shell-on-solid conformity (S1a + S1b + S2 + S5) · Phase SSI-2.D stage-bound BCs and recorders · embedded-element pipeline hardening (#329 / #331) · ASDEmbeddedNodeElement option exposure (ADR 0035) · stage-bound constraints + `s.initial_stress` PUSH (Phase SSI-2.D extension) · **Phase SSI-2.E between-stage Domain mutators** · topology safety nets (P1/P3) + arc-line wire docs · embedded-host decomposition (ADR 0036) · **higher-order line broker split (ADR 0037)** · RecorderDeclaration element fan-out fix · **orphan-geometry sweep unification + `g.model.geometry` validation API** · **split-sweep auto-validation (closed-world / open-world)**
+## Unreleased — shell-on-solid conformity (S1a + S1b + S2 + S5) · Phase SSI-2.D stage-bound BCs and recorders · embedded-element pipeline hardening (#329 / #331) · ASDEmbeddedNodeElement option exposure (ADR 0035) · stage-bound constraints + `s.initial_stress` PUSH (Phase SSI-2.D extension) · **Phase SSI-2.E between-stage Domain mutators** · topology safety nets (P1/P3) + arc-line wire docs · embedded-host decomposition (ADR 0036) · **higher-order line broker split (ADR 0037)** · RecorderDeclaration element fan-out fix · **orphan-geometry sweep unification + `g.model.geometry` validation API** · **split-sweep auto-validation (closed-world / open-world)** · **raw-PG channel for `_user_intentional`**
+
+### CHANGED — raw user physical groups now protect entities from the orphan sweep
+
+`apeGmsh.core._geometry_topology._user_intentional` gains a third channel: an entity that participates in ANY physical group (including raw user PGs created via `gmsh.model.addPhysicalGroup` directly) is treated as user-intentional and survives `sweep_dangling` / `find_orphans` / `validate_pre_mesh(strict=True)`.
+
+Closes PR #378 reviewer follow-up #2. The new channel lowers the false-positive rate of the open-world (`strict=True`) check substantially: raw-gmsh frame workflows that tag their lines with PG names like `"Columns"` / `"Beams"` are now protected, even though they bypass apeGmsh's `_metadata` and `g.labels` channels entirely.
+
+Order of channels in `_user_intentional`:
+
+1. `model._metadata` (closed-world, populated by apeGmsh `add_*`)
+2. apeGmsh label PGs via `Labels.labels_for_entity` (tier-1 `_label:*`-prefixed PGs only)
+3. **Raw user PGs via `gmsh.model.getPhysicalGroupsForEntity`** (new — catches any PG, no prefix filter)
+
+`Mesh.generate`'s default `strict=False` auto-validation is unaffected (it only inspects `_metadata`).  Users explicitly calling `validate_pre_mesh(strict=True)` or `remove_orphans()` get the broader protection.
 
 ### ADDED — `g.model.geometry.find_stale_metadata()` + `validate_pre_mesh(strict=...)` split
 

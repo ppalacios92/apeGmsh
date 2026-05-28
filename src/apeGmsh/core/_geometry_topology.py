@@ -94,13 +94,24 @@ def _user_intentional(
     """True iff (d, t) is something the user explicitly created and
     wants preserved even though it does not bound a volume.
 
-    Two channels for "user-intentional":
+    Three channels for "user-intentional", checked in order:
 
-    * ``model._metadata`` — every ``add_*`` primitive registers here,
-      so a standalone rectangle or point or cutting plane survives.
-    * Label PG membership — if the user (or a subsystem like
-      :meth:`Labels.add`) attached a label to ``(d, t)``, that is an
-      explicit declaration of intent.
+    1. ``model._metadata`` — every apeGmsh ``add_*`` primitive
+       registers here, so a standalone rectangle / point / cutting
+       plane survives.  Closed-world channel: only entries that
+       apeGmsh itself wrote.
+    2. apeGmsh label PG membership via :meth:`Labels.labels_for_entity`
+       — catches entities the user attached to via ``g.labels.add``
+       or via the ``label=`` kwarg on ``add_*``.  Tier-1
+       (``_label:*``-prefixed) PGs only.
+    3. **Raw user physical group membership** via
+       :func:`gmsh.model.getPhysicalGroupsForEntity` — catches
+       workflows that bypass the apeGmsh facade entirely
+       (``gmsh.model.geo.addPoint`` / ``gmsh.model.geo.addLine`` +
+       ``gmsh.model.addPhysicalGroup`` directly).  Without this
+       channel a raw-gmsh-built frame would have every line and
+       corner point classified as orphan even though the user
+       plainly tagged them with a name like ``"Columns"``.
 
     Callers that want to override the metadata channel for an
     operation-specific tool (e.g. a cutting plane being consumed)
@@ -109,13 +120,18 @@ def _user_intentional(
     if (d, t) in model._metadata:
         return True
     labels_comp = getattr(model._parent, "labels", None)
-    if labels_comp is None:
-        return False
+    if labels_comp is not None:
+        try:
+            names = labels_comp.labels_for_entity(d, t)
+        except Exception:
+            names = []
+        if names:
+            return True
     try:
-        names = labels_comp.labels_for_entity(d, t)
+        pgs = gmsh.model.getPhysicalGroupsForEntity(d, t)
     except Exception:
         return False
-    return bool(names)
+    return len(pgs) > 0
 
 
 def sweep_dangling(

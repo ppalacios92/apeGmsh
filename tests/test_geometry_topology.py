@@ -143,6 +143,65 @@ class TestSweepProtectsUserGeometry:
             f"sweep deleted metadata-registered point {pt} (no label)"
         )
 
+    def test_sweep_protects_raw_gmsh_entity_in_user_pg(self, g):
+        """A line built via raw ``gmsh.model.occ.addLine`` and attached
+        to a raw user physical group (no apeGmsh ``_metadata``, no
+        ``g.labels`` entry) must still be classified as user-
+        intentional and survive the sweep.
+
+        Regression: PR #378 + #379 lacked this third channel; raw-
+        gmsh frame workflows (the canonical FEM-Python pattern) had
+        every line classified as orphan because they lived in
+        neither ``_metadata`` nor ``g.labels``.  See
+        :func:`_user_intentional` docstring channel #3.
+
+        Uses raw OCC primitives instead of GEO to avoid the
+        documented GEO/OCC kernel tag-collision issue (different
+        kernels can mint the same tag for unrelated entities,
+        confusing the sweep).
+        """
+        p_a = gmsh.model.occ.addPoint(5.0, 5.0, 5.0, 0.5)
+        p_b = gmsh.model.occ.addPoint(6.0, 5.0, 5.0, 0.5)
+        raw_line = gmsh.model.occ.addLine(p_a, p_b)
+        gmsh.model.occ.synchronize()
+        # Raw user PG — not an apeGmsh label, just a tagged group.
+        gmsh.model.addPhysicalGroup(1, [raw_line], name="StructuralLine")
+
+        # Precondition: the raw line has no _metadata entry.
+        assert (1, raw_line) not in g.model._metadata
+
+        # The open-world check must NOT flag the line — channel #3
+        # (raw PG membership) protects it.  Endpoints inherit
+        # protection via the boundary closure walk.
+        orphans = g.model.geometry.find_orphans()
+        assert raw_line not in orphans[1], (
+            f"raw-gmsh line {raw_line} in user PG 'StructuralLine' "
+            f"was misclassified as orphan; got dim=1 orphans {orphans[1]}"
+        )
+        assert p_a not in orphans[0] and p_b not in orphans[0], (
+            f"endpoints of PG-protected line {raw_line} were flagged "
+            f"as orphan; got dim=0 orphans {orphans[0]}"
+        )
+
+    def test_sweep_flags_raw_gmsh_entity_without_pg(self, g):
+        """Companion to the test above: a raw line with NEITHER an
+        apeGmsh metadata entry NOR any physical group IS flagged.
+        Pins the negative case so the third channel is provably
+        opt-in (you have to tag the entity for it to survive).
+        """
+        p_a = gmsh.model.occ.addPoint(7.0, 7.0, 7.0, 0.5)
+        p_b = gmsh.model.occ.addPoint(8.0, 7.0, 7.0, 0.5)
+        loose_line = gmsh.model.occ.addLine(p_a, p_b)
+        gmsh.model.occ.synchronize()
+        # NO addPhysicalGroup — the line is truly anonymous.
+
+        orphans = g.model.geometry.find_orphans()
+        assert loose_line in orphans[1], (
+            f"raw-gmsh line {loose_line} with no metadata / label / "
+            f"PG was NOT flagged; channel #3 must be opt-in. Got "
+            f"dim=1 orphans {orphans[1]}"
+        )
+
 
 # =====================================================================
 # Stale-metadata reaping
