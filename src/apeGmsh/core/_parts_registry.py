@@ -721,85 +721,39 @@ class PartsRegistry(_PartsFragmentationMixin):
         # ── Optional: line PGs per (region, axis) ───────────────────
         line_pgs_out: dict[str, str] = {}
         if tag_line_pgs:
-            line_groups: dict[str, list[int]] = {
-                k: [] for k in line_pg_defaults
-            }
-            ex = np.array([cos_t, sin_t, 0.0])
-            ey = np.array([-sin_t, cos_t, 0.0])
-            ez = np.array([0.0, 0.0, 1.0])
+            from apeGmsh.parts.drm_box import classify_drm_box_lines
 
-            for _d, ctag in gmsh.model.getEntities(1):
-                # Classify each curve by midpoint-of-endpoints
-                # transformed to local frame, and by endpoint
-                # direction projected onto each local axis.
-                bnd = gmsh.model.getBoundary(
-                    [(1, int(ctag))], oriented=False, recursive=False,
-                )
-                pts = [b for b in bnd if b[0] == 0]
-                if len(pts) < 2:
-                    continue
-                p0 = np.array(
-                    gmsh.model.getValue(0, int(pts[0][1]), []),
-                    dtype=float,
-                )
-                p1 = np.array(
-                    gmsh.model.getValue(0, int(pts[-1][1]), []),
-                    dtype=float,
-                )
-                d = p1 - p0
-                dn = float(np.linalg.norm(d))
-                if dn < 1e-12:
-                    continue
-                dhat = d / dn
+            all_curves = [int(t) for _d, t in gmsh.model.getEntities(1)]
+            classified = classify_drm_box_lines(
+                axis_x=drm.axis_x,
+                axis_y=drm.axis_y,
+                axis_z=drm.axis_z,
+                center=(cx, cy, cz),
+                rotation_z=theta,
+                line_pg_names=line_pg_defaults,
+                curve_tags=all_curves,
+            )
+            # Invert line_pg_defaults so we can pair back to region keys
+            # for the result's ``line_pgs`` dict.
+            name_to_key = {v: k for k, v in line_pg_defaults.items()}
+            for pg_name, edge_tags in classified.items():
+                physical.add(1, edge_tags, name=pg_name)
+                line_pgs_out[name_to_key[pg_name]] = pg_name
 
-                # Determine which local axis the edge is parallel to
-                # (within ~5° tolerance).  Edges that don't cleanly
-                # align with any local axis are skipped silently —
-                # they shouldn't exist on an axis-aligned box, but
-                # OCC sometimes introduces tiny seam edges.
-                dots = (
-                    float(abs(np.dot(dhat, ex))),
-                    float(abs(np.dot(dhat, ey))),
-                    float(abs(np.dot(dhat, ez))),
-                )
-                axis_idx = int(np.argmax(dots))
-                if dots[axis_idx] < math.cos(math.radians(5.0)):
-                    continue
-
-                mid_world = 0.5 * (p0 + p1)
-                lx, ly, lz = to_local(tuple(mid_world))
-
-                if axis_idx == 0:  # local-X
-                    # Position determined by the OTHER lateral
-                    # coordinate (Y region) and the local-Z region.
-                    # An x-aligned edge in the inner column sits at
-                    # ly within axis_y.inner range, regardless of
-                    # which x segment it spans.  Use Y region.
-                    region = drm.axis_y.region_of(
-                        max(min(ly, drm.axis_y.hi), drm.axis_y.lo)
-                    )
-                    line_groups[f"{region}_x"].append(int(ctag))
-                elif axis_idx == 1:  # local-Y
-                    region = drm.axis_x.region_of(
-                        max(min(lx, drm.axis_x.hi), drm.axis_x.lo)
-                    )
-                    line_groups[f"{region}_y"].append(int(ctag))
-                else:  # local-Z
-                    region = drm.axis_z.region_of(
-                        max(min(lz, drm.axis_z.hi), drm.axis_z.lo)
-                    )
-                    line_groups[f"{region}_z"].append(int(ctag))
-
-            for key, tags in line_groups.items():
-                if not tags:
-                    continue
-                pg_name = line_pg_defaults[key]
-                # Deduplicate — gmsh.model.getEntities(1) shouldn't
-                # repeat tags, but the post-fragment topology can
-                # share interior edges between adjacent sub-volumes,
-                # which is fine since add() merges-on-name.
-                physical.add(1, sorted(set(tags)), name=pg_name)
-                line_pgs_out[key] = pg_name
+        # ── Stash rebuild-required state on the Instance ────────────
+        # The line-PG classifier is a pure function of (axes, center,
+        # rotation, curve_tags), so a future boolean that mutates the
+        # box can drop the stale PGs and replay the classifier against
+        # the post-cut curves.  We persist: the axis construction
+        # params (so Axis1D can be rebuilt), the line-PG name map
+        # (so we know which PGs are owned by this Part), the center,
+        # and rotation_z.  See ``rebuild_drm_box_line_pgs`` in
+        # ``apeGmsh.parts.drm_box``.
+        inst.properties.setdefault("drm_box", {}).update({
+            "line_pgs": dict(line_pgs_out),
+            "center": (cx, cy, cz),
+            "rotation_z": float(theta),
+        })
 
         return DRMBoxResult(
             inner_pg=pg_defaults["inner_pg"],

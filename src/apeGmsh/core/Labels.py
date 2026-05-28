@@ -103,10 +103,281 @@ from apeGmsh._kernel._label_prefix import (  # noqa: F401
 #         pg.set_result(obj + tool, result_map)
 # =====================================================================
 
+
+# ─────────────────────────────────────────────────────────────────────
+# Geometric signature matching
+# ─────────────────────────────────────────────────────────────────────
+#
+# OCC's ``outDimTagsMap`` maps inputs to outputs at the input dim
+# (volumes -> volumes for a 3D cut).  Sub-entity lineage — which
+# pre-op face/edge/vertex became which post-op one — is **not**
+# exposed by the gmsh Python API, so the snapshot/remap pattern alone
+# cannot track sub-entities through a boolean.  The two failure modes
+# from this gap were "Cannot remap (sub-topology renumbering)" and
+# "is now empty" warnings for line/surface PGs after a cut.
+#
+# ─── Escape hatch if this approach hits its limits ──────────────────
+# Gmsh's ``OCC_Internals::booleanOperator`` (gmsh source,
+# ``src/geo/GModelIO_OCC.cpp``) already calls OCC's
+# ``BRepAlgoAPI::Modified()/Generated()/IsDeleted()`` on every input
+# shape — it just iterates top-level inputs only (no
+# ``TopExp_Explorer`` descent into sub-shapes), and the builder is
+# stack-local so we can't query it post-hoc.  Two paths to recover
+# the real OCC sub-shape lineage if/when the geometric heuristic
+# becomes the bottleneck:
+#
+# 1. **Upstream patch (preferred).**  ~120 LOC adding a TopExp
+#    descent in each boolean ``case`` and a sidecar
+#    ``OCC_Internals::_lastBooleanLineage`` exposed via
+#    ``gmsh.model.occ.getLastBooleanLineage()``.  The data is
+#    already computed; only the binding is missing.  File the issue
+#    on gitlab.onelab.info/gmsh/gmsh with the patch sketch.
+#
+# 2. **pythonocc-core sidecar (fallback if upstream rejects).**
+#    Run the boolean through ``pythonocc-core`` in parallel,
+#    harvest ``Modified()/Generated()/IsDeleted()`` per sub-shape,
+#    map back to gmsh tags via the same geometric signatures.
+#    Closes the cut-interface gap (``Generated()`` returns those
+#    explicitly).  Caveat: gmsh internally runs ``SimplifyResult()``
+#    after every boolean (collinear-edge consolidation, coplanar-
+#    face merge) which pythonocc won't see — the two BReps can
+#    diverge on cleanup ops.  Mitigation: replace gmsh's boolean
+#    call with pythonocc's entirely and re-import the result, OR
+#    accept the divergence on the small fraction of ops where
+#    simplification fires.
+#
+# Effort estimates: option 1 is ~8-16h if upstream accepts;
+# option 2 is ~2-3 days including the dependency story.  Don't
+# implement either pre-emptively — the geometric heuristic below
+# handles the common case (splits, merges, simple cuts) cleanly.
+#
+# These helpers add a geometric fallback: capture a tag-agnostic
+# signature (bbox + centroid + dim-specific orientation) for every
+# PG entity pre-op, and after the boolean match each pre-op signature
+# against current entities at the same dim by bidirectional
+# centroid-in-bbox containment plus a direction/normal-parallel
+# check.  Handles splits, simple cuts, fragments, and merges
+# generically.  See the module docstring for the failure modes that
+# remain (new entities introduced by the cut interface, fully-
+# consumed entities, coincident-then-ambiguous geometry).
+
+# Angular tolerance for direction/normal parallelism — cos of ~5°.
+_PARALLEL_COS_TOL = 0.9962
+
+
+def _model_tolerance() -> float:
+    """Geometric tolerance scaled to the live model's bounding box.
+
+    ``1e-7 * model_diag`` matches OCC's default precision setting
+    and is comfortably above the floating-point noise OCC adds when
+    rebuilding a BRep across a boolean.  Falls back to ``1e-6`` for
+    an empty model or a getBoundingBox failure (rare; some Gmsh
+    builds raise on a fresh model before any entity exists).
+    """
+    try:
+        bb = gmsh.model.getBoundingBox(-1, -1)
+        diag = max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+        if diag > 0:
+            return max(1e-9, diag * 1e-7)
+    except Exception:
+        pass
+    return 1e-6
+
+
+def _entity_signature(dim: int, tag: int) -> dict | None:
+    """Compute a tag-agnostic geometric signature for an entity.
+
+    Returns ``None`` when the entity is not in the model (caller
+    must call this on a known-live tag, typically pre-op).
+
+    Signature shape::
+
+        {
+            'bbox':      (xmin, ymin, zmin, xmax, ymax, zmax),
+            'centroid':  (cx, cy, cz),
+            'direction': (dx, dy, dz) | None,   # dim=1 only
+            'normal':    (nx, ny, nz) | None,   # dim=2 only
+            'kind':      str,                   # gmsh.model.getType
+            'mass':      float | None,          # length/area/volume
+        }
+
+    ``kind`` is the OCC type name (``'Line'``, ``'Circle'``,
+    ``'Plane'``, ``'Cylinder'``, ``'BSpline curve'``, etc.).
+    Cheap categorical filter that rejects matches across surface
+    types (a planar face cannot match a cylindrical one no matter
+    how their bboxes overlap).
+
+    ``mass`` is length for 1D, area for 2D, volume for 3D.  Used
+    as a *post-match sanity check* (Σ child masses should be
+    close to the parent mass under a clean split or no-op) rather
+    than a per-pair rejection — preserves matches when masses
+    drift slightly under OCC simplification, and surfaces a
+    warning when they drift badly.
+    """
+    try:
+        bb = gmsh.model.getBoundingBox(dim, tag)
+    except Exception:
+        return None
+    bbox = tuple(float(v) for v in bb)
+
+    sig: dict = {
+        'bbox': bbox,
+        'direction': None,
+        'normal': None,
+        'kind': '',
+        'mass': None,
+    }
+
+    try:
+        sig['kind'] = str(gmsh.model.getType(dim, tag))
+    except Exception:
+        sig['kind'] = ''
+
+    if dim >= 1:
+        try:
+            m = gmsh.model.occ.getMass(dim, tag)
+            if m is not None:
+                sig['mass'] = float(m)
+        except Exception:
+            sig['mass'] = None
+
+    if dim == 0:
+        try:
+            pos = gmsh.model.getValue(0, tag, [])
+        except Exception:
+            return None
+        sig['centroid'] = (float(pos[0]), float(pos[1]), float(pos[2]))
+        return sig
+
+    # For dim>=1, use OCC's center of mass; fall back to bbox center
+    # if the entity is degenerate enough that getCenterOfMass throws.
+    try:
+        com = gmsh.model.occ.getCenterOfMass(dim, tag)
+        sig['centroid'] = (float(com[0]), float(com[1]), float(com[2]))
+    except Exception:
+        sig['centroid'] = (
+            0.5 * (bbox[0] + bbox[3]),
+            0.5 * (bbox[1] + bbox[4]),
+            0.5 * (bbox[2] + bbox[5]),
+        )
+
+    if dim == 1:
+        # Endpoint-to-endpoint direction.  Curved edges may have a
+        # direction at their endpoints that doesn't match the local
+        # tangent at the midpoint — for the matching rule, what
+        # matters is that pre-op and post-op halves of the SAME curve
+        # share the same endpoint chord direction, which they do
+        # under any well-behaved OCC split.
+        try:
+            bnd = gmsh.model.getBoundary(
+                [(1, tag)], oriented=False, recursive=False,
+            )
+            pts = [b for b in bnd if int(b[0]) == 0]
+            if len(pts) >= 2:
+                p0 = gmsh.model.getValue(0, int(pts[0][1]), [])
+                p1 = gmsh.model.getValue(0, int(pts[-1][1]), [])
+                d = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+                n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) ** 0.5
+                if n > 1e-12:
+                    sig['direction'] = (d[0] / n, d[1] / n, d[2] / n)
+        except Exception:
+            pass
+    elif dim == 2:
+        # Face normal at the parametric midpoint.  ``getNormal`` wants
+        # a flat list of ``[u0, v0, u1, v1, ...]`` so we pass the
+        # midpoint of the parameter bounds.  Some surface types
+        # (trimmed, periodic) may not honour this; on failure the
+        # signature leaves normal=None and the matching rule falls
+        # back to bbox + centroid alone.
+        try:
+            pb = gmsh.model.getParametrizationBounds(2, tag)
+            u_mid = 0.5 * (pb[0][0] + pb[1][0])
+            v_mid = 0.5 * (pb[0][1] + pb[1][1])
+            nrm = gmsh.model.getNormal(tag, [u_mid, v_mid])
+            n = (
+                nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]
+            ) ** 0.5
+            if n > 1e-12:
+                sig['normal'] = (nrm[0] / n, nrm[1] / n, nrm[2] / n)
+        except Exception:
+            pass
+
+    return sig
+
+
+def _point_in_bbox(
+    p: tuple[float, float, float],
+    bbox: tuple[float, ...],
+    tol: float,
+) -> bool:
+    """``p`` lies inside ``bbox`` expanded by ``tol`` in every dim."""
+    return (
+        bbox[0] - tol <= p[0] <= bbox[3] + tol
+        and bbox[1] - tol <= p[1] <= bbox[4] + tol
+        and bbox[2] - tol <= p[2] <= bbox[5] + tol
+    )
+
+
+def _signatures_compatible(
+    child: dict, parent: dict, dim: int, tol: float,
+) -> bool:
+    """``child`` could plausibly be a descendant or merge-product of ``parent``.
+
+    Bidirectional centroid-in-bbox: ``child.centroid in parent.bbox``
+    catches splits (post-op piece sits inside the pre-op bbox), and
+    ``parent.centroid in child.bbox`` catches merges (pre-op piece
+    sits inside the merged post-op bbox).  Direction (for 1D) and
+    normal (for 2D, when available) eliminate coincident-but-
+    different-orientation false positives.  ``kind`` (the OCC type
+    name from ``gmsh.model.getType``) is a hard categorical filter:
+    a planar face cannot match a cylindrical one across a boolean,
+    regardless of bbox overlap.
+    """
+    if dim == 0:
+        dx = child['centroid'][0] - parent['centroid'][0]
+        dy = child['centroid'][1] - parent['centroid'][1]
+        dz = child['centroid'][2] - parent['centroid'][2]
+        return (dx * dx + dy * dy + dz * dz) ** 0.5 < tol
+
+    # Categorical type filter — applies to all dims >= 1.  Empty
+    # ``kind`` (signature computation failed for one side) skips
+    # the check rather than rejecting, so unknown surface types
+    # fall through to the geometric checks instead of producing
+    # false negatives.
+    ck, pk = child.get('kind', ''), parent.get('kind', '')
+    if ck and pk and ck != pk:
+        return False
+
+    if not (
+        _point_in_bbox(child['centroid'], parent['bbox'], tol)
+        or _point_in_bbox(parent['centroid'], child['bbox'], tol)
+    ):
+        return False
+
+    if dim == 1:
+        cd, pd = child.get('direction'), parent.get('direction')
+        if cd is None or pd is None:
+            return True
+        dot = abs(cd[0] * pd[0] + cd[1] * pd[1] + cd[2] * pd[2])
+        return dot >= _PARALLEL_COS_TOL
+
+    if dim == 2:
+        cn, pn = child.get('normal'), parent.get('normal')
+        if cn is None or pn is None:
+            return True
+        dot = abs(cn[0] * pn[0] + cn[1] * pn[1] + cn[2] * pn[2])
+        return dot >= _PARALLEL_COS_TOL
+
+    # dim == 3
+    return True
+
 class _PGPreserver:
     """Collects boolean result info and remaps PGs on context exit."""
 
-    __slots__ = ('_snap', '_input_dts', '_result_map', '_result', '_absorbed')
+    __slots__ = (
+        '_snap', '_input_dts', '_result_map', '_result', '_absorbed',
+        '_skip_names',
+    )
 
     def __init__(self, snap: list[dict]) -> None:
         self._snap = snap
@@ -114,6 +385,7 @@ class _PGPreserver:
         self._result_map: list[list[DimTag]] | None = None
         self._result: list[DimTag] | None = None
         self._absorbed = False
+        self._skip_names: set[str] = set()
 
     def set_result(
         self,
@@ -127,6 +399,19 @@ class _PGPreserver:
         self._result_map = result_map
         self._result = result
         self._absorbed = absorbed_into_result
+
+    def skip(self, names: set[str] | list[str]) -> None:
+        """Mark PG names to bypass during the post-op remap.
+
+        The caller takes ownership: snapshot entries with these names
+        are silently dropped (no warning, no recreate) on context
+        exit.  Used by Part-side topology-rebuild hooks (e.g. DRM
+        box line PGs) that re-derive these PGs from a stored
+        predicate after the boolean has finished — the snapshot data
+        would be stale and the standard remap can't track sub-entity
+        renumbering for them anyway.
+        """
+        self._skip_names.update(names)
 
 
 @contextmanager
@@ -165,6 +450,7 @@ def pg_preserved() -> Iterator[_PGPreserver]:
             ctx._snap, ctx._input_dts, ctx._result_map,
             result=ctx._result,
             absorbed_into_result=ctx._absorbed,
+            skip_pg_names=ctx._skip_names,
         )
 
 
@@ -173,20 +459,37 @@ def snapshot_physical_groups() -> list[dict]:
 
     Call this **before** any OCC boolean + synchronize sequence.
 
+    Each entry carries per-entity geometric signatures
+    (``entity_signatures``) so the post-op remap can fall back to
+    geometric containment matching when ``outDimTagsMap`` doesn't
+    cover an entity (i.e. for all sub-entities of a boolean — OCC
+    doesn't expose sub-shape lineage to gmsh's Python API).
+
     Returns
     -------
     list[dict]
-        One entry per PG: ``{'dim', 'pg_tag', 'name', 'entity_tags'}``.
+        One entry per PG: ``{'dim', 'pg_tag', 'name', 'entity_tags',
+        'entity_signatures'}``.  ``entity_signatures`` is a
+        ``{tag: signature}`` dict; tags whose signature could not
+        be computed (zero-extent, unknown surface type) are omitted
+        — the geometric fallback simply skips them.
     """
     snapshot: list[dict] = []
     for dim, pg_tag in gmsh.model.getPhysicalGroups():
         name = gmsh.model.getPhysicalName(dim, pg_tag)
         ent_tags = list(gmsh.model.getEntitiesForPhysicalGroup(dim, pg_tag))
+        sigs: dict[int, dict] = {}
+        for t in ent_tags:
+            t_int = int(t)
+            sig = _entity_signature(dim, t_int)
+            if sig is not None:
+                sigs[t_int] = sig
         snapshot.append({
-            'dim':         dim,
-            'pg_tag':      pg_tag,
-            'name':        name,
-            'entity_tags': [int(t) for t in ent_tags],
+            'dim':               dim,
+            'pg_tag':            pg_tag,
+            'name':              name,
+            'entity_tags':       [int(t) for t in ent_tags],
+            'entity_signatures': sigs,
         })
     return snapshot
 
@@ -198,6 +501,7 @@ def remap_physical_groups(
     *,
     result: list[DimTag] | None = None,
     absorbed_into_result: bool = False,
+    skip_pg_names: set[str] | None = None,
 ) -> None:
     """Recreate PGs with remapped entity tags after a boolean operation.
 
@@ -226,6 +530,14 @@ def remap_physical_groups(
         for ``fuse`` and ``intersect``.  When False (the default,
         appropriate for ``cut``), empty mappings mean the entity was
         consumed and a warning is emitted.
+    skip_pg_names : set[str], optional
+        PG names whose snapshot entries should be silently dropped
+        on this pass — the old PG is removed, no recreate, no
+        warnings.  Used by topology-rebuild hooks (e.g. DRM box
+        line PGs) that re-derive these PGs from a stored predicate
+        after the boolean.  The standard remap can't track
+        sub-entity renumbering for them anyway — OCC doesn't expose
+        edge-level parent→child lineage.
 
     Notes
     -----
@@ -239,6 +551,7 @@ def remap_physical_groups(
     """
     if not snapshot:
         return
+    skip_set: set[str] = set(skip_pg_names) if skip_pg_names else set()
 
     # -- Build old-dimtag → [new-dimtags] mapping ----------------------
     dt_map: dict[DimTag, list[DimTag]] = {}
@@ -266,12 +579,116 @@ def remap_physical_groups(
         for _, t in gmsh.model.getEntities(d):
             current_entities.add((d, int(t)))
 
+    # -- Geometric-fallback index: signatures of current entities at
+    # every dim that appears in the snapshot.  Built lazily and only
+    # for the dims we'll actually need to search (avoids signature
+    # computation on a large model when no PG needs it).
+    needed_dims: set[int] = {entry['dim'] for entry in snapshot}
+    geom_tol = _model_tolerance()
+    current_sigs: dict[int, dict[int, dict]] = {}
+
+    def _ensure_dim_indexed(d: int) -> None:
+        if d in current_sigs:
+            return
+        idx: dict[int, dict] = {}
+        for _, t in gmsh.model.getEntities(d):
+            t_int = int(t)
+            sig = _entity_signature(d, t_int)
+            if sig is not None:
+                idx[t_int] = sig
+        current_sigs[d] = idx
+
+    def _geometric_match(dim: int, pre_sig: dict | None) -> list[int]:
+        """Find current entities whose signature is compatible with ``pre_sig``.
+
+        Returns an empty list when ``pre_sig`` is ``None`` (signature
+        could not be computed pre-op — degenerate entity).
+        """
+        if pre_sig is None:
+            return []
+        _ensure_dim_indexed(dim)
+        return [
+            t for t, sig in current_sigs[dim].items()
+            if _signatures_compatible(sig, pre_sig, dim, geom_tol)
+        ]
+
+    # Mass-balance tolerance: 5% slack absorbs OCC's BRep rebuilding
+    # noise on every-day cuts while still flagging the egregious
+    # "matched twice the area we should have" case that means the
+    # match picked up a spurious sibling.
+    _MASS_BALANCE_TOL = 0.05
+
+    def _check_mass_balance(
+        dim: int, pre_sig: dict | None, matches: list[int],
+        pg_name: str, pre_tag: int,
+    ) -> None:
+        """Warn when matched-children total mass disagrees with parent.
+
+        Validation only — never rejects a match.  Geometric matching
+        can pick up a spurious sibling whose bbox happens to overlap
+        the parent; the mass sum then exceeds the parent by a wide
+        margin.  Conversely, a hole left by a cut (some children
+        consumed) shows as a deficit — informational, since the
+        ``was consumed`` warning already covers the wholly-deleted
+        case but mass adds a quantitative signal for partial loss.
+        """
+        if pre_sig is None or not matches:
+            return
+        parent_mass = pre_sig.get('mass')
+        if parent_mass is None or parent_mass <= 0.0:
+            return
+        child_total = 0.0
+        for t in matches:
+            child_sig = current_sigs.get(dim, {}).get(int(t))
+            if child_sig is None:
+                continue
+            cm = child_sig.get('mass')
+            if cm is not None:
+                child_total += float(cm)
+        if child_total <= 0.0:
+            return
+        ratio = child_total / parent_mass
+        # Tolerate splits (ratio < 1 + tol) and merges where the
+        # matched entity is the union of several parents (ratio
+        # well above 1 is then expected from THIS parent's view).
+        # Flag only an over-match by ≥ (1 + 2·tol) on a single
+        # parent — that's the "false sibling" signal.
+        if ratio > 1.0 + 2.0 * _MASS_BALANCE_TOL:
+            warnings.warn(
+                f"Physical group '{pg_name}' (dim={dim}): geometric "
+                f"match for entity {pre_tag} produced children with "
+                f"{ratio:.2f}× the parent mass — possible false "
+                f"sibling match.  Inspect the PG before relying on "
+                f"it.",
+                stacklevel=3,
+            )
+        elif ratio < 1.0 - _MASS_BALANCE_TOL and len(matches) == 1:
+            # Single match with significant mass deficit usually
+            # means the entity was partly consumed — informational.
+            warnings.warn(
+                f"Physical group '{pg_name}' (dim={dim}): geometric "
+                f"match for entity {pre_tag} recovered only "
+                f"{ratio:.2f}× the parent mass — part of the entity "
+                f"was consumed by the boolean.",
+                stacklevel=3,
+            )
+
     # -- Remove surviving stale PGs, then recreate ---------------------
     for entry in snapshot:
         dim = entry['dim']
         old_pg_tag = entry['pg_tag']
         name = entry['name']
         old_tags = entry['entity_tags']
+
+        # Caller owns this PG name — they recreated it from a stored
+        # predicate before this loop ran (e.g. DRM-box line PGs).
+        # Skip BEFORE touching ``removePhysicalGroups``: synchronize()
+        # wipes PG membership, and Gmsh may reuse the snapshot's
+        # ``old_pg_tag`` for the caller's freshly-created PG —
+        # blindly removing ``(dim, old_pg_tag)`` would destroy the
+        # caller's work.
+        if name in skip_set:
+            continue
 
         # Remove the old PG if it survived synchronize with stale data.
         # Expected to fail when the PG was already destroyed by
@@ -282,37 +699,68 @@ def remap_physical_groups(
         except Exception:
             pass
 
-        # Remap each entity tag
+        # Remap each entity tag.
+        #
+        # For entities at the input dim (volumes for a 3D cut), the
+        # OCC ``result_map`` gives us a precise parent→child list and
+        # we use it directly.  For sub-entities (faces / edges /
+        # vertices) gmsh has no equivalent map, so we fall back to a
+        # geometric search by signature — *always*, even when the
+        # old tag happens to still exist in ``current_entities``.
+        # The reason for "always": OCC's cut can split a sub-entity
+        # while keeping the parent's tag on one of the halves; if we
+        # short-circuited on "old tag still alive" we'd capture that
+        # half but miss its newly-tagged sibling.  The geometric
+        # search picks up both pieces — the centroid of each surviving
+        # half lies inside the pre-op bbox, and direction/normal
+        # agreement disambiguates against unrelated parallel edges.
+        pre_sigs = entry.get('entity_signatures', {})
         new_tags: list[int] = []
         for et in old_tags:
             old_dt = (dim, et)
             if old_dt in dt_map:
-                # Entity was a boolean input — remap via result_map
+                # Entity was a boolean input — remap via result_map.
                 mapped = [t for d, t in dt_map[old_dt] if d == dim]
                 if mapped:
                     new_tags.extend(mapped)
-                else:
-                    if absorbed_into_result:
-                        # Entity was absorbed (e.g. fuse tool merged
-                        # into the union).  Fall back to the result
-                        # entities at this dim — material still there.
-                        fallback = result_by_dim.get(dim, [])
-                        if fallback:
-                            new_tags.extend(fallback)
-                            continue
-                    warnings.warn(
-                        f"Physical group '{name}' (dim={dim}): entity "
-                        f"{et} was consumed by the boolean operation.",
-                        stacklevel=3,
-                    )
+                    continue
+                if absorbed_into_result:
+                    fallback = result_by_dim.get(dim, [])
+                    if fallback:
+                        new_tags.extend(fallback)
+                        continue
+                # Empty mapping at the input dim: ``outDimTagsMap``
+                # is authoritative here (e.g. a cut's tool is
+                # consumed, OCC returns ``[]``).  Don't run the
+                # geometric fallback — for input-dim entities it
+                # tends to find spurious "merge products" (the cut
+                # survivor has a centroid inside the tool's bbox),
+                # producing false-sibling matches at multiples of
+                # the parent mass.  Trust the API; emit the
+                # ``was consumed`` warning.
+                warnings.warn(
+                    f"Physical group '{name}' (dim={dim}): entity "
+                    f"{et} was consumed by the boolean operation.",
+                    stacklevel=3,
+                )
+                continue
+
+            # Not a boolean input — sub-entity path.  Always go
+            # through geometric matching (see comment above).
+            pre_sig = pre_sigs.get(et)
+            geo_matches = _geometric_match(dim, pre_sig)
+            if geo_matches:
+                new_tags.extend(geo_matches)
+                _check_mass_balance(dim, pre_sig, geo_matches, name, et)
             elif old_dt in current_entities:
-                # Not a boolean input and still exists — keep as-is
+                # Signature couldn't be computed pre-op but the tag
+                # still resolves — keep it.
                 new_tags.append(et)
             else:
-                # Disappeared as sub-topology side-effect
                 warnings.warn(
                     f"Physical group '{name}' (dim={dim}): entity {et} "
-                    f"was lost (sub-topology renumbering). Cannot remap.",
+                    f"was lost (no geometric descendant in the post-op "
+                    f"model).",
                     stacklevel=3,
                 )
 
@@ -323,7 +771,7 @@ def remap_physical_groups(
         elif old_tags:
             warnings.warn(
                 f"Physical group '{name}' (dim={dim}) is now empty — "
-                f"all its entities were consumed by the boolean.",
+                f"no geometric descendants survived the boolean.",
                 stacklevel=3,
             )
 

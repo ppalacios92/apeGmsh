@@ -7,10 +7,62 @@ import gmsh
 from ._geometry_topology import sweep_dangling
 from ._helpers import Tag, resolve_to_dimtags
 from .Labels import pg_preserved
-from apeGmsh._types import EntityRefs
+from apeGmsh._types import DimTag, EntityRefs
 
 if TYPE_CHECKING:
     from .Model import Model
+    from ._parts_registry import Instance, PartsRegistry
+
+
+def _collect_topology_rebuild_targets(
+    parts: "PartsRegistry | None",
+    input_dimtags: list[DimTag],
+) -> tuple[list[tuple["Instance", callable]], set[str]]:
+    """Find Part instances whose topology PGs need rebuild after a boolean.
+
+    A Part instance qualifies when:
+    (a) it owns metadata identifying it as a known topology-PG host
+        (currently: ``inst.properties["drm_box"]["line_pgs"]``), and
+    (b) at least one of its volume tags appears in ``input_dimtags``.
+
+    Returns
+    -------
+    targets
+        ``[(inst, rebuild_fn), ...]`` — call each ``rebuild_fn(parent,
+        inst)`` post-op to recreate the PGs from the stored
+        predicate.
+    skip_pg_names
+        Union of all PG names the rebuild will own.  Pass to
+        ``pg.skip(...)`` so the standard remap doesn't emit
+        "Cannot remap" / "is now empty" warnings for these.
+    """
+    targets: list[tuple["Instance", callable]] = []
+    skip_pg_names: set[str] = set()
+
+    if parts is None:
+        return targets, skip_pg_names
+
+    input_vol_tags = {int(t) for d, t in input_dimtags if int(d) == 3}
+    if not input_vol_tags:
+        return targets, skip_pg_names
+
+    for inst in parts._instances.values():
+        drm_meta = inst.properties.get("drm_box")
+        if not drm_meta:
+            continue
+        line_pgs = drm_meta.get("line_pgs")
+        if not line_pgs:
+            continue
+        inst_vol_tags = set(int(t) for t in inst.entities.get(3, []))
+        if not (inst_vol_tags & input_vol_tags):
+            continue
+
+        # Lazy import to avoid cycle: drm_box -> Part -> ... -> core
+        from apeGmsh.parts.drm_box import rebuild_drm_box_line_pgs
+        targets.append((inst, rebuild_drm_box_line_pgs))
+        skip_pg_names.update(line_pgs.values())
+
+    return targets, skip_pg_names
 
 
 class _Boolean:
@@ -64,6 +116,18 @@ class _Boolean:
                 input_label_names.update(labels_comp.labels_for_entity(d, t))
 
         absorbed = fn_name in ('fuse', 'intersect')
+
+        # ── Pre-op: identify Part instances with topology-rebuild
+        # hooks whose volumes are touched by this boolean.  Collect
+        # their owned PG names so the post-op remap skips them
+        # (the rebuild will recreate them from a stored predicate
+        # against post-op geometry — OCC doesn't expose edge-level
+        # parent→child lineage for the standard remap to use).
+        parts = getattr(parent, 'parts', None)
+        rebuild_targets, skip_pg_names = _collect_topology_rebuild_targets(
+            parts, obj_dt + tool_dt,
+        )
+
         with pg_preserved() as pg:
             result, result_map = fn(
                 obj_dt, tool_dt,
@@ -77,13 +141,24 @@ class _Boolean:
                 result=result,
                 absorbed_into_result=absorbed,
             )
-            parts = getattr(parent, 'parts', None)
+            if skip_pg_names:
+                pg.skip(skip_pg_names)
             if parts is not None:
                 parts._remap_from_result(
                     obj_dt + tool_dt, result_map,
                     result=result,
                     absorbed_into_result=absorbed,
                 )
+
+            # Rebuild topology-derived PGs (e.g. DRM box line PGs)
+            # *inside* the pg_preserved block so the rebuilt PGs are
+            # created after the standard remap removed the stale
+            # snapshot entries and before the user observes any
+            # state.  Runs after ``_remap_from_result`` because the
+            # rebuild reads ``inst.entities[3]`` to scope its
+            # boundary query.
+            for inst, rebuild_fn in rebuild_targets:
+                rebuild_fn(parent, inst)
 
         # Clean up registry: remove consumed objects/tools
         result_set = set(result)
