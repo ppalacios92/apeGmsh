@@ -131,6 +131,10 @@ class Diagram:
         # Attached state (populated by attach, cleared by detach)
         self._attached: bool = False
         self._plotter: Any = None
+        # Render seam (ADR 0042, R-B): the RenderBackend migrated
+        # diagrams emit SceneLayers through. Built from the plotter in
+        # attach. Un-migrated diagrams ignore it and use self._plotter.
+        self._backend: Any = None
         self._view: "ViewerData | None" = None
         self._scene: "FEMSceneData | None" = None
         self._resolved_node_ids: "ndarray | None" = None
@@ -193,7 +197,21 @@ class Diagram:
         open. Diagrams that paint on the substrate (Contour,
         DeformedShape, …) require it; stub diagrams may pass ``None``.
         """
-        self._plotter = plotter
+        # Render seam (ADR 0042, R-B): accept either a RenderBackend
+        # (migrated call sites) or a raw pyvista plotter (current call
+        # sites). When given a plotter, wrap it so migrated diagrams can
+        # emit SceneLayers via self._backend; un-migrated diagrams keep
+        # using the raw self._plotter / their local ``plotter`` arg.
+        # The diagrams→backends import is transitional — it is removed at
+        # R-B.final when the call sites inject a backend and the INV-2
+        # guard (diagrams import no pyvista) lands.
+        if hasattr(plotter, "add_layer"):
+            self._backend = plotter
+            self._plotter = getattr(plotter, "plotter", plotter)
+        else:
+            from ..backends import PyVistaQtBackend
+            self._backend = PyVistaQtBackend(plotter)
+            self._plotter = plotter
         self._view = view
         self._scene = scene
         # Subclasses decide which axis matters; resolving both is
@@ -229,6 +247,7 @@ class Diagram:
                     pass
         self._actors = []
         self._plotter = None
+        self._backend = None
         self._view = None
         self._scene = None
         self._resolved_node_ids = None

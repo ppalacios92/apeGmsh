@@ -141,7 +141,11 @@ class ColorSpec:
     """
 
     mode: Literal["solid", "by_array", "per_entity_rgb"] = "solid"
-    solid_rgb: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    # An (r, g, b) float triple in [0, 1], OR a backend-resolvable colour
+    # string (named like "red" or hex "#RRGGBB"). The string form lets
+    # style-driven diagrams pass their existing colour through unchanged;
+    # a backend resolves it to RGB.
+    solid_rgb: Union[tuple[float, float, float], str] = (1.0, 1.0, 1.0)
     array_name: Optional[str] = None
     lut: Optional[LutSpec] = None
     entity_rgb: Optional[np.ndarray] = None

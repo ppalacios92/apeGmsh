@@ -71,6 +71,15 @@ class RenderBackend(Protocol):
         """Apply a per-cell visibility mask to ``handle``."""
         ...
 
+    def set_layer_visible(self, handle: LayerHandle, visible: bool) -> None:
+        """Show or hide the whole layer behind ``handle``.
+
+        Coarser than :meth:`set_visibility` (which hides individual
+        cells) — this toggles the entire layer, the operation a
+        diagram's show/hide checkbox drives.
+        """
+        ...
+
     def add_scalar_bar(self, spec: ScalarBarSpec) -> None:
         """Show a scalar bar (colour legend) for ``spec.layer_id``."""
         ...

@@ -12,17 +12,24 @@ becomes the place to re-scale.
 
 Moments are intentionally not drawn — they need a different glyph
 (curved / double-shaft arrow) and will be handled in a follow-up.
+
+Render seam (ADR 0042, R-B.0): this diagram is the first migrated to
+the backend-neutral IR. It emits a single :class:`GlyphLayer` of arrow
+glyphs through ``self._backend`` and holds no VTK objects — the
+backend owns the actor. The arrow size is folded into the layer's
+per-glyph ``scales`` (= magnitude × current scale) so the backend's
+generic glyph path reproduces the legacy ``factor``-scaled arrows.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pyvista as pv
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
 from ._styles import LoadsStyle
+from ..scene_ir import ColorSpec, GlyphLayer, PointSet
 
 if TYPE_CHECKING:
     from apeGmsh.results.Results import Results
@@ -46,14 +53,21 @@ class LoadsDiagram(Diagram):
                 f"got {type(spec.style).__name__}."
             )
         super().__init__(spec, results)
-        self._source: Optional[pv.PolyData] = None
-        self._actor: Any = None
-        # Substrate row indices the arrow tail points were sampled
-        # from — cached so ``sync_substrate_points`` can rebuild the
-        # source when the active geometry deforms.
+        # Reference-config arrow tail coords (substrate sample), the
+        # force vectors, and their magnitudes — cached so set_scale /
+        # sync_substrate_points can rebuild the layer.
+        self._coords: Optional[ndarray] = None
+        self._forces: Optional[ndarray] = None
+        self._mags: Optional[ndarray] = None
+        # Substrate row indices the arrow tails sampled — for
+        # sync_substrate_points re-positioning under deformation.
         self._substrate_idx: Optional[ndarray] = None
         self._initial_scale: float = 1.0
         self._runtime_scale: Optional[float] = None
+        # Backend handle + the last emitted layer (the latter exposed
+        # for tests / introspection — there is no VTK actor to hold).
+        self._handle: Any = None
+        self._layer: Optional[GlyphLayer] = None
 
     # ------------------------------------------------------------------
     # Attach / detach / update
@@ -72,8 +86,8 @@ class LoadsDiagram(Diagram):
         pattern = self.spec.selector.component
 
         # Collect (node_id, force) pairs for this pattern. Skip records
-        # without a force vector and zero-force records — drawing a
-        # zero-length arrow renders as a degenerate glyph.
+        # without a force vector and zero-force records — a zero-length
+        # arrow renders as a degenerate glyph.
         node_ids: list[int] = []
         forces: list[tuple[float, float, float]] = []
         try:
@@ -108,15 +122,15 @@ class LoadsDiagram(Diagram):
         forces_arr = forces_arr[valid]
 
         coords = np.asarray(scene.grid.points)[substrate_idx].copy()
-        source = pv.PolyData(coords)
-        source.point_data["_vec"] = forces_arr
-        source.point_data["_mag"] = np.linalg.norm(forces_arr, axis=1)
-        self._source = source
+        mags = np.linalg.norm(forces_arr, axis=1)
+        self._coords = coords
+        self._forces = forces_arr
+        self._mags = mags
         self._substrate_idx = substrate_idx.copy()
 
-        # Auto-fit: largest arrow reaches ``auto_scale_fraction`` of
-        # the model diagonal. Mirror VectorGlyph's convention.
-        mag_max = float(source.point_data["_mag"].max())
+        # Auto-fit: largest arrow reaches ``auto_scale_fraction`` of the
+        # model diagonal. Mirror VectorGlyph's convention.
+        mag_max = float(mags.max())
         if style.scale is None:
             if mag_max > 0.0 and scene.model_diagonal > 0.0:
                 self._initial_scale = (
@@ -127,19 +141,8 @@ class LoadsDiagram(Diagram):
         else:
             self._initial_scale = float(style.scale)
 
-        glyph = self._build_glyph(self.current_scale())
-        actor = plotter.add_mesh(
-            glyph,
-            name=self._actor_name(),
-            color=style.color,
-            reset_camera=False,
-            lighting=False,
-            # Decorative overlay — picks pass through to the substrate.
-            pickable=False,
-            show_scalar_bar=False,
-        )
-        self._actor = actor
-        self._actors = [actor]
+        self._layer = self._build_layer(coords, self.current_scale())
+        self._handle = self._backend.add_layer(self._layer)
 
     def update_to_step(self, step_index: int) -> None:
         # Constant — broker has no timeSeries info to drive a per-step
@@ -151,30 +154,39 @@ class LoadsDiagram(Diagram):
     ) -> None:
         """Move arrow tails to follow the deformed substrate."""
         if (
-            self._source is None
-            or self._actor is None
+            self._forces is None
+            or self._handle is None
             or self._substrate_idx is None
         ):
             return
-        try:
-            target_pts = (
-                np.asarray(deformed_pts, dtype=np.float64)
-                if deformed_pts is not None
-                else np.asarray(scene.grid.points, dtype=np.float64)
-            )
-            self._source.points = target_pts[self._substrate_idx]
-            glyph = self._build_glyph(self.current_scale())
-            mapper = self._actor.GetMapper()
-            mapper.SetInputData(glyph)
-            mapper.Modified()
-        except Exception:
-            pass
+        target_pts = (
+            np.asarray(deformed_pts, dtype=np.float64)
+            if deformed_pts is not None
+            else np.asarray(scene.grid.points, dtype=np.float64)
+        )
+        self._coords = target_pts[self._substrate_idx]
+        self._layer = self._build_layer(self._coords, self.current_scale())
+        self._backend.update_layer(self._handle, self._layer)
 
     def detach(self) -> None:
-        self._source = None
-        self._actor = None
+        if self._backend is not None and self._handle is not None:
+            self._backend.remove_layer(self._handle)
+        self._handle = None
+        self._layer = None
+        self._coords = None
+        self._forces = None
+        self._mags = None
         self._substrate_idx = None
         super().detach()
+
+    # ------------------------------------------------------------------
+    # Visibility (backend-routed — no VTK actor held here)
+    # ------------------------------------------------------------------
+
+    def set_visible(self, visible: bool) -> None:
+        self._visible = visible
+        if self._backend is not None and self._handle is not None:
+            self._backend.set_layer_visible(self._handle, bool(visible))
 
     # ------------------------------------------------------------------
     # Runtime adjustments
@@ -182,13 +194,9 @@ class LoadsDiagram(Diagram):
 
     def set_scale(self, scale: float) -> None:
         self._runtime_scale = float(scale)
-        if self._source is not None and self._actor is not None:
-            try:
-                glyph = self._build_glyph(self.current_scale())
-                self._actor.GetMapper().SetInputData(glyph)
-                self._actor.GetMapper().Modified()
-            except Exception:
-                pass
+        if self._coords is not None and self._handle is not None:
+            self._layer = self._build_layer(self._coords, self.current_scale())
+            self._backend.update_layer(self._handle, self._layer)
 
     def current_scale(self) -> float:
         if self._runtime_scale is not None:
@@ -199,19 +207,23 @@ class LoadsDiagram(Diagram):
     # Internal
     # ------------------------------------------------------------------
 
-    def _actor_name(self) -> str:
-        return f"diagram_loads_{id(self):x}"
+    def _layer_id(self) -> str:
+        return f"loads_{id(self):x}"
 
-    def _build_glyph(self, scale: float) -> pv.PolyData:
-        if self._source is None:
-            return pv.PolyData()
+    def _build_layer(self, coords: ndarray, scale: float) -> GlyphLayer:
+        """Build the arrow GlyphLayer for the current coords + scale.
+
+        The per-glyph scale is ``magnitude × scale`` so the backend's
+        generic glyph path (scale by the ``scales`` array, orient by
+        ``orientations``) reproduces the legacy ``factor``-scaled arrows.
+        """
         style: LoadsStyle = self.spec.style    # type: ignore[assignment]
-        try:
-            return self._source.glyph(
-                orient="_vec",
-                scale="_mag",
-                factor=float(scale),
-                geom=pv.Arrow(tip_length=style.arrow_tip_fraction),
-            )
-        except Exception:
-            return pv.PolyData(np.asarray(self._source.points))
+        assert self._forces is not None and self._mags is not None
+        return GlyphLayer(
+            layer_id=self._layer_id(),
+            positions=PointSet(coords),
+            kind="arrow",
+            orientations=self._forces,
+            scales=self._mags * float(scale),
+            color=ColorSpec(mode="solid", solid_rgb=style.color),
+        )

@@ -1,18 +1,16 @@
-"""LoadsDiagram — attach + scale + sync.
+"""LoadsDiagram — emits a GlyphLayer through the render backend (ADR 0042 R-B.0).
 
-Builds a small 2-D mesh with two nodal point loads in a single
-pattern, then verifies the diagram populates its ``_source`` PolyData
-with the expected force vectors and node positions.
-
-The diagram is constant-magnitude (no timeSeries info in the broker),
-so ``update_to_step`` is a no-op — that's tested too.
+The diagram no longer holds VTK objects; it emits a single arrow
+:class:`GlyphLayer` via ``self._backend``. These tests pass a recording
+stub backend (no GL, no plotter) and assert on the *emitted layer* —
+the headless-testability win the render seam delivers.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-import pyvista as pv
 import pytest
 
 from apeGmsh.results import Results
@@ -23,14 +21,72 @@ from apeGmsh.viewers.diagrams import (
     LoadsStyle,
     SlabSelector,
 )
+from apeGmsh.viewers.scene_ir import GlyphLayer
 from apeGmsh.viewers.scene.fem_scene import build_fem_scene
 
 from tests.conftest import _open_model_from_h5
 
 
+# --- Recording stub backend (RenderBackend conformant, no GL) ------------
+
+
+class _Handle:
+    def __init__(self, layer_id: str) -> None:
+        self.layer_id = layer_id
+        self.visible = True
+
+
+class RecordingBackend:
+    """Captures emitted layers; satisfies the RenderBackend Protocol."""
+
+    def __init__(self) -> None:
+        self.layers: dict[str, Any] = {}
+        self.removed: list[str] = []
+
+    def add_layer(self, layer: Any) -> _Handle:
+        self.layers[layer.layer_id] = layer
+        return _Handle(layer.layer_id)
+
+    def update_layer(self, handle: _Handle, layer: Any) -> None:
+        self.layers[handle.layer_id] = layer
+
+    def remove_layer(self, handle: _Handle) -> None:
+        self.layers.pop(handle.layer_id, None)
+        self.removed.append(handle.layer_id)
+
+    def set_visibility(self, handle: _Handle, mask: Any) -> None:
+        pass
+
+    def set_layer_visible(self, handle: _Handle, visible: bool) -> None:
+        handle.visible = bool(visible)
+
+    def add_scalar_bar(self, spec: Any) -> None:
+        pass
+
+    def remove_scalar_bar(self, layer_id: str) -> None:
+        pass
+
+    def reset_camera(self) -> None:
+        pass
+
+    def render(self) -> None:
+        pass
+
+    def screenshot(self, path: Any) -> None:
+        pass
+
+    def supports_picking(self) -> bool:
+        return False
+
+
+@pytest.fixture
+def backend() -> RecordingBackend:
+    return RecordingBackend()
+
+
 @pytest.fixture
 def loads_results(g, tmp_path: Path):
-    """Plate with two labelled corners carrying point loads."""
+    """Cube with three nodal point loads across two patterns."""
     g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="cube")
     g.physical.add_volume("cube", name="Body")
     g.mesh.sizing.set_global_size(2.0)
@@ -38,8 +94,6 @@ def loads_results(g, tmp_path: Path):
     fem = g.mesh.queries.get_fem_data(dim=3)
     n_ids = list(fem.nodes.ids)
 
-    # Minimal Results so we can construct the diagram (the broker
-    # carries the loads on .fem, the diagram doesn't read .results).
     n_steps = 1
     node_ids = np.asarray(n_ids, dtype=np.int64)
     components = {
@@ -61,8 +115,6 @@ def loads_results(g, tmp_path: Path):
         )
         w.end_stage()
     results = Results.from_native(path, model=_open_model_from_h5(path))
-    # Inject load records on the post-load fem object so the diagram
-    # sees them (the writer doesn't persist loads to H5 today).
     from apeGmsh._kernel.records import NodalLoadRecord
     fem_after = results.fem
     n_after = list(fem_after.nodes.ids)
@@ -79,13 +131,6 @@ def loads_results(g, tmp_path: Path):
         force_xyz=(0.0, 0.0, 7.0),
     ))
     return results
-
-
-@pytest.fixture
-def headless_plotter():
-    plotter = pv.Plotter(off_screen=True)
-    yield plotter
-    plotter.close()
 
 
 def _spec(pattern: str, scale: float | None = 1.0) -> DiagramSpec:
@@ -107,101 +152,113 @@ def test_construction_requires_loads_style(loads_results):
         LoadsDiagram(bad, loads_results)
 
 
-def test_attach_requires_scene(loads_results, headless_plotter):
+def test_attach_requires_scene(loads_results, backend):
     diagram = LoadsDiagram(_spec("P1"), loads_results)
     with pytest.raises(RuntimeError, match="FEMSceneData"):
-        diagram.attach(headless_plotter, loads_results.fem)
+        diagram.attach(backend, loads_results.fem)
 
 
-def test_attach_builds_source_for_pattern(loads_results, headless_plotter):
+def test_attach_emits_arrow_glyph_layer(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
+    diagram.attach(backend, loads_results.fem, scene)
 
-    assert diagram._source is not None
+    layer = diagram._layer
+    assert isinstance(layer, GlyphLayer)
+    assert layer.kind == "arrow"
     # Two records in P1 → two arrows.
-    assert diagram._source.n_points == 2
-    vecs = np.asarray(diagram._source.point_data["_vec"])
-    mags = np.asarray(diagram._source.point_data["_mag"])
-    # Force magnitudes — order-agnostic.
-    np.testing.assert_allclose(sorted(mags.tolist()), [5.0, 10.0])
-    # Vectors — sums match (10, -5, 0)
-    np.testing.assert_allclose(vecs.sum(axis=0), [10.0, -5.0, 0.0])
+    assert layer.positions.n_points == 2
+    # Orientations are the force vectors — sum matches (10, -5, 0).
+    np.testing.assert_allclose(layer.orientations.sum(axis=0), [10.0, -5.0, 0.0])
+    # Scales = magnitude × scale (scale=1) → {5, 10}, order-agnostic.
+    np.testing.assert_allclose(sorted(layer.scales.tolist()), [5.0, 10.0])
+    # Emitted to the backend under the diagram's stable layer id.
+    assert layer.layer_id in backend.layers
 
 
-def test_attach_other_pattern_is_independent(loads_results, headless_plotter):
+def test_attach_other_pattern_is_independent(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P2"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    assert diagram._source is not None
-    # P2 only has one record on first node, force = (0, 0, 7)
-    assert diagram._source.n_points == 1
-    vecs = np.asarray(diagram._source.point_data["_vec"])
-    np.testing.assert_allclose(vecs[0], [0.0, 0.0, 7.0])
+    diagram.attach(backend, loads_results.fem, scene)
+    layer = diagram._layer
+    assert layer is not None
+    assert layer.positions.n_points == 1
+    np.testing.assert_allclose(layer.orientations[0], [0.0, 0.0, 7.0])
 
 
-def test_attach_unknown_pattern_silently_skips(loads_results, headless_plotter):
+def test_attach_unknown_pattern_emits_nothing(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("DOES_NOT_EXIST"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    # No records → no source, no actor. Diagram stays attached but inert.
-    assert diagram._source is None
-    assert diagram._actor is None
+    diagram.attach(backend, loads_results.fem, scene)
+    assert diagram._layer is None
+    assert diagram._handle is None
+    assert backend.layers == {}
 
 
-def test_update_to_step_is_noop(loads_results, headless_plotter):
-    """Constant-magnitude — no timeSeries in broker."""
+def test_update_to_step_is_noop(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    initial_vecs = np.asarray(diagram._source.point_data["_vec"]).copy()
+    diagram.attach(backend, loads_results.fem, scene)
+    before = diagram._layer
     diagram.update_to_step(5)
-    after = np.asarray(diagram._source.point_data["_vec"])
-    np.testing.assert_array_equal(initial_vecs, after)
+    assert diagram._layer is before  # unchanged — no timeSeries in broker
 
 
-def test_actor_identity_stable_across_steps(loads_results, headless_plotter):
+def test_handle_stable_across_steps(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    initial_actor = diagram._actor
-    initial_source = diagram._source
+    diagram.attach(backend, loads_results.fem, scene)
+    initial_handle = diagram._handle
     for step in range(3):
         diagram.update_to_step(step)
-    assert diagram._actor is initial_actor
-    assert diagram._source is initial_source
+    assert diagram._handle is initial_handle
 
 
-def test_set_scale_records_runtime_value(loads_results, headless_plotter):
+def test_set_scale_rescales_layer(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
+    diagram.attach(backend, loads_results.fem, scene)
     diagram.set_scale(5.0)
     assert diagram.current_scale() == 5.0
+    # Scales rescaled to magnitude × 5 → {25, 50}.
+    np.testing.assert_allclose(sorted(diagram._layer.scales.tolist()), [25.0, 50.0])
+    # Same handle, updated in place on the backend.
+    assert backend.layers[diagram._handle.layer_id] is diagram._layer
 
 
-def test_auto_scale_when_none(loads_results, headless_plotter):
-    """``scale=None`` → auto-fit so largest arrow ~ fraction × diagonal."""
+def test_auto_scale_when_none(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1", scale=None), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    # Largest force is 10.0; auto-fit picks scale = 0.10 * diag / 10.0
+    diagram.attach(backend, loads_results.fem, scene)
     expected = 0.10 * scene.model_diagonal / 10.0
     assert abs(diagram.current_scale() - expected) < 1e-9
 
 
-def test_detach_clears_state(loads_results, headless_plotter):
+def test_set_visible_routes_to_backend(loads_results, backend):
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("P1"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
+    diagram.attach(backend, loads_results.fem, scene)
+    handle = diagram._handle
+    diagram.set_visible(False)
+    assert handle.visible is False
+    diagram.set_visible(True)
+    assert handle.visible is True
+
+
+def test_detach_removes_layer_and_clears_state(loads_results, backend):
+    scene = build_fem_scene(loads_results.fem)
+    diagram = LoadsDiagram(_spec("P1"), loads_results)
+    diagram.attach(backend, loads_results.fem, scene)
+    layer_id = diagram._handle.layer_id
     diagram.detach()
-    assert diagram._source is None
-    assert diagram._actor is None
+    assert diagram._layer is None
+    assert diagram._handle is None
     assert not diagram.is_attached
+    assert layer_id in backend.removed
+    assert layer_id not in backend.layers
 
 
-def test_zero_force_records_skipped(loads_results, headless_plotter):
-    """Records with all-zero force_xyz produce no glyph (degenerate)."""
+def test_zero_force_records_skipped(loads_results, backend):
     from apeGmsh._kernel.records import NodalLoadRecord
     loads_results.fem.nodes.loads._records.append(NodalLoadRecord(
         pattern="ZEROES", node_id=int(loads_results.fem.nodes.ids[0]),
@@ -209,13 +266,11 @@ def test_zero_force_records_skipped(loads_results, headless_plotter):
     ))
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("ZEROES"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    assert diagram._source is None
+    diagram.attach(backend, loads_results.fem, scene)
+    assert diagram._layer is None
 
 
-def test_moment_only_records_skipped(loads_results, headless_plotter):
-    """Records with only moments (force_xyz=None) are ignored — moments
-    need a different glyph and aren't drawn yet."""
+def test_moment_only_records_skipped(loads_results, backend):
     from apeGmsh._kernel.records import NodalLoadRecord
     loads_results.fem.nodes.loads._records.append(NodalLoadRecord(
         pattern="MOMENT_ONLY",
@@ -224,5 +279,5 @@ def test_moment_only_records_skipped(loads_results, headless_plotter):
     ))
     scene = build_fem_scene(loads_results.fem)
     diagram = LoadsDiagram(_spec("MOMENT_ONLY"), loads_results)
-    diagram.attach(headless_plotter, loads_results.fem, scene)
-    assert diagram._source is None
+    diagram.attach(backend, loads_results.fem, scene)
+    assert diagram._layer is None
