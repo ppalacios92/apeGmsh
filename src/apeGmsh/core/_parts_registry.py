@@ -663,8 +663,22 @@ class PartsRegistry(_PartsFragmentationMixin):
             lz = dz
             return lx, ly, lz
 
-        wrap_rank = {"inner": 0, "layer": 1, "outer": 2}
-
+        # Volume-PG classifier — matches the canonical DRM layout
+        # the user's notebook expressed via in_box selection:
+        #
+        #   * ``inner_box`` = the single inner-inner-top sub-volume
+        #     (the geometric "inner box" where the embedded structure
+        #     lives).
+        #   * ``transition_box`` = the layer-bounded AABB
+        #     ``[-x_LL,+x_LL] x [-y_LL,+y_LL] x [-(z_top+z_mid), 0]``
+        #     minus the inner box.  i.e. sub-vols whose lateral region
+        #     is ``inner`` or ``layer`` AND whose Z region is ``top`` or
+        #     ``mid``, with the single ``inner`` cell carved out.
+        #   * ``outer_box`` = everything else — the absorbing region,
+        #     including the inner-inner-mid / inner-inner-bottom
+        #     sub-vols below the structure (per the user's geometric
+        #     AABB rule, those z layers are not inside the transition
+        #     shell).
         inner_vols: list[int] = []
         transition_vols: list[int] = []
         outer_vols: list[int] = []
@@ -684,15 +698,18 @@ class PartsRegistry(_PartsFragmentationMixin):
             nz = drm.axis_z.count_for(lz)
             per_vol_counts.append((int(vtag), nx, ny, nz))
 
-            wrap = max(wrap_rank[rx], wrap_rank[ry])
-            if wrap == 0:
+            is_inner = (rx == "inner" and ry == "inner" and rz == "top")
+            inside_transition_bbox = (
+                rx in ("inner", "layer")
+                and ry in ("inner", "layer")
+                and rz in ("top", "mid")
+            )
+            if is_inner:
                 inner_vols.append(int(vtag))
-            elif wrap == 1:
+            elif inside_transition_bbox:
                 transition_vols.append(int(vtag))
             else:
                 outer_vols.append(int(vtag))
-            # ``rz`` participates only in line-PG tagging below; the
-            # wrap classification is laterally-driven.
 
         physical = self._parent.physical
         if inner_vols:
