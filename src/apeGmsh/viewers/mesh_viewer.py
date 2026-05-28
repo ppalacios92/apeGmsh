@@ -378,6 +378,41 @@ class MeshViewer:
                     view = ViewerData.from_fem(fem)
         self._view = view
 
+        # ── Overlay visibility model — PR5 / D2 closure ─────────────
+        # Single source of truth for {load_patterns, constraint_kinds,
+        # mass_visible} across the outline-tree eye-icons and the
+        # right-side tab checkboxes.  Pre-PR5 each surface held its
+        # own snapshot computed off Qt widget state — alternating
+        # writes caused the overlay to flip to whichever surface fired
+        # last.  Now both surfaces write to the model; the model
+        # dedups (idempotent setters) and fans out to the rebuild
+        # callbacks below.
+        # Must be constructed BEFORE ``_build_overlay_tabs``: the
+        # Loads/Mass/Constraints tab panels receive ``overlay_model=``
+        # and ``on_*_changed=self._overlay_model.set_*`` at __init__,
+        # so the attribute must already exist when the tabs are built.
+        from .core.overlay_visibility import OverlayVisibilityModel
+        self._overlay_model = OverlayVisibilityModel()
+        self._overlay_model.subscribe(
+            lambda: self._rebuild_loads_overlay(self._overlay_model.load_patterns)
+        )
+        self._overlay_model.subscribe(
+            lambda: self._rebuild_mass_overlay(self._overlay_model.mass_visible)
+        )
+        self._overlay_model.subscribe(
+            lambda: self._rebuild_constraints_overlay(self._overlay_model.constraint_kinds)
+        )
+        # PR3 — boundary-node glyph overlay (ADR 0027 / schema 2.10.0).
+        # Toggled by the "Boundary nodes" row in the Partitions outline
+        # section.  Inert when ``view.nodes.has_boundary_nodes`` is
+        # False (single-partition models, pre-2.10.0 archives, or live
+        # ``from_fem`` viewers).
+        self._overlay_model.subscribe(
+            lambda: self._rebuild_boundary_node_overlay(
+                self._overlay_model.boundary_nodes_visible,
+            )
+        )
+
         # ── Insert overlay tabs (loads/mass/constraints) ────────────
         self._build_overlay_tabs(win)
 
@@ -427,41 +462,10 @@ class MeshViewer:
         # surface drove it.
         from .ui._mesh_outline_tree import MeshOutlineTree
         from .ui._dock_registry import DockSpec
-        from .core.overlay_visibility import OverlayVisibilityModel
         parts_reg = getattr(self._parent, 'parts', None)
         loads_comp = getattr(self._parent, 'loads', None)
         mass_comp = getattr(self._parent, 'masses', None)
         constraints_comp = getattr(self._parent, 'constraints', None)
-
-        # ── Overlay visibility model — PR5 / D2 closure ─────────────
-        # Single source of truth for {load_patterns, constraint_kinds,
-        # mass_visible} across the outline-tree eye-icons and the
-        # right-side tab checkboxes.  Pre-PR5 each surface held its
-        # own snapshot computed off Qt widget state — alternating
-        # writes caused the overlay to flip to whichever surface fired
-        # last.  Now both surfaces write to the model; the model
-        # dedups (idempotent setters) and fans out to the rebuild
-        # callbacks below.
-        self._overlay_model = OverlayVisibilityModel()
-        self._overlay_model.subscribe(
-            lambda: self._rebuild_loads_overlay(self._overlay_model.load_patterns)
-        )
-        self._overlay_model.subscribe(
-            lambda: self._rebuild_mass_overlay(self._overlay_model.mass_visible)
-        )
-        self._overlay_model.subscribe(
-            lambda: self._rebuild_constraints_overlay(self._overlay_model.constraint_kinds)
-        )
-        # PR3 — boundary-node glyph overlay (ADR 0027 / schema 2.10.0).
-        # Toggled by the "Boundary nodes" row in the Partitions outline
-        # section.  Inert when ``view.nodes.has_boundary_nodes`` is
-        # False (single-partition models, pre-2.10.0 archives, or live
-        # ``from_fem`` viewers).
-        self._overlay_model.subscribe(
-            lambda: self._rebuild_boundary_node_overlay(
-                self._overlay_model.boundary_nodes_visible,
-            )
-        )
 
         # Map outline row kinds to the right-side tab names whose
         # contents serve as the property editor for that row type.
