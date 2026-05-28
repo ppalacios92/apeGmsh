@@ -178,7 +178,174 @@ class FEMDataSource:
         except KeyError:
             return False
 
+    # -- Element-side queries (Compose v1.1-A.2 / ADR 0041) --------
+
+    def host_subelements_for(self, target: str) -> np.ndarray:
+        """Return ``ndarray(F, 3 | 4)`` of virtual sub-element rows for *target*.
+
+        Element-side counterpart to :meth:`nodes_for` — resolves
+        ``target`` to a set of element IDs via Tier 1 (labels) → Tier 2
+        (physical groups), pulls each resolved element's ``(etype,
+        connectivity_row)`` pair from the broker's element composite,
+        and delegates to
+        :func:`apeGmsh._kernel.geometry._host_decomposition.decompose_hosts_to_subelements`.
+
+        The returned rows are virtual tri3 / tet4 sub-elements that
+        :class:`~apeGmsh._kernel.resolvers._constraint_resolver.ConstraintResolver.resolve_embedded`
+        consumes — see ADR 0036 for the coupling semantics and
+        ADR 0041 §"Decision 3" for the chain-phase usage contract.
+
+        Parameters
+        ----------
+        target : str
+            Label name (Tier 1) or physical-group name (Tier 2) on the
+            element side.  Node-side labels / PGs are NOT consulted —
+            this method is element-side only, mirroring how the
+            build-phase ``_collect_host_subelements`` resolves
+            ``host_entities`` from ``g.parts`` / physical groups
+            (never from node-side records).
+
+        Returns
+        -------
+        ndarray
+            ``(F, 4)`` of tet sub-element rows for 3D hosts, ``(F, 3)``
+            for 2D hosts.  Empty array ``np.empty((0, 0), dtype=int)``
+            when the resolved elements decompose to nothing (e.g. an
+            element group that survives the resolution but has zero
+            rows after a defensive filter).
+
+        Raises
+        ------
+        KeyError
+            When ``target`` resolves to no element-side label or PG.
+        ValueError
+            When the resolved elements carry no embeddable host types
+            (matching the build-phase error message in
+            :meth:`ConstraintsComposite._resolve_embedded`).  Also
+            raised by the decomposition function for mixed-dim hosts
+            and unsupported etypes.
+
+        Notes
+        -----
+        Higher-order hosts emit a ``UserWarning`` once per
+        ``(etype, target)`` per ADR 0041 §"Decision 8" — chain phase
+        has no entity tags to name, so the target label is the natural
+        granularity.  Build-phase callers using
+        :meth:`ConstraintsComposite._collect_host_subelements` get the
+        original per-``(etype, entity)`` warning cadence unchanged.
+        """
+        import warnings as _warnings
+
+        # Resolve ``target`` to a set of element IDs on the element
+        # side only.  Tier 1 (labels) → Tier 2 (PGs).
+        eids = self._element_ids_for_target(target)
+
+        # Pull (etype, conn) pairs from the broker for each resolved
+        # element by walking every element-type group and filtering.
+        fem = self._fem
+        eids_set = set(int(x) for x in eids)
+        groups: list[tuple[int, np.ndarray]] = []
+        for code, grp in fem.elements._groups.items():
+            grp_ids = np.asarray(grp.ids, dtype=np.int64)
+            mask = np.array(
+                [int(t) in eids_set for t in grp_ids], dtype=bool,
+            )
+            if not mask.any():
+                continue
+            conn = np.asarray(grp.connectivity, dtype=np.int64)[mask]
+            groups.append((int(code), conn))
+
+        if not groups:
+            # Resolved label exists but the broker has no element rows
+            # matching those ids — defensive, normally unreachable
+            # because the element groups are the source of truth for
+            # ids.
+            raise ValueError(
+                f"FEMDataSource.host_subelements_for: target "
+                f"{target!r} resolved to {len(eids)} element ids but "
+                f"none survive the broker's element-type filter.  "
+                f"This is a broker invariant violation — the label "
+                f"references element ids that no ElementGroup holds."
+            )
+
+        # Higher-order warning per (etype, target) — ADR 0041 §8.
+        warned_codes: set[int] = set()
+
+        def _warn(code: int, name: str) -> None:
+            if code in warned_codes:
+                return
+            warned_codes.add(code)
+            _warnings.warn(
+                f"embedded: host target {target!r} carries {name} "
+                f"elements — decomposing to corner-node-only linear "
+                f"sub-elements.  The embedded coupling will be linear "
+                f"regardless of the host's native interpolation "
+                f"order; quadratic / bilinear / trilinear host "
+                f"kinematics will NOT be felt by the embedded node.  "
+                f"Set `host_coupling=` explicitly on the "
+                f"`embedded(...)` call to acknowledge.",
+                UserWarning, stacklevel=4,
+            )
+
+        from apeGmsh._kernel.geometry._host_decomposition import (
+            decompose_hosts_to_subelements,
+        )
+        sub = decompose_hosts_to_subelements(
+            groups, warn_higher_order=_warn,
+        )
+        if sub.size == 0:
+            raise ValueError(
+                f"FEMDataSource.host_subelements_for: target "
+                f"{target!r} resolved to elements but none carry "
+                f"embeddable host types.  Supported host types: "
+                f"tri3 / tri6 / quad4 / quad8 / quad9 (2D); tet4 / "
+                f"tet10 / hex8 / hex20 / prism6 / prism15 / pyramid5 "
+                f"/ pyramid13 (3D).  Non-simplex and higher-order "
+                f"hosts are decomposed to linear sub-tris / sub-tets "
+                f"using corner nodes only.  Fix the broker's element "
+                f"composition before composing a chain-phase "
+                f"embedded constraint."
+            )
+        return sub
+
     # -- Internal helpers ------------------------------------------
+
+    def _element_ids_for_target(self, target: str) -> np.ndarray:
+        """Resolve ``target`` to an int64 ndarray of element IDs.
+
+        Element-side mirror of :meth:`nodes_for`'s walk: Tier 1
+        labels on the element side first, then Tier 2 PGs.  Node-side
+        records are never consulted — embedded host targets are
+        element-side by construction.
+        """
+        from apeGmsh._kernel._label_prefix import add_prefix
+
+        fem = self._fem
+        prefixed = add_prefix(target)
+
+        # Tier 1 — element-side labels.
+        for entry in fem.elements.labels._groups.values():
+            entry_name = entry.get("name", "")
+            if entry_name in (target, prefixed):
+                eids = entry.get("element_ids")
+                if eids is not None:
+                    return np.asarray(eids, dtype=np.int64)
+
+        # Tier 2 — element-side physical groups.
+        for entry in fem.elements.physical._groups.values():
+            entry_name = entry.get("name", "")
+            if entry_name == target:
+                eids = entry.get("element_ids")
+                if eids is not None:
+                    return np.asarray(eids, dtype=np.int64)
+
+        raise KeyError(
+            f"FEMDataSource.host_subelements_for: target {target!r} "
+            f"resolves to neither an element-side label (Tier 1) nor a "
+            f"physical group (Tier 2) in the current FEMData chain "
+            f"head.  Embedded hosts are element-side; pass a label or "
+            f"PG name that names a set of host elements."
+        )
 
     def _nodes_from_element_ids(self, eids: np.ndarray) -> np.ndarray:
         """Collect the union of node ids referenced by the given elements.

@@ -32,15 +32,25 @@ labels into node-id sets, then run the same pure-Python
 :class:`~apeGmsh._kernel.resolvers._constraint_resolver.ConstraintResolver`
 the build-phase path uses.  No gmsh state required.
 
-Deferred (v1.1-A.2)
-~~~~~~~~~~~~~~~~~~~
-``EmbeddedDef`` and ``TiedContactDef`` need element-connectivity and
-face-connectivity queries respectively — those require new
-:class:`FEMDataSource` methods (and, for tied-contact, synthesis of
-face connectivity from volume elements).  They continue to fall back
-to the bump-counter pattern; the def is stored on
-``constraint_defs`` but not applied to ``_fem`` until a build-phase
-``get_fem_data()`` re-extraction.
+Embedded (Compose v1.1-A.2 / ADR 0041)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``EmbeddedDef`` joined the chain-phase router in v1.1-A.2 via the new
+:meth:`FEMDataSource.host_subelements_for` element-side query.  The
+branch resolves the host to virtual sub-tet rows, gathers embedded
+nodes, drops coincident corners, and runs the same pure-numpy
+:meth:`ConstraintResolver.resolve_embedded` the build-phase path
+uses.  Output ``InterpolationRecord`` rows land on
+``fem.elements.constraints`` via ``with_constraint(record)``.
+
+Deferred (v1.1-A.2 follow-up — `TiedContactDef`)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``TiedContactDef`` needs face-connectivity synthesis (via
+``FEMDataSource.boundary_faces_for``) and ships in the v1.1-A.2
+follow-up PR.  It continues to fall back to the bump-counter pattern
+until then; the def is stored on ``constraint_defs`` but not applied
+to ``_fem`` until a build-phase re-extraction.
 """
 from __future__ import annotations
 
@@ -101,6 +111,7 @@ def route_def_to_fem(fem: "FEMData", defn) -> "FEMData | None":
     """
     from apeGmsh._kernel.defs.constraints import (
         BCDef,
+        EmbeddedDef,
         EqualDOFDef,
         RigidDiaphragmDef,
         RigidLinkDef,
@@ -199,6 +210,10 @@ def route_def_to_fem(fem: "FEMData", defn) -> "FEMData | None":
     if isinstance(defn, RigidDiaphragmDef):
         return _route_rigid_diaphragm(fem, source, defn)
 
+    # ── EmbeddedDef → InterpolationRecord(s) (Compose v1.1-A.2) ───
+    if isinstance(defn, EmbeddedDef):
+        return _route_embedded(fem, source, defn)
+
     # ── Unsupported def shape ─────────────────────────────────────
     return None
 
@@ -273,6 +288,67 @@ def _route_rigid_diaphragm(fem: "FEMData", source, defn) -> "FEMData":
     if not record.slave_nodes and record.master_node == 0:
         return fem
     return fem.with_constraint(record)
+
+
+def _route_embedded(fem: "FEMData", source, defn) -> "FEMData":
+    """Resolve ``EmbeddedDef`` against ``fem`` and append interpolation records.
+
+    Mirrors :meth:`ConstraintsComposite._resolve_embedded` over the
+    chain-phase ``FEMDataSource``: pulls Kuhn-decomposed sub-tets via
+    :meth:`FEMDataSource.host_subelements_for`, gathers embedded node
+    ids via :meth:`FEMDataSource.nodes_for`, drops embedded nodes that
+    coincide with host corners (already rigidly attached via shared
+    connectivity), then runs
+    :meth:`ConstraintResolver.resolve_embedded` — the same pure-numpy
+    resolver the build-phase path uses.
+
+    Returns the ``fem`` unchanged when no embedded nodes survive the
+    coincident-corner filter (no records to append).  Resolver-side
+    fail-louds (e.g. a slave node lying outside every host element)
+    propagate as :class:`ValueError` — chain-phase callers see the
+    same errors the build path raises.
+    """
+    from apeGmsh._kernel.resolvers._constraint_resolver import (
+        ConstraintResolver,
+    )
+
+    # Host sub-elements via the FEMDataSource Phase 2 method.  Raises
+    # KeyError for an unknown target — propagates to
+    # try_chain_phase_route, where the bump-counter fallback would
+    # have masked it before v1.1-A.2.  We keep the KeyError path
+    # consistent with the rest of the router (resolution failures
+    # surface only at extraction time).
+    host_elems = source.host_subelements_for(defn.master_label)
+
+    # Embedded nodes via the node-side resolution.  ``nodes_for``
+    # raises KeyError on unknown targets — same propagation contract.
+    embedded_nodes = {
+        int(t) for t in source.nodes_for(defn.slave_label)
+    }
+    if not embedded_nodes:
+        # Nothing to embed.  Skip cleanly — mirrors the build-phase
+        # contract where an empty embedded set is silent (the build
+        # path raises on no nodes from gmsh, but in chain phase the
+        # broker would have raised in nodes_for already).
+        return fem
+
+    # Drop embedded nodes that coincide with host corners — they're
+    # already rigidly attached via shared connectivity.  Build-phase
+    # parity: ``_resolve_embedded`` does the same dedup at
+    # ConstraintsComposite.py.
+    host_corner_nodes = {int(t) for t in np.unique(host_elems)}
+    embedded_nodes -= host_corner_nodes
+    if not embedded_nodes:
+        # Every embedded node was already a host corner — nothing to
+        # resolve, no records to append, fem unchanged.
+        return fem
+
+    resolver = _build_resolver(fem, ConstraintResolver)
+    records = resolver.resolve_embedded(defn, host_elems, embedded_nodes)
+    new_fem = fem
+    for rec in records:
+        new_fem = new_fem.with_constraint(rec)
+    return new_fem
 
 
 def _build_resolver(fem: "FEMData", resolver_cls):

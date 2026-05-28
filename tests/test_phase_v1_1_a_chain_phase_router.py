@@ -355,22 +355,37 @@ class TestRigidDiaphragmChainPhase:
 
 
 # ---------------------------------------------------------------------------
-# Pass 2 — Deferred defs (Embedded + TiedContact) still fall back
+# Pass 2 — TiedContact still on bump-counter; Embedded joined in v1.1-A.2
 # ---------------------------------------------------------------------------
 
 
 class TestDeferredDefsFallBackCleanly:
-    """v1.1-A only handles 3 of 5 defs.  The other 2 keep the bump-
-    counter contract: ``route_def_to_fem`` returns ``None``, callable
-    contract is preserved, def lands on ``constraint_defs``."""
+    """v1.1-A handles 3 of 5 defs; v1.1-A.2 added EmbeddedDef.
+    TiedContactDef remains on the bump-counter contract:
+    ``route_def_to_fem`` returns ``None``, callable contract is
+    preserved, def lands on ``constraint_defs``.
 
-    def test_embedded_route_returns_none(self) -> None:
+    The Embedded-specific chain-phase tests live in
+    ``tests/test_v1_1_a_2_embedded_chain_phase.py``; this class only
+    locks the *contract* surface that survived v1.1-A.2 (callable
+    contract for tied_contact + KeyError-swallow for missing host
+    targets in the node-only-PG fixture).
+    """
+
+    def test_embedded_against_node_only_fixture_raises_key_error(self) -> None:
+        """`route_def_to_fem` for EmbeddedDef now resolves the host
+        label element-side via ``FEMDataSource.host_subelements_for``.
+        Against a fixture that has only node-side PGs (``_colocated_fem``
+        is node-only), the host_label has no element-side record and
+        the function raises ``KeyError`` — same propagation path
+        ``try_chain_phase_route`` already catches."""
         fem = _colocated_fem()
         defn = EmbeddedDef(
             master_label="master_set", slave_label="slave_set",
             tolerance=1.0,
         )
-        assert route_def_to_fem(fem, defn) is None
+        with pytest.raises(KeyError):
+            route_def_to_fem(fem, defn)
 
     def test_tied_contact_route_returns_none(self) -> None:
         fem = _colocated_fem()
@@ -384,7 +399,11 @@ class TestDeferredDefsFallBackCleanly:
         self, tmp_path: Path,
     ) -> None:
         """g.constraints.embedded(...) remains callable post-compose
-        per ADR 0038 line 45 — def stored even though router skipped."""
+        per ADR 0038 line 45.  With the node-only-PG fixture the host
+        target resolves to no element-side records — the router's
+        ``KeyError`` is swallowed by ``try_chain_phase_route`` (same
+        as a missing label in v1.1-A); the def still lands on the
+        composite's ``constraint_defs``."""
         path = _save(_colocated_fem(), tmp_path)
         g = apeGmsh.from_h5(path)
         defn = g.constraints.embedded(
@@ -393,7 +412,8 @@ class TestDeferredDefsFallBackCleanly:
         )
         # Def stored on the composite's def list.
         assert defn in g.constraints.constraint_defs
-        # But no constraint record was applied to _fem (fallback path).
+        # No constraint record was applied — host_subelements_for
+        # raised KeyError, the router swallowed it, fem unchanged.
         assert len(list(g._fem.nodes.constraints)) == 0
         assert len(list(g._fem.elements.constraints)) == 0
 
