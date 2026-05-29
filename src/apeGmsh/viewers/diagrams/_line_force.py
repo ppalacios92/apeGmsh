@@ -4,16 +4,21 @@ Renders the classic textbook fill perpendicular to each beam axis,
 amplitude proportional to the value at the integration station, with
 linear interpolation between stations.
 
+Render seam (ADR 0042, R-B Wave 3 #1). The fill is emitted as a
+quad-cell :class:`MeshLayer` (solid fill colour, styled edges) through
+``self._backend``; the diagram holds no VTK objects.
+
 Performance contract:
 
 * Endpoint coordinates and per-station fill geometry are built **once
   at attach** from a step-0 read of the line-stations slab. The
-  topology — quads between adjacent stations — never changes.
-* Per-step update reads only the values, scatters them into the
-  per-station ordering computed at attach, and mutates the *top*
-  half of the polydata's points array in place.
-* The actor and PolyData object identities are stable across step
-  changes.
+  topology — quads between adjacent stations — never changes, so the
+  quad :class:`CellBlocks` is cached.
+* Per-step update reads only the values, recomputes the ``(2N, 3)``
+  points (top half = base + scale·value·dir), and emits through
+  ``backend.update_layer`` — its mesh fast path replaces the bound
+  dataset's points in place (the property-setter path VTK reliably
+  re-reads), keeping the actor + dataset identity stable across steps.
 
 Component-to-axis mapping defaults to the structural convention
 (``shear_y`` and ``bending_moment_z`` along ``y_local``; ``shear_z`` and
@@ -25,7 +30,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pyvista as pv
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
@@ -36,6 +40,7 @@ from ._beam_geometry import (
     station_position,
 )
 from ._styles import LineForceStyle
+from ..scene_ir import CellBlocks, ColorSpec, MeshLayer, PointSet
 
 if TYPE_CHECKING:
     from apeGmsh.results.Results import Results
@@ -58,8 +63,10 @@ class LineForceDiagram(Diagram):
         super().__init__(spec, results)
 
         # Populated by attach()
-        self._fill_polydata: Optional[pv.PolyData] = None
-        self._fill_actor: Any = None
+        self._handle: Any = None
+        self._layer: Optional[MeshLayer] = None
+        self._cells: Optional[CellBlocks] = None      # quad fill (stable)
+        self._current_points: Optional[ndarray] = None  # (2N, 3), per step
         self._n_stations: int = 0
         self._base_points: Optional[ndarray] = None
         self._fill_directions: Optional[ndarray] = None
@@ -178,7 +185,12 @@ class LineForceDiagram(Diagram):
             else style.fill_axis
         )
 
-        faces_list: list[int] = []
+        # Quad connectivity (n_quads, 4) into the (2N, 3) point block.
+        # Base points occupy rows [0, N); top points [N, 2N). Negative
+        # placeholders mark "this index lives in the top block" — patched
+        # to ``idx + running`` once the final N is known (same trick the
+        # old pyvista faces array used).
+        quads_list: list[list[int]] = []
         running = 0
         for eid in unique_eids:
             eid_int = int(eid)
@@ -218,17 +230,17 @@ class LineForceDiagram(Diagram):
                 for k in range(n - 1):
                     b_k = running + k
                     b_k1 = running + k + 1
-                    # Top indices live at offset n_total above the base
-                    # block — but the *final* offset is the value of
-                    # ``running`` after the loop. We patch it later.
-                    faces_list.extend([
-                        4, b_k, b_k1,
+                    # Top indices live at offset N above the base block —
+                    # but the *final* N is ``running`` after the loop.
+                    # Patch the placeholders below.
+                    quads_list.append([
+                        b_k, b_k1,
                         -(b_k1 + 1),    # placeholder, fixed up below
                         -(b_k + 1),
                     ])
             running += n
 
-        if running == 0 or not faces_list:
+        if running == 0 or not quads_list:
             return
 
         # Trim to actual count (in case some beams were skipped).
@@ -239,15 +251,11 @@ class LineForceDiagram(Diagram):
         station_xi = station_xi[:running]
 
         # Patch placeholder -(idx+1) -> idx + running (top index).
-        faces_arr = np.asarray(faces_list, dtype=np.int64)
-        mask = faces_arr < 0
-        faces_arr[mask] = -faces_arr[mask] - 1 + running
+        quads = np.asarray(quads_list, dtype=np.int64)
+        mask = quads < 0
+        quads[mask] = -quads[mask] - 1 + running
 
-        # Initial top points = base (zero magnitude); we update right after.
-        all_points = np.vstack([base_points, base_points.copy()])
-
-        polydata = pv.PolyData(all_points, faces_arr)
-        self._fill_polydata = polydata
+        self._cells = CellBlocks({"quad": quads})
         self._n_stations = running
         self._base_points = base_points
         self._fill_directions = fill_dirs
@@ -269,30 +277,14 @@ class LineForceDiagram(Diagram):
 
         # Apply step 0 values (initial display state; update_to_step
         # will refresh once the director's current step is pushed)
-        self._apply_values(np.asarray(slab.values[0], dtype=np.float64))
+        self._compute_points(np.asarray(slab.values[0], dtype=np.float64))
 
-        actor = plotter.add_mesh(
-            polydata,
-            color=style.fill_color,
-            opacity=style.opacity,
-            show_edges=style.show_edges,
-            edge_color=style.edge_color,
-            line_width=1,
-            lighting=False,
-            smooth_shading=False,
-            name=self._actor_name(),
-            reset_camera=False,
-            # Decorative overlay — picks should pass through to the
-            # substrate so node/element/shift-click resolve to the
-            # actual mesh, not to the fill quad in front of it.
-            pickable=False,
-        )
-        self._fill_actor = actor
-        self._actors = [actor]
+        self._layer = self._build_layer()
+        self._handle = self._backend.add_layer(self._layer)
         self._last_step = 0
 
     def update_to_step(self, step_index: int) -> None:
-        if self._fill_polydata is None or self._our_to_slab_index is None:
+        if self._handle is None or self._our_to_slab_index is None:
             return
         results = self._scoped_results()
         if results is None:
@@ -307,7 +299,8 @@ class LineForceDiagram(Diagram):
             return
         if slab.values.size == 0:
             return
-        self._apply_values(np.asarray(slab.values[0], dtype=np.float64))
+        self._compute_points(np.asarray(slab.values[0], dtype=np.float64))
+        self._push_update()
         self._last_step = int(step_index)
 
     def sync_substrate_points(
@@ -321,7 +314,7 @@ class LineForceDiagram(Diagram):
         values so the top-of-fill points refresh against the new bases.
         """
         if (
-            self._fill_polydata is None
+            self._handle is None
             or self._base_points is None
             or self._fill_directions is None
             or self._station_eid is None
@@ -371,14 +364,23 @@ class LineForceDiagram(Diagram):
 
         self._base_points = new_base
         self._fill_directions = new_dirs
-        # Re-applying the step rebuilds the full points array via
-        # _apply_values' property-setter assignment, which is what
-        # actually pushes the change through to the rendered actor.
+        # Re-applying the step recomputes the full points array and emits
+        # through the backend's points fast path, pushing the change to
+        # the rendered actor.
         self._reapply_last_step()
 
+    def set_visible(self, visible: bool) -> None:
+        self._visible = visible
+        if self._backend is not None and self._handle is not None:
+            self._backend.set_layer_visible(self._handle, bool(visible))
+
     def detach(self) -> None:
-        self._fill_polydata = None
-        self._fill_actor = None
+        if self._backend is not None and self._handle is not None:
+            self._backend.remove_layer(self._handle)
+        self._handle = None
+        self._layer = None
+        self._cells = None
+        self._current_points = None
         self._n_stations = 0
         self._base_points = None
         self._fill_directions = None
@@ -397,12 +399,12 @@ class LineForceDiagram(Diagram):
     def set_scale(self, scale: float) -> None:
         """Update the fill amplification factor; live re-render."""
         self._runtime_scale = float(scale)
-        if self._fill_polydata is not None:
+        if self._handle is not None:
             self._reapply_last_step()
 
     def set_flip_sign(self, flip: bool) -> None:
         self._runtime_flip = bool(flip)
-        if self._fill_polydata is not None:
+        if self._handle is not None:
             self._reapply_last_step()
 
     def set_fill_axis(
@@ -458,27 +460,48 @@ class LineForceDiagram(Diagram):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _actor_name(self) -> str:
-        return f"diagram_line_force_{id(self):x}"
+    def _layer_id(self) -> str:
+        return f"line_force_{id(self):x}"
+
+    def _build_layer(self) -> MeshLayer:
+        style: LineForceStyle = self.spec.style    # type: ignore[assignment]
+        assert self._cells is not None and self._current_points is not None
+        return MeshLayer(
+            layer_id=self._layer_id(),
+            points=PointSet(self._current_points),
+            cells=self._cells,
+            color=ColorSpec(mode="solid", solid_rgb=style.fill_color),
+            opacity=style.opacity,
+            show_edges=style.show_edges,
+            edge_color=style.edge_color,
+            # Decorative overlay — picks pass through to the substrate so
+            # node/element/shift-click resolve to the real mesh, not the
+            # fill quad in front of it.
+            pickable=False,
+        )
+
+    def _push_update(self) -> None:
+        if self._handle is None:
+            return
+        self._layer = self._build_layer()
+        # Topology stable → backend mesh fast path replaces the bound
+        # dataset's points in place (the property-setter path VTK reliably
+        # re-reads), keeping the actor + dataset identity stable.
+        self._backend.update_layer(self._handle, self._layer)
 
     def _reapply_last_step(self) -> None:
         # Re-fetch values for the current step. Cheap; one h5py read.
         self.update_to_step(self._last_step)
 
-    def _apply_values(self, slab_values: ndarray) -> None:
-        """Refresh the polydata points for the new step values.
+    def _compute_points(self, slab_values: ndarray) -> None:
+        """Recompute the full ``(2N, 3)`` points for the new step values.
 
-        Builds the full ``(2N, 3)`` points array and assigns through
-        the pyvista property setter so vtkPoints' data array is
-        replaced and MTime bumped — the same path DeformedShape uses.
-        In-place buffer mutation via ``np.asarray(...)[idx] = ...``
-        is fragile here because the actor was added with no scalars,
-        and the renderer occasionally caches the original points
-        without re-reading after a bare ``polydata.Modified()``.
+        Layout: ``[base_0..base_{N-1}, top_0..top_{N-1}]`` where each
+        top point = ``base + scale·value·fill_dir``. Stored in
+        ``self._current_points`` for the next layer emit.
         """
         if (
-            self._fill_polydata is None
-            or self._base_points is None
+            self._base_points is None
             or self._fill_directions is None
             or self._our_to_slab_index is None
         ):
@@ -496,13 +519,10 @@ class LineForceDiagram(Diagram):
         offsets = (scale * ours)[:, None] * self._fill_directions
         top_points = self._base_points + offsets
 
-        # Layout: [base_0..base_{n-1}, top_0..top_{n-1}]. Build the
-        # full block fresh and hand it to the property setter — this
-        # is what reliably propagates through the mapper.
         new_pts = np.empty((2 * self._n_stations, 3), dtype=np.float64)
         new_pts[: self._n_stations] = self._base_points
         new_pts[self._n_stations:] = top_points
-        self._fill_polydata.points = new_pts
+        self._current_points = new_pts
 
     def _scoped_results(self) -> "Optional[Results]":
         if self.spec.stage_id is not None:

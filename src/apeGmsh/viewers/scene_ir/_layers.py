@@ -201,6 +201,10 @@ class MeshLayer:
     visibility: VisibilityMask = field(default_factory=VisibilityMask)
     opacity: float = 1.0
     show_edges: bool = False
+    # Colour of the drawn edges (only meaningful when ``show_edges``).
+    # ``None`` leaves the backend default (black). A backend-resolvable
+    # colour string or rgb triple.
+    edge_color: Optional[Union[tuple, str]] = None
     silhouette: bool = False
     # Render the mesh as edges only (no filled faces) — the undeformed
     # "ghost" reference and similar overlays. A backend maps this to its

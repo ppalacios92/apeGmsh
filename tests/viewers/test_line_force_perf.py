@@ -108,14 +108,16 @@ def test_no_actor_re_creation_across_100_steps(
     )
     diagram.attach(headless_plotter, big_beam_results.fem, scene)
 
-    initial_actor = diagram._fill_actor
-    initial_poly = diagram._fill_polydata
+    handle = diagram._handle
+    initial_actor = handle.actor
+    initial_dataset = handle.dataset
 
     for step in range(100):
         diagram.update_to_step(step)
 
-    assert diagram._fill_actor is initial_actor
-    assert diagram._fill_polydata is initial_poly
+    assert diagram._handle is handle
+    assert handle.actor is initial_actor
+    assert handle.dataset is initial_dataset
 
 
 @pytest.mark.bench

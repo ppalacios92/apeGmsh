@@ -155,12 +155,12 @@ def test_attach_builds_polydata(beam_results, headless_plotter):
 
     n_total_stations = len(line_eids) * len(natural_coords)
     assert diagram._n_stations == n_total_stations
-    assert diagram._fill_polydata is not None
+    assert diagram._layer is not None
     # Layout: base + top -> 2 * n_stations points
-    assert diagram._fill_polydata.n_points == 2 * n_total_stations
+    assert diagram._layer.points.n_points == 2 * n_total_stations
     # Each beam contributes (n_stations - 1) quads
     expected_quads = len(line_eids) * (len(natural_coords) - 1)
-    assert diagram._fill_polydata.n_cells == expected_quads
+    assert diagram._layer.cells.n_cells == expected_quads
 
 
 def test_base_points_match_station_positions(
@@ -202,7 +202,7 @@ def test_top_points_match_value_at_step_0(
     # Component is bending_moment_z -> y_local fill
     # All beams along +X, default vecxz=+Z -> y_local = +Y
     # So top - base = scale * value * (0, 1, 0)
-    pts = np.asarray(diagram._fill_polydata.points)
+    pts = np.asarray(diagram._current_points)
     n = diagram._n_stations
     base = pts[:n]
     top = pts[n:]
@@ -227,11 +227,11 @@ def test_step_update_changes_top_points(
     # Re-fetch points after each step — _apply_values assigns through
     # the pyvista property setter (replaces vtkPoints' data array), so
     # a captured-once view goes stale.
-    pts0 = np.asarray(diagram._fill_polydata.points)
+    pts0 = np.asarray(diagram._current_points)
     diff_step0 = (pts0[n:] - pts0[:n]).copy()
 
     diagram.update_to_step(2)
-    pts2 = np.asarray(diagram._fill_polydata.points)
+    pts2 = np.asarray(diagram._current_points)
     diff_step2 = pts2[n:] - pts2[:n]
 
     # Different magnitudes at different steps
@@ -284,11 +284,11 @@ def test_set_scale_re_renders(beam_results, headless_plotter):
     diagram.attach(headless_plotter, results.fem, scene)
 
     n = diagram._n_stations
-    pts_before = np.asarray(diagram._fill_polydata.points)
+    pts_before = np.asarray(diagram._current_points)
     diff_before = (pts_before[n:] - pts_before[:n]).copy()
 
     diagram.set_scale(10.0)
-    pts_after = np.asarray(diagram._fill_polydata.points)
+    pts_after = np.asarray(diagram._current_points)
     diff_after = pts_after[n:] - pts_after[:n]
 
     np.testing.assert_allclose(diff_after, 10.0 * diff_before, atol=1e-9)
@@ -303,11 +303,11 @@ def test_set_flip_sign_inverts_offsets(
     diagram.attach(headless_plotter, results.fem, scene)
 
     n = diagram._n_stations
-    pts_before = np.asarray(diagram._fill_polydata.points)
+    pts_before = np.asarray(diagram._current_points)
     diff_before = (pts_before[n:] - pts_before[:n]).copy()
 
     diagram.set_flip_sign(True)
-    pts_after = np.asarray(diagram._fill_polydata.points)
+    pts_after = np.asarray(diagram._current_points)
     diff_after = pts_after[n:] - pts_after[:n]
 
     np.testing.assert_allclose(diff_after, -diff_before, atol=1e-10)
@@ -389,18 +389,20 @@ def test_actor_identity_stable_across_steps(
     diagram = LineForceDiagram(_make_spec(scale=1.0), results)
     diagram.attach(headless_plotter, results.fem, scene)
 
-    initial_actor = diagram._fill_actor
-    initial_poly = diagram._fill_polydata
-    initial_actor_id = id(initial_actor)
-    initial_poly_id = id(initial_poly)
+    # Post-migration (ADR 0042): the backend owns the actor; the diagram
+    # holds a layer handle. The mesh fast path replaces the bound
+    # dataset's points in place, so handle.actor + handle.dataset are the
+    # same objects across all steps (no per-step re-add).
+    handle = diagram._handle
+    initial_actor = handle.actor
+    initial_dataset = handle.dataset
 
     for step in range(3):
         diagram.update_to_step(step)
 
-    assert diagram._fill_actor is initial_actor
-    assert id(diagram._fill_actor) == initial_actor_id
-    assert diagram._fill_polydata is initial_poly
-    assert id(diagram._fill_polydata) == initial_poly_id
+    assert diagram._handle is handle
+    assert handle.actor is initial_actor
+    assert handle.dataset is initial_dataset
 
 
 def test_sync_substrate_points_follows_deformation(
@@ -424,7 +426,7 @@ def test_sync_substrate_points_follows_deformation(
     diagram.update_to_step(2)
 
     n = diagram._n_stations
-    pts_before = np.asarray(diagram._fill_polydata.points).copy()
+    pts_before = np.asarray(diagram._current_points).copy()
     base_before = pts_before[:n].copy()
 
     # Synthesize a deformation: shift every substrate point +Y by 5.
@@ -432,7 +434,7 @@ def test_sync_substrate_points_follows_deformation(
     target[:, 1] += 5.0
     diagram.sync_substrate_points(target, scene)
 
-    pts_after = np.asarray(diagram._fill_polydata.points)
+    pts_after = np.asarray(diagram._current_points)
     base_after = pts_after[:n]
     # Bases all moved by +5 in Y — every station endpoint sampled the
     # warped substrate.
@@ -459,7 +461,7 @@ def test_actor_is_not_pickable(beam_results, headless_plotter):
     scene = build_fem_scene(results.fem)
     diagram = LineForceDiagram(_make_spec(scale=1.0), results)
     diagram.attach(headless_plotter, results.fem, scene)
-    assert diagram._fill_actor.GetPickable() == 0
+    assert diagram._handle.actor.GetPickable() == 0
 
 
 # =====================================================================
@@ -472,8 +474,8 @@ def test_detach_clears_state(beam_results, headless_plotter):
     diagram = LineForceDiagram(_make_spec(scale=1.0), results)
     diagram.attach(headless_plotter, results.fem, scene)
     diagram.detach()
-    assert diagram._fill_polydata is None
-    assert diagram._fill_actor is None
+    assert diagram._layer is None
+    assert diagram._handle is None
     assert diagram._n_stations == 0
     assert not diagram.is_attached
 
@@ -504,11 +506,11 @@ def test_elastic_frame_attach_builds_polydata(
     scene = build_fem_scene(scoped.fem)
     diagram = LineForceDiagram(_make_spec("bending_moment_z"), scoped)
     diagram.attach(headless_plotter, scoped.fem, scene)
-    assert diagram._fill_polydata is not None
+    assert diagram._layer is not None
     # 11 elements × 2 stations × 2 (base + top points) = 44 vertices
-    assert diagram._fill_polydata.n_points == 44
+    assert diagram._layer.points.n_points == 44
     # 11 elements × 1 quad per element (2 stations → 1 quad fill)
-    assert diagram._fill_polydata.n_cells == 11
+    assert diagram._layer.cells.n_cells == 11
 
 
 def test_elastic_frame_axial_force_diagram(
@@ -523,6 +525,6 @@ def test_elastic_frame_axial_force_diagram(
     diagram = LineForceDiagram(_make_spec("axial_force"), scoped)
     diagram.attach(headless_plotter, scoped.fem, scene)
     # Mutate to last step — must not raise and must keep actor identity.
-    initial_poly = diagram._fill_polydata
+    initial_handle = diagram._handle
     diagram.update_to_step(scoped.stages[0].n_steps - 1)
-    assert diagram._fill_polydata is initial_poly
+    assert diagram._handle is initial_handle

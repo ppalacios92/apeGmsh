@@ -384,6 +384,8 @@ class PyVistaQtBackend:
         if layer.point_size is not None:
             kwargs["point_size"] = layer.point_size
             kwargs["render_points_as_spheres"] = layer.render_points_as_spheres
+        if layer.show_edges and layer.edge_color is not None:
+            kwargs["edge_color"] = layer.edge_color
         color = layer.color
         if color.mode == "solid":
             kwargs["color"] = color.solid_rgb
