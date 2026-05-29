@@ -154,6 +154,61 @@ if TYPE_CHECKING:
 
 
 # =====================================================================
+# Composed-model tag translation (ADR 0043 slice 1.3 follow-up)
+# =====================================================================
+#
+# Element-level capturers query the live ops domain with the resolved
+# record's ``element_ids`` — which are mesh ``fem_eid``s. For a composed
+# model (ADR 0038) the ops element tag is allocator-assigned and differs
+# from ``fem_eid``, so ``ops.eleType(fem_eid)`` / ``ops.eleResponse(...)``
+# would hit the wrong element (or none). We translate the record's
+# ``element_ids`` fem→ops ONCE per capturer so every internal ops query
+# transparently uses the right tag, then relabel the captured
+# ``element_index`` ops→fem at ``write_to`` (native result files are
+# fem_eid-keyed by contract — see the MPCO read-join in ADR 0043 slice
+# 1.3). The translator is built only for a composed model and is ``None``
+# otherwise, so non-composed capture is byte-identical.
+
+
+def _record_eids_to_ops(
+    record: "ResolvedDomainCaptureRecord", tag_map: Any,
+) -> "ResolvedDomainCaptureRecord":
+    """Return ``record`` with ``element_ids`` translated fem→ops.
+
+    No-op (returns the record unchanged) when ``tag_map`` is ``None`` or
+    the record carries no ``element_ids``.
+    """
+    if tag_map is None or getattr(record, "element_ids", None) is None:
+        return record
+    from dataclasses import replace
+    return replace(record, element_ids=tag_map.to_ops(record.element_ids))
+
+
+def _index_to_fem(arr: ndarray, tag_map: Any) -> ndarray:
+    """Relabel a captured ops-keyed ``element_index`` back to ``fem_eid``s."""
+    return arr if tag_map is None else tag_map.to_fem(arr)
+
+
+def _maybe_build_capture_tag_map(model_h5_path: Any) -> Any:
+    """Build an :class:`ElementTagTranslator` from a model.h5, or ``None``.
+
+    Returns ``None`` for an uncomposed model (ops tag == fem_eid by
+    allocator construction → translation is a no-op) or on any failure to
+    read the model — capture then behaves exactly as before this slice.
+    """
+    try:
+        from ...opensees.opensees_model import OpenSeesModel
+        from ..readers._tag_translation import ElementTagTranslator
+
+        model = OpenSeesModel.from_h5(str(model_h5_path))
+        if len(model.fem.composed_from) == 0:
+            return None
+        return ElementTagTranslator.from_model(model)
+    except Exception:
+        return None
+
+
+# =====================================================================
 # Canonical → openseespy call mapping (nodal)
 # =====================================================================
 
@@ -295,9 +350,15 @@ class DomainCapture:
         *,
         ops: Any = None,
         bridge: Any = None,
+        tag_map: Any = None,
     ) -> None:
         self._spec = spec
         self._path = Path(path)
+        # ADR 0043 slice 1.3 follow-up — fem_eid↔ops-tag translator for a
+        # composed model. ``None`` (uncomposed / no model) ⇒ no
+        # translation. Set here when supplied (``from_h5``); otherwise
+        # built from the bridge sidecar at ``__enter__``.
+        self._tag_map = tag_map
         self._fem = fem
         # Per Phase 9 D8 ``ndm`` / ``ndf`` ride on the resolved spec —
         # set at resolve time by ``ops.domain_capture`` (live bridge)
@@ -358,6 +419,12 @@ class DomainCapture:
             model_h5_src = self._path.with_suffix(".model.h5")
             self._bridge.h5(str(model_h5_src))
             self._model_h5_sidecar = model_h5_src
+            # ADR 0043 slice 1.3 follow-up — for a composed model the live
+            # ops domain's element tags differ from the record's fem_eids;
+            # build the translator from the freshly-written sidecar (which
+            # carries element_meta) so capturers query the right ops tags.
+            if self._tag_map is None:
+                self._tag_map = _maybe_build_capture_tag_map(model_h5_src)
 
         self._writer.open(
             fem=self._fem,
@@ -376,19 +443,31 @@ class DomainCapture:
             elif rec.category == "modal":
                 pass    # captured separately via capture_modes()
             elif rec.category == "gauss":
-                self._gauss_capturers.append(_GaussCapturer(rec))
+                self._gauss_capturers.append(
+                    _GaussCapturer(rec, tag_map=self._tag_map),
+                )
             elif rec.category == "line_stations":
                 self._line_station_capturers.append(
-                    _LineStationCapturer(rec),
+                    _LineStationCapturer(rec, tag_map=self._tag_map),
                 )
             elif rec.category == "elements":
                 self._nodal_force_capturers.append(
-                    _NodalForcesCapturer(rec),
+                    _NodalForcesCapturer(rec, tag_map=self._tag_map),
                 )
             elif rec.category == "fibers":
-                self._fiber_capturers.append(_FiberCapturer(rec))
+                self._fiber_capturers.append(
+                    _FiberCapturer(rec, tag_map=self._tag_map),
+                )
             elif rec.category == "layers":
-                self._layer_capturers.append(_LayerCapturer(rec, self._fem))
+                # NOTE: the layer capturer indexes the fem-keyed
+                # ``element_to_section`` metadata by element id, so the
+                # translate-record-to-ops shortcut the other capturers use
+                # would break it. Composed-model layered-shell capture is
+                # a rare combo; deferred (tag_map not passed ⇒ record stays
+                # fem, behaviour unchanged). See ADR 0043 §slice 1.3.
+                self._layer_capturers.append(
+                    _LayerCapturer(rec, self._fem),
+                )
             else:
                 self._element_level_records.append(rec)
         return self
@@ -494,7 +573,12 @@ class DomainCapture:
         resolved = spec._resolve_with_explicit_ndm_ndf(
             fem, ndm=ndm, ndf=ndf,
         )
-        return cls(resolved, output, fem, ops=ops)
+        # ADR 0043 slice 1.3 follow-up — when the model.h5 is composed,
+        # build the fem_eid↔ops-tag translator so capturers query the
+        # live ops domain with the right tags. ``None`` for an uncomposed
+        # model (translation would be a no-op).
+        tag_map = _maybe_build_capture_tag_map(model_path)
+        return cls(resolved, output, fem, ops=ops, tag_map=tag_map)
 
     # ------------------------------------------------------------------
     # Stage lifecycle
@@ -858,8 +942,11 @@ class DomainCapture:
 class _NodesCapturer:
     """Buffers values for one ``ResolvedDomainCaptureRecord`` (category=nodes)."""
 
-    def __init__(self, record: "ResolvedDomainCaptureRecord") -> None:
-        self._rec = record
+    def __init__(
+        self, record: "ResolvedDomainCaptureRecord", tag_map: Any = None,
+    ) -> None:
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._times: list[float] = []
         # Pre-resolve canonical → (ops_fn, dof_or_None) per component.
         self._call_specs: list[tuple[str, str, Optional[int]]] = []
@@ -940,8 +1027,11 @@ class _GaussCapturer:
     with a tracked reason.
     """
 
-    def __init__(self, record: "ResolvedDomainCaptureRecord") -> None:
-        self._rec = record
+    def __init__(
+        self, record: "ResolvedDomainCaptureRecord", tag_map: Any = None,
+    ) -> None:
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._times: list[float] = []
         tokens = _gauss_record_tokens(record)
         if tokens is None:
@@ -1060,7 +1150,9 @@ class _GaussCapturer:
                 group_id=f"{self._rec.name}_{class_name}_{i}",
                 class_tag=grp.layout.class_tag,
                 int_rule=_int_rule,
-                element_index=np.array(grp.element_ids, dtype=np.int64),
+                element_index=_index_to_fem(
+                    np.array(grp.element_ids, dtype=np.int64), self._tag_map,
+                ),
                 natural_coords=grp.layout.natural_coords,
                 components=decoded,
             )
@@ -1137,8 +1229,11 @@ class _LineStationCapturer:
 
     _GP_X_SIGNATURE_DECIMALS = 10
 
-    def __init__(self, record: "ResolvedDomainCaptureRecord") -> None:
-        self._rec = record
+    def __init__(
+        self, record: "ResolvedDomainCaptureRecord", tag_map: Any = None,
+    ) -> None:
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._times: list[float] = []
         # Built on first step; key is (class_name, gp_x_sig, section_codes).
         self._groups: Optional[
@@ -1411,7 +1506,9 @@ class _LineStationCapturer:
                 group_id=f"{self._rec.name}_{class_name}_{i}",
                 class_tag=grp.layout.class_tag,
                 int_rule=IntRule.Custom,
-                element_index=np.array(grp.element_ids, dtype=np.int64),
+                element_index=_index_to_fem(
+                    np.array(grp.element_ids, dtype=np.int64), self._tag_map,
+                ),
                 station_natural_coord=grp.gp_x,
                 components=decoded,
             )
@@ -1451,8 +1548,11 @@ class _NodalForcesCapturer:
     are tracked in ``skipped_elements``.
     """
 
-    def __init__(self, record: "ResolvedDomainCaptureRecord") -> None:
-        self._rec = record
+    def __init__(
+        self, record: "ResolvedDomainCaptureRecord", tag_map: Any = None,
+    ) -> None:
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._times: list[float] = []
         # Derive (ops_keyword, catalog_token) once from the record's
         # components. v1 requires homogeneous frame within one record.
@@ -1566,7 +1666,9 @@ class _NodalForcesCapturer:
                 group_id=f"{self._rec.name}_{class_name}_{i}",
                 class_tag=grp.layout.class_tag,
                 frame=grp.layout.frame,
-                element_index=np.array(grp.element_ids, dtype=np.int64),
+                element_index=_index_to_fem(
+                    np.array(grp.element_ids, dtype=np.int64), self._tag_map,
+                ),
                 components=decoded,
             )
 
@@ -1627,8 +1729,11 @@ class _FiberCapturer:
     classes are tracked in ``skipped_elements``.
     """
 
-    def __init__(self, record: "ResolvedDomainCaptureRecord") -> None:
-        self._rec = record
+    def __init__(
+        self, record: "ResolvedDomainCaptureRecord", tag_map: Any = None,
+    ) -> None:
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._times: list[float] = []
         comps = set(record.components)
         self._want_stress = "fiber_stress" in comps
@@ -1788,8 +1893,9 @@ class _FiberCapturer:
                 group_id=f"{self._rec.name}_{class_name}_{i}",
                 section_tag=-1,
                 section_class="(domain_capture)",
-                element_index=np.asarray(
-                    grp.element_index, dtype=np.int64,
+                element_index=_index_to_fem(
+                    np.asarray(grp.element_index, dtype=np.int64),
+                    self._tag_map,
                 ),
                 gp_index=np.asarray(grp.gp_index, dtype=np.int64),
                 y=np.asarray(grp.y, dtype=np.float64),
@@ -1873,6 +1979,7 @@ class _LayerCapturer:
         self,
         record: "ResolvedDomainCaptureRecord",
         fem: "FEMData",
+        tag_map: Any = None,
     ) -> None:
         meta = record.layer_section_metadata
         if meta is None:
@@ -1882,7 +1989,8 @@ class _LayerCapturer:
                 f"``Recorders(opensees=ops).resolve(fem)`` so the "
                 f"OpenSees back-reference can populate it."
             )
-        self._rec = record
+        self._rec = _record_eids_to_ops(record, tag_map)
+        self._tag_map = tag_map
         self._fem = fem
         self._meta = meta
         self._times: list[float] = []
