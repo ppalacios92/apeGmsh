@@ -2,14 +2,19 @@
 
 Renders BOTH ``reaction_force_*`` and ``reaction_moment_*`` from the
 nodes composite of the stage-scoped Results. Forces are drawn with
-straight arrows (``pv.Arrow``); moments with the curved-arrow glyph
-from :mod:`..overlays.moment_glyph`. Each family auto-fits its own
-scale because forces and torques have different units — coupling
-them would distort one of the two.
+straight arrow glyphs; moments with the curved-arrow ``kind="moment"``
+glyph. Each family auto-fits its own scale because forces and torques
+have different units — coupling them would distort one of the two.
+
+Render seam (ADR 0042, R-B Wave 3 #2). Each family emits one
+:class:`GlyphLayer` through ``self._backend``; the diagram holds no VTK
+objects. The moment family uses the additive ``kind="moment"`` glyph —
+the curved-arrow geometry (and its ``arc_degrees``) is built backend-
+side, so the diagram only carries the arc spec on the IR.
 
 Unlike :class:`LoadsDiagram`, reactions ARE step-resolved (the
 recorder writes them per step), so ``update_to_step`` re-reads the
-slabs and rebuilds the glyphs — same pattern as
+slabs and re-emits the glyph layers — same pattern as
 :class:`VectorGlyphDiagram`.
 
 Auto-filter: at attach, the global ``(T, N)`` magnitude slab is
@@ -25,11 +30,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pyvista as pv
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
 from ._styles import ReactionsStyle
+from ..scene_ir import ColorSpec, GlyphLayer, PointSet
 
 if TYPE_CHECKING:
     from apeGmsh.results.Results import Results
@@ -61,24 +66,29 @@ _AXIS_FROM_COMPONENT: dict[str, Optional[int]] = {
 }
 
 
-class _GlyphLayer:
+class _Family:
     """Per-family render state (force or moment).
 
-    Encapsulates the source PolyData + actor + cached substrate
-    indices + the FEM ids feeding the slab read. Detach is the
-    caller's job — the layer doesn't own a plotter reference.
+    Holds the emitted :class:`GlyphLayer` + backend handle + cached
+    substrate indices, FEM ids, world coords, and the current step's
+    vectors. No VTK objects. Detach is the caller's job.
     """
 
     __slots__ = (
-        "source", "actor", "fem_ids", "substrate_idx",
-        "initial_scale", "runtime_scale",
+        "handle", "layer", "fem_ids", "substrate_idx", "coords", "vecs",
+        "color", "geom_kind", "suffix", "initial_scale", "runtime_scale",
     )
 
     def __init__(self) -> None:
-        self.source: Optional[pv.PolyData] = None
-        self.actor: Any = None
+        self.handle: Any = None
+        self.layer: Optional[GlyphLayer] = None
         self.fem_ids: Optional[ndarray] = None
         self.substrate_idx: Optional[ndarray] = None
+        self.coords: Optional[ndarray] = None
+        self.vecs: Optional[ndarray] = None
+        self.color: str = "#FFFFFF"
+        self.geom_kind: str = "arrow"
+        self.suffix: str = "force"
         self.initial_scale: float = 1.0
         self.runtime_scale: Optional[float] = None
 
@@ -91,10 +101,12 @@ class _GlyphLayer:
         )
 
     def clear(self) -> None:
-        self.source = None
-        self.actor = None
+        self.handle = None
+        self.layer = None
         self.fem_ids = None
         self.substrate_idx = None
+        self.coords = None
+        self.vecs = None
 
 
 class ReactionsDiagram(Diagram):
@@ -110,8 +122,8 @@ class ReactionsDiagram(Diagram):
                 f"got {type(spec.style).__name__}."
             )
         super().__init__(spec, results)
-        self._force = _GlyphLayer()
-        self._moment = _GlyphLayer()
+        self._force = _Family()
+        self._moment = _Family()
         comp = getattr(spec.selector, "component", "") or ""
         self._axis: Optional[int] = _AXIS_FROM_COMPONENT.get(comp, None)
 
@@ -142,7 +154,7 @@ class ReactionsDiagram(Diagram):
             return
 
         if style.show_forces:
-            self._build_layer(
+            self._build_family(
                 self._force,
                 node_ids,
                 _REACTION_FORCE_COMPONENTS,
@@ -151,14 +163,13 @@ class ReactionsDiagram(Diagram):
                 color=style.force_color,
                 geom_kind="arrow",
                 style=style,
-                plotter=plotter,
                 scene=scene,
-                actor_suffix="force",
+                suffix="force",
             )
         # Axis-locked modes show forces only — three curved-arrow
         # glyphs alongside an axis-aligned force read as visual noise.
         if style.show_moments and self._axis is None:
-            self._build_layer(
+            self._build_family(
                 self._moment,
                 node_ids,
                 _REACTION_MOMENT_COMPONENTS,
@@ -167,40 +178,22 @@ class ReactionsDiagram(Diagram):
                 color=style.moment_color,
                 geom_kind="moment",
                 style=style,
-                plotter=plotter,
                 scene=scene,
-                actor_suffix="moment",
+                suffix="moment",
             )
 
-        actors = [
-            layer.actor for layer in (self._force, self._moment)
-            if layer.actor is not None
-        ]
-        self._actors = actors
-
     def update_to_step(self, step_index: int) -> None:
-        for layer, comps, geom_kind in (
-            (self._force, _REACTION_FORCE_COMPONENTS, "arrow"),
-            (self._moment, _REACTION_MOMENT_COMPONENTS, "moment"),
+        for family, comps in (
+            (self._force, _REACTION_FORCE_COMPONENTS),
+            (self._moment, _REACTION_MOMENT_COMPONENTS),
         ):
-            if layer.source is None or layer.actor is None:
+            if family.handle is None:
                 continue
-            vecs = self._read_vectors(layer.fem_ids, comps, int(step_index))
+            vecs = self._read_vectors(family.fem_ids, comps, int(step_index))
             if vecs is None:
                 continue
-            layer.source.point_data["_vec"][:] = vecs
-            layer.source.point_data["_mag"][:] = np.linalg.norm(vecs, axis=1)
-            try:
-                layer.source.Modified()
-            except Exception:
-                pass
-            glyph = self._build_glyph(layer, geom_kind)
-            try:
-                mapper = layer.actor.GetMapper()
-                mapper.SetInputData(glyph)
-                mapper.Modified()
-            except Exception:
-                pass
+            family.vecs = vecs
+            self._rebuild_and_push(family)
 
     def sync_substrate_points(
         self, deformed_pts: "ndarray | None", scene: "FEMSceneData",
@@ -214,26 +207,28 @@ class ReactionsDiagram(Diagram):
             )
         except Exception:
             return
-        for layer, geom_kind in (
-            (self._force, "arrow"),
-            (self._moment, "moment"),
-        ):
-            if (
-                layer.source is None
-                or layer.actor is None
-                or layer.substrate_idx is None
-            ):
+        for family in (self._force, self._moment):
+            if family.handle is None or family.substrate_idx is None:
                 continue
             try:
-                layer.source.points = target_pts[layer.substrate_idx]
-                glyph = self._build_glyph(layer, geom_kind)
-                mapper = layer.actor.GetMapper()
-                mapper.SetInputData(glyph)
-                mapper.Modified()
+                family.coords = target_pts[family.substrate_idx]
             except Exception:
-                pass
+                continue
+            self._rebuild_and_push(family)
+
+    def set_visible(self, visible: bool) -> None:
+        self._visible = visible
+        if self._backend is None:
+            return
+        for family in (self._force, self._moment):
+            if family.handle is not None:
+                self._backend.set_layer_visible(family.handle, bool(visible))
 
     def detach(self) -> None:
+        if self._backend is not None:
+            for family in (self._force, self._moment):
+                if family.handle is not None:
+                    self._backend.remove_layer(family.handle)
         self._force.clear()
         self._moment.clear()
         super().detach()
@@ -243,22 +238,15 @@ class ReactionsDiagram(Diagram):
     # ------------------------------------------------------------------
 
     def set_force_scale(self, scale: float) -> None:
-        self._set_scale(self._force, "arrow", scale)
+        self._set_scale(self._force, scale)
 
     def set_moment_scale(self, scale: float) -> None:
-        self._set_scale(self._moment, "moment", scale)
+        self._set_scale(self._moment, scale)
 
-    def _set_scale(
-        self, layer: _GlyphLayer, geom_kind: str, scale: float,
-    ) -> None:
-        layer.runtime_scale = float(scale)
-        if layer.source is not None and layer.actor is not None:
-            try:
-                glyph = self._build_glyph(layer, geom_kind)
-                layer.actor.GetMapper().SetInputData(glyph)
-                layer.actor.GetMapper().Modified()
-            except Exception:
-                pass
+    def _set_scale(self, family: _Family, scale: float) -> None:
+        family.runtime_scale = float(scale)
+        if family.handle is not None:
+            self._rebuild_and_push(family)
 
     def current_force_scale(self) -> float:
         return self._force.current_scale
@@ -270,9 +258,9 @@ class ReactionsDiagram(Diagram):
     # Internal — build one family's actor
     # ------------------------------------------------------------------
 
-    def _build_layer(
+    def _build_family(
         self,
-        layer: _GlyphLayer,
+        family: _Family,
         node_ids: ndarray,
         components: tuple[str, str, str],
         *,
@@ -281,11 +269,10 @@ class ReactionsDiagram(Diagram):
         color: str,
         geom_kind: str,
         style: ReactionsStyle,
-        plotter: Any,
         scene: "FEMSceneData",
-        actor_suffix: str,
+        suffix: str,
     ) -> None:
-        """Read full slab → filter zero rows → build PolyData + actor."""
+        """Read full slab → filter zero rows → emit a GlyphLayer."""
         full_vecs = self._read_vectors_all_steps(node_ids, components)
         if full_vecs is None or full_vecs.size == 0:
             return
@@ -313,41 +300,33 @@ class ReactionsDiagram(Diagram):
 
         coords = np.asarray(scene.grid.points)[substrate_idx].copy()
         n = kept_ids.size
-        source = pv.PolyData(coords)
-        source.point_data["_vec"] = np.zeros((n, 3), dtype=np.float64)
-        source.point_data["_mag"] = np.zeros(n, dtype=np.float64)
-        layer.source = source
-        layer.fem_ids = kept_ids.astype(np.int64)
-        layer.substrate_idx = substrate_idx.copy()
+        family.fem_ids = kept_ids.astype(np.int64)
+        family.substrate_idx = substrate_idx.copy()
+        family.coords = coords
+        family.color = color
+        family.geom_kind = geom_kind
+        family.suffix = suffix
 
         # Step-0 vectors for the initial render.
-        vecs0 = self._read_vectors(layer.fem_ids, components, 0)
-        if vecs0 is not None:
-            source.point_data["_vec"][:] = vecs0
-            source.point_data["_mag"][:] = np.linalg.norm(vecs0, axis=1)
+        vecs0 = self._read_vectors(family.fem_ids, components, 0)
+        family.vecs = (
+            vecs0 if vecs0 is not None
+            else np.zeros((n, 3), dtype=np.float64)
+        )
 
         # Auto-fit against the worst step in the time-history.
         if user_scale is None:
             if global_max > 0.0 and scene.model_diagonal > 0.0:
-                layer.initial_scale = (
+                family.initial_scale = (
                     auto_fraction * scene.model_diagonal / global_max
                 )
             else:
-                layer.initial_scale = 1.0
+                family.initial_scale = 1.0
         else:
-            layer.initial_scale = float(user_scale)
+            family.initial_scale = float(user_scale)
 
-        glyph = self._build_glyph(layer, geom_kind)
-        actor = plotter.add_mesh(
-            glyph,
-            name=self._actor_name(actor_suffix),
-            color=color,
-            reset_camera=False,
-            lighting=False,
-            pickable=False,
-            show_scalar_bar=False,
-        )
-        layer.actor = actor
+        family.layer = self._build_family_layer(family)
+        family.handle = self._backend.add_layer(family.layer)
 
     # ------------------------------------------------------------------
     # Internal — slab reads
@@ -454,28 +433,36 @@ class ReactionsDiagram(Diagram):
     # Internal — glyph build
     # ------------------------------------------------------------------
 
-    def _actor_name(self, suffix: str) -> str:
-        return f"diagram_reactions_{id(self):x}_{suffix}"
+    def _layer_id(self, suffix: str) -> str:
+        return f"reactions_{id(self):x}_{suffix}"
 
-    def _build_glyph(
-        self, layer: _GlyphLayer, geom_kind: str,
-    ) -> pv.PolyData:
-        if layer.source is None:
-            return pv.PolyData()
+    def _build_family_layer(self, family: _Family) -> GlyphLayer:
+        """Build the family's GlyphLayer from its cached coords + vectors.
+
+        Glyph **size** = ``|vec| × scale`` (folded into ``scales``);
+        orientation = the raw reaction vector. The moment family uses
+        the curved-arrow ``kind="moment"`` glyph; the backend builds its
+        geometry from ``arc_degrees``.
+        """
         style: ReactionsStyle = self.spec.style    # type: ignore[assignment]
-        try:
-            if geom_kind == "moment":
-                from ..overlays.moment_glyph import make_moment_glyph
-                geom = make_moment_glyph(
-                    arc_degrees=float(style.moment_arc_degrees),
-                )
-            else:
-                geom = pv.Arrow(tip_length=style.arrow_tip_fraction)
-            return layer.source.glyph(
-                orient="_vec",
-                scale="_mag",
-                factor=float(layer.current_scale),
-                geom=geom,
-            )
-        except Exception:
-            return pv.PolyData(np.asarray(layer.source.points))
+        assert family.coords is not None and family.vecs is not None
+        vecs = family.vecs
+        mags = np.linalg.norm(vecs, axis=1)
+        kind = "moment" if family.geom_kind == "moment" else "arrow"
+        return GlyphLayer(
+            layer_id=self._layer_id(family.suffix),
+            positions=PointSet(family.coords),
+            kind=kind,
+            orientations=vecs,
+            scales=mags * float(family.current_scale),
+            color=ColorSpec(mode="solid", solid_rgb=family.color),
+            arc_degrees=(
+                float(style.moment_arc_degrees) if kind == "moment" else None
+            ),
+        )
+
+    def _rebuild_and_push(self, family: _Family) -> None:
+        if family.handle is None or self._backend is None:
+            return
+        family.layer = self._build_family_layer(family)
+        self._backend.update_layer(family.handle, family.layer)

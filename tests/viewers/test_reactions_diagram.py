@@ -124,13 +124,16 @@ def test_attach_builds_force_and_moment_layers(reactions_results, headless_plott
     diagram.attach(headless_plotter, reactions_results.fem, scene)
 
     # Force family: only node 0 has a non-zero reaction → 1 row.
-    assert diagram._force.source is not None
-    assert diagram._force.source.n_points == 1
+    assert diagram._force.layer is not None
+    assert diagram._force.layer.positions.n_points == 1
+    assert diagram._force.layer.kind == "arrow"
     # Moment family: only node 1 → 1 row.
-    assert diagram._moment.source is not None
-    assert diagram._moment.source.n_points == 1
-    # Both actors registered.
-    assert len(diagram._actors) == 2
+    assert diagram._moment.layer is not None
+    assert diagram._moment.layer.positions.n_points == 1
+    assert diagram._moment.layer.kind == "moment"
+    # Both families emitted a layer (have a backend handle).
+    assert diagram._force.handle is not None
+    assert diagram._moment.handle is not None
 
 
 def test_force_only_disables_moment_layer(reactions_results, headless_plotter):
@@ -139,9 +142,10 @@ def test_force_only_disables_moment_layer(reactions_results, headless_plotter):
         _spec(ReactionsStyle(show_moments=False)), reactions_results,
     )
     diagram.attach(headless_plotter, reactions_results.fem, scene)
-    assert diagram._force.source is not None
-    assert diagram._moment.source is None
-    assert len(diagram._actors) == 1
+    assert diagram._force.layer is not None
+    assert diagram._moment.layer is None
+    assert diagram._force.handle is not None
+    assert diagram._moment.handle is None
 
 
 def test_moment_only_disables_force_layer(reactions_results, headless_plotter):
@@ -150,9 +154,10 @@ def test_moment_only_disables_force_layer(reactions_results, headless_plotter):
         _spec(ReactionsStyle(show_forces=False)), reactions_results,
     )
     diagram.attach(headless_plotter, reactions_results.fem, scene)
-    assert diagram._force.source is None
-    assert diagram._moment.source is not None
-    assert len(diagram._actors) == 1
+    assert diagram._force.layer is None
+    assert diagram._moment.layer is not None
+    assert diagram._force.handle is None
+    assert diagram._moment.handle is not None
 
 
 def test_step_update_rescales_vectors(reactions_results, headless_plotter):
@@ -161,29 +166,27 @@ def test_step_update_rescales_vectors(reactions_results, headless_plotter):
     diagram = ReactionsDiagram(_spec(), reactions_results)
     diagram.attach(headless_plotter, reactions_results.fem, scene)
 
-    vecs0 = np.asarray(diagram._force.source.point_data["_vec"]).copy()
+    vecs0 = np.asarray(diagram._force.layer.orientations).copy()
     diagram.update_to_step(3)
-    vecs3 = np.asarray(diagram._force.source.point_data["_vec"])
+    vecs3 = np.asarray(diagram._force.layer.orientations)
     # step 0: (10, -5, 0). step 3: (40, -20, 0). Ratio = 4.
     np.testing.assert_allclose(vecs3, 4.0 * vecs0)
 
 
-def test_actor_identity_stable_across_steps(reactions_results, headless_plotter):
+def test_handle_stable_across_steps(reactions_results, headless_plotter):
     scene = build_fem_scene(reactions_results.fem)
     diagram = ReactionsDiagram(_spec(), reactions_results)
     diagram.attach(headless_plotter, reactions_results.fem, scene)
-    initial_force_actor = diagram._force.actor
-    initial_moment_actor = diagram._moment.actor
-    initial_force_source = diagram._force.source
-    initial_moment_source = diagram._moment.source
+    initial_force_handle = diagram._force.handle
+    initial_moment_handle = diagram._moment.handle
 
     for step in range(4):
         diagram.update_to_step(step)
 
-    assert diagram._force.actor is initial_force_actor
-    assert diagram._moment.actor is initial_moment_actor
-    assert diagram._force.source is initial_force_source
-    assert diagram._moment.source is initial_moment_source
+    # Glyph layers rebuild their actor each step (no in-place fast path),
+    # but the family's backend HANDLE is reused across steps.
+    assert diagram._force.handle is initial_force_handle
+    assert diagram._moment.handle is initial_moment_handle
 
 
 def test_set_force_scale_records_runtime(reactions_results, headless_plotter):
@@ -233,8 +236,8 @@ def test_axis_mode_zeros_other_components(
     diagram.attach(headless_plotter, reactions_results.fem, scene)
     # Force layer drawn; node 0 is the only kept node (it's the only
     # one with non-zero |reaction_force|).
-    assert diagram._force.source is not None
-    vecs = np.asarray(diagram._force.source.point_data["_vec"])
+    assert diagram._force.layer is not None
+    vecs = np.asarray(diagram._force.layer.orientations)
     assert vecs.shape == (1, 3)
     np.testing.assert_allclose(vecs[0], expected_step0)
 
@@ -243,9 +246,10 @@ def test_axis_mode_silences_moment_layer(reactions_results, headless_plotter):
     scene = build_fem_scene(reactions_results.fem)
     diagram = ReactionsDiagram(_axis_spec("reaction_x"), reactions_results)
     diagram.attach(headless_plotter, reactions_results.fem, scene)
-    assert diagram._force.source is not None
-    assert diagram._moment.source is None
-    assert len(diagram._actors) == 1
+    assert diagram._force.layer is not None
+    assert diagram._moment.layer is None
+    assert diagram._force.handle is not None
+    assert diagram._moment.handle is None
 
 
 def test_axis_mode_scale_matches_resultant(reactions_results, headless_plotter):
@@ -270,7 +274,7 @@ def test_axis_mode_step_update(reactions_results, headless_plotter):
     diagram = ReactionsDiagram(_axis_spec("reaction_y"), reactions_results)
     diagram.attach(headless_plotter, reactions_results.fem, scene)
     diagram.update_to_step(3)
-    vecs = np.asarray(diagram._force.source.point_data["_vec"])
+    vecs = np.asarray(diagram._force.layer.orientations)
     # step 3: Fy = -20, Fx and Fz zeroed.
     np.testing.assert_allclose(vecs[0], np.array([0.0, -20.0, 0.0]))
 
@@ -280,8 +284,8 @@ def test_detach_clears_state(reactions_results, headless_plotter):
     diagram = ReactionsDiagram(_spec(), reactions_results)
     diagram.attach(headless_plotter, reactions_results.fem, scene)
     diagram.detach()
-    assert diagram._force.source is None
-    assert diagram._force.actor is None
-    assert diagram._moment.source is None
-    assert diagram._moment.actor is None
+    assert diagram._force.layer is None
+    assert diagram._force.handle is None
+    assert diagram._moment.layer is None
+    assert diagram._moment.handle is None
     assert not diagram.is_attached

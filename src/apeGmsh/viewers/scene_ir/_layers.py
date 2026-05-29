@@ -236,7 +236,7 @@ class GlyphLayer:
 
     layer_id: str
     positions: PointSet
-    kind: Literal["arrow", "sphere", "cone", "axes"] = "sphere"
+    kind: Literal["arrow", "sphere", "cone", "axes", "moment"] = "sphere"
     orientations: Optional[np.ndarray] = None
     scales: Optional[np.ndarray] = None
     # Per-glyph scalar used ONLY for ``ColorSpec(by_array)`` colouring —
@@ -246,6 +246,9 @@ class GlyphLayer:
     color: ColorSpec = field(default_factory=ColorSpec)
     visibility: VisibilityMask = field(default_factory=VisibilityMask)
     opacity: float = 1.0
+    # Arc sweep in degrees for ``kind == "moment"`` (the curved-arrow
+    # torque glyph). ``None`` lets the backend pick its default.
+    arc_degrees: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.orientations is not None:

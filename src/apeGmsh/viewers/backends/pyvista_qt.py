@@ -425,7 +425,7 @@ class PyVistaQtBackend:
             and layer.color_scalar is not None
         ):
             cloud[color.array_name] = layer.color_scalar
-        geom = _glyph_geometry(layer.kind)
+        geom = _glyph_geometry(layer)
         glyphed = cloud.glyph(
             geom=geom,
             orient="_vec" if layer.orientations is not None else False,
@@ -472,11 +472,19 @@ def _lookup_table_from_lutspec(lut: "Any") -> Any:
     return table
 
 
-def _glyph_geometry(kind: str) -> Any:
+def _glyph_geometry(layer: GlyphLayer) -> Any:
+    kind = layer.kind
     if kind == "arrow":
         return pv.Arrow()
     if kind == "cone":
         return pv.Cone()
+    if kind == "moment":
+        # Curved-arrow torque glyph. Geometry construction lives in the
+        # backend (it builds a pyvista mesh) so the diagram stays
+        # pyvista-free; the diagram only carries the arc spec on the IR.
+        from apeGmsh.viewers.overlays.moment_glyph import make_moment_glyph
+        arc = layer.arc_degrees if layer.arc_degrees is not None else 270.0
+        return make_moment_glyph(arc_degrees=float(arc))
     return pv.Sphere()
 
 
