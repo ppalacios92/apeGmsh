@@ -251,6 +251,40 @@ class TestDeclareEmit:
         dof_idx = args.index("-dof")
         assert args[dof_idx + 1 : dof_idx + 3] == (1, 2)
 
+    def test_emit_accepts_displacement_increment_and_dt(self) -> None:
+        """Regression guard: ``displacement_increment`` and per-record
+        ``dt`` are recorder-only and the emit path must keep accepting
+        them — the in-process capture path rejects both (it has no
+        per-step increment query and ignores cadence; see
+        ``tests/test_results_domain_capture_spec.py``). This proves the
+        capture-side fix did not bleed into emit. The increment maps to
+        the OpenSees ``incrDisp`` recorder token, and ``dt`` becomes
+        ``-dT``.
+        """
+        fem = make_two_node_beam()
+        ops = apeSees(cast("object", fem))
+        ops.model(ndm=3, ndf=6)
+        # Accepted without raising (capture rejects this exact call):
+        ops.recorder.declare(
+            nodes="displacement_increment", pg="Top", dt=0.02,
+        )
+
+        bm = ops.build()
+        rec = RecordingEmitter()
+        bm.emit(rec)
+
+        recorder_calls = [c for c in rec.calls if c[0] == "recorder"]
+        assert len(recorder_calls) == 1
+        _, args, _ = recorder_calls[0]
+        # Increment maps to incrDisp (NOT disp) on the emit path.
+        assert args[-1] == "incrDisp"
+        # Cadence is honored on emit (capture would have rejected dt=).
+        assert "-dT" in args
+        assert args[args.index("-dT") + 1] == 0.02
+        # 3D displacement increment → three dofs.
+        dof_idx = args.index("-dof")
+        assert args[dof_idx + 1 : dof_idx + 4] == (1, 2, 3)
+
     def test_ids_selector_emit(self) -> None:
         fem = make_two_node_beam()
         ops = apeSees(cast("object", fem))
