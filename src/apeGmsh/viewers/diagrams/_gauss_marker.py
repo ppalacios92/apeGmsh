@@ -2,35 +2,47 @@
 
 Reads :class:`GaussSlab`, calls ``slab.global_coords(fem)`` to map
 natural coords to world coords (proper shape fns for hex8 / quad4;
-centroid + bbox approximation otherwise), and renders one **real**
-sphere glyph per GP — sized in world units off the model diagonal.
+centroid + bbox approximation otherwise), and renders one sphere glyph
+per GP, coloured by the GP value.
 
-We deliberately don't use ``render_points_as_spheres=True`` here: on
-co-planar (z=0) 2-D models that flag tends to lose its billboards to
-z-fighting with the substrate fill, and the only mitigation
-(``SetResolveCoincidentTopology…``) is global VTK state and ends up
-also disturbing the wireframe overlay. Real sphere geometry sits a
-finite radius above / below the plane and renders unambiguously.
+Render seam (ADR 0042, R-B Wave 2). Emits one sphere
+:class:`GlyphLayer` via the backend; holds no VTK objects. Sphere
+**size** is fixed (a constant ``scales`` array derived from the model
+diagonal); glyph **colour** uses the raw GP value (``color_scalar`` +
+``ColorSpec(by_array)``). The Qt LUT mirror stays diagram-side — its
+``changed`` signal is translated to a plain ``ColorSpec`` / ``LutSpec``
+and pushed through ``backend.set_layer_color`` (the backend never sees
+Qt).
+
+We deliberately use real sphere geometry rather than
+``render_points_as_spheres=True``: on co-planar (z=0) 2-D models that
+flag loses its billboards to z-fighting with the substrate fill, and
+the only mitigation is global VTK state that also disturbs the
+wireframe overlay. Real spheres sit a finite radius above / below the
+plane and render unambiguously.
+
+Picking stays on the legacy ``PickEngine`` path (deferred to R-D): the
+diagram registers the backend's glyph actor and reverse-maps a picked
+cell index back to a GP. Because the backend rebuilds the glyph actor
+on each ``update_layer``, the registration is refreshed whenever the
+actor identity changes.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pyvista as pv
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
 from ._scalar_bar_support import ScalarBarSupport
 from ._styles import GaussMarkerStyle
+from ..scene_ir import ColorSpec, GlyphLayer, LutSpec, PointSet, ScalarBarSpec
 
 if TYPE_CHECKING:
     from apeGmsh.results.Results import Results
     from apeGmsh.viewers.data import ViewerData
     from ..scene.fem_scene import FEMSceneData
-
-
-_SCALAR_NAME = "_gp_value"
 
 
 class GaussPointDiagram(ScalarBarSupport, Diagram):
@@ -47,12 +59,11 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             )
         super().__init__(spec, results)
 
-        self._cloud: Optional[pv.PolyData] = None         # input centers
-        self._glyphs: Optional[pv.PolyData] = None        # actor's input
-        self._actor: Any = None
-        self._scalar_array: Optional[ndarray] = None      # per-center scalar
-        self._glyph_scalar_array: Optional[ndarray] = None  # per-glyph-point
-        self._pts_per_center: int = 0
+        self._layer: Optional[GlyphLayer] = None
+        self._handle: Any = None
+        self._coords: Optional[ndarray] = None        # GP world centers (n, 3)
+        self._scales: Optional[ndarray] = None         # fixed per-glyph size
+        self._gp_values: Optional[ndarray] = None      # per-center scalar
         self._element_ids_to_read: tuple[int, ...] = ()
         self._initial_clim: Optional[tuple[float, float]] = None
         self._runtime_clim: Optional[tuple[float, float]] = None
@@ -62,23 +73,24 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         # re-reading the slab from disk.
         self._gp_element_index: Optional[ndarray] = None
         self._gp_natural_coords: Optional[ndarray] = None
-        # Reference world coords + base glyph points captured at attach;
-        # used by sync_substrate_points to translate each sphere when
-        # the substrate deforms.
+        # Reference world coords captured at attach; used by
+        # sync_substrate_points as the deformation baseline.
         self._gp_centers_at_build: Optional[ndarray] = None
-        self._base_glyph_pts: Optional[ndarray] = None
-        # Glyph cell→center mapping captured at attach: each input GP
-        # center contributes ``_glyph_cells_per_center`` consecutive
-        # cells in the output PolyData. Lets ``resolve_picked_cell``
-        # invert the picker's cell index back to a GP center.
+        # Glyph cell→center mapping: each GP center contributes
+        # ``_glyph_cells_per_center`` consecutive cells in the backend's
+        # output glyph PolyData. Lets ``resolve_picked_cell`` invert the
+        # picker's cell index back to a GP center. Derived from the
+        # backend layer handle's dataset after the glyph is added.
         self._glyph_cells_per_center: int = 0
         self._init_scalar_bar_state()
 
-        # Plan 06 — shared lookup-table mirror. Built in ``_init_lut``
-        # at the tail of ``attach()``; the ColorMapEditor binds to this
-        # LUT via ``diagram.lut`` and mutations re-apply to the mapper.
+        # Shared lookup-table mirror (Qt). The ColorMapEditor binds to
+        # this LUT via ``diagram.lut``; on ``changed`` the diagram pushes
+        # a plain ColorSpec through the backend.
         self._lut: Any = None
         self._lut_conn: Any = None
+        # The glyph actor currently registered on the scene PickEngine.
+        self._registered_actor: Any = None
 
     # ------------------------------------------------------------------
     # Attach / detach / update
@@ -140,12 +152,9 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             # something than crash the viewer.
             world = np.zeros((slab.element_index.size, 3), dtype=np.float64)
 
-        center_scalars = np.asarray(slab.values[0], dtype=np.float64).copy()
-        cloud = pv.PolyData(world)
-        cloud.point_data[_SCALAR_NAME] = center_scalars
-        self._cloud = cloud
-        self._scalar_array = cloud.point_data[_SCALAR_NAME]
-        self._gp_centers_at_build = np.asarray(world, dtype=np.float64).copy()
+        self._coords = np.asarray(world, dtype=np.float64).copy()
+        self._gp_centers_at_build = self._coords.copy()
+        self._gp_values = np.asarray(slab.values[0], dtype=np.float64).copy()
 
         # Initial clim
         if style.clim is not None:
@@ -153,7 +162,7 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
                 float(style.clim[0]), float(style.clim[1]),
             )
         else:
-            data = np.asarray(self._scalar_array)
+            data = self._gp_values
             finite = data[np.isfinite(data)]
             if finite.size:
                 lo, hi = float(finite.min()), float(finite.max())
@@ -163,74 +172,39 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             else:
                 self._initial_clim = (0.0, 1.0)
 
-        # ── Real sphere glyphs at each GP center ────────────────────
+        # ── Fixed sphere size off the model diagonal ────────────────
         # ``style.point_size`` keeps its prior semantic (bigger = more
-        # visible) but is now used to scale a world-space sphere
-        # radius off the model diagonal — same convention as the
-        # pre-solve mesh viewer's node cloud. This dodges the brittle
-        # ``render_points_as_spheres=True`` pixel-billboard path that
-        # was losing markers to z-fighting on planar models.
+        # visible) but scales a world-space sphere size off the model
+        # diagonal — same convention as the pre-solve mesh viewer's node
+        # cloud. The backend's unit sphere geometry (radius 0.5) is
+        # scaled by this value, so we double the desired world radius.
         diag = float(getattr(scene, "model_diagonal", 0.0)) or 1.0
         radius = 0.003 * diag * max(0.1, float(style.point_size) / 10.0)
-        sphere = pv.Sphere(
-            radius=radius, theta_resolution=10, phi_resolution=10,
-        )
-        n_per_center = sphere.n_points
-        self._glyph_cells_per_center = int(sphere.n_cells)
-        glyphs = cloud.glyph(geom=sphere, scale=False, orient=False)
-        # pyvista propagates input point_data through ``glyph()``,
-        # but the resulting attribute is per-glyph-point. Re-stamp our
-        # canonical name in case the propagation skipped it (e.g. when
-        # an active scalar collision happens), then keep a handle to
-        # the per-glyph array for in-place per-step updates.
-        glyph_scalars = np.repeat(center_scalars, n_per_center)
-        glyphs.point_data[_SCALAR_NAME] = glyph_scalars
-        self._glyphs = glyphs
-        self._glyph_scalar_array = glyphs.point_data[_SCALAR_NAME]
-        self._pts_per_center = n_per_center
-        # Snapshot the unwarped glyph point coords so sync can translate
-        # each sphere by ``deformed[i] - centers_at_build[i]`` without
-        # rebuilding the glyph PolyData.
-        self._base_glyph_pts = np.asarray(
-            glyphs.points, dtype=np.float64,
-        ).copy()
+        n = self._coords.shape[0]
+        self._scales = np.full(n, 2.0 * radius, dtype=np.float64)
 
-        bar_args = self._scalar_bar_args()
-        actor = plotter.add_mesh(
-            glyphs,
-            scalars=_SCALAR_NAME,
-            cmap=self._runtime_cmap or style.cmap,
-            clim=self._runtime_clim or self._initial_clim,
-            opacity=style.opacity,
-            show_scalar_bar=bar_args is not None,
-            scalar_bar_args=bar_args,
-            name=self._actor_name(),
-            reset_camera=False,
-            smooth_shading=True,
-            lighting=True,
-        )
-        self._actor = actor
-        self._actors = [actor]
-        # Phase 3.1 — register the GP actor on the scene's PickEngine
-        # inventory so the results pick controller (and Phase 3.2's
-        # mode router) can find it without walking every active diagram.
-        # ``scene.pick_engine`` is ``None`` in headless tests; skip
-        # registration in that case.
-        pick_engine = getattr(scene, "pick_engine", None)
-        if pick_engine is not None:
-            pick_engine.register_actor(
-                actor, "gp", self.resolve_picked_cell,
-            )
+        self._layer = self._build_layer(self._gp_values)
+        self._handle = self._backend.add_layer(self._layer)
 
-        # Build the LUT mirror now that the actor exists.
+        # Picking + LUT mirror.
+        self._update_glyph_cells_per_center()
+        self._register_pick()
         self._init_lut()
+        if self._effective_show_scalar_bar():
+            self._backend.add_scalar_bar(
+                self._handle,
+                ScalarBarSpec(
+                    layer_id=self._handle.layer_id,
+                    title=self._scalar_bar_title(),
+                    lut=self._current_lutspec(),
+                ),
+            )
 
     def update_to_step(self, step_index: int) -> None:
         if (
-            self._scalar_array is None
-            or self._glyph_scalar_array is None
-            or self._glyphs is None
-            or self._pts_per_center == 0
+            self._layer is None
+            or self._handle is None
+            or self._gp_values is None
         ):
             return
         results = self._scoped_results()
@@ -247,18 +221,12 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         if slab.values.size == 0:
             return
         slab_values = np.asarray(slab.values[0], dtype=np.float64)
-        if slab_values.size != self._scalar_array.size:
+        if slab_values.size != self._gp_values.size:
             return
-        self._scalar_array[:] = slab_values
-        # Tile the per-center scalar to per-glyph-point so every
-        # vertex on each sphere paints with the same color.
-        self._glyph_scalar_array[:] = np.repeat(
-            slab_values, self._pts_per_center,
-        )
-        try:
-            self._glyphs.Modified()
-        except Exception:
-            pass
+        self._gp_values = slab_values
+        self._layer = self._build_layer(self._gp_values)
+        self._backend.update_layer(self._handle, self._layer)
+        self._register_pick()
 
     def sync_substrate_points(
         self, deformed_pts: "ndarray | None", scene: "FEMSceneData",
@@ -266,18 +234,16 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         """Translate every GP sphere to follow the deformed substrate.
 
         Re-evaluates the per-GP world coords against ``deformed_pts``
-        (or ``fem.nodes.coords`` when ``None``), then shifts each
-        sphere's glyph points by ``new_center[i] - center_at_build[i]``.
+        (or ``fem.nodes.coords`` when ``None``) and re-emits the glyph
+        layer at the new centers (colours / sizes unchanged).
         """
         if (
-            self._glyphs is None
-            or self._cloud is None
+            self._layer is None
+            or self._handle is None
             or self._view is None
             or self._gp_element_index is None
             or self._gp_natural_coords is None
-            or self._gp_centers_at_build is None
-            or self._base_glyph_pts is None
-            or self._pts_per_center == 0
+            or self._gp_values is None
         ):
             return
         try:
@@ -290,14 +256,12 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
                 self._view,  # type: ignore[arg-type]
                 node_coords_override=deformed_pts,
             )
-            shifts = new_centers - self._gp_centers_at_build
-            shifts_tiled = np.repeat(shifts, self._pts_per_center, axis=0)
-            self._glyphs.points = self._base_glyph_pts + shifts_tiled
-            # Keep the input cloud's centers in sync so any code that
-            # reads ``self._cloud.points`` still sees the current state.
-            self._cloud.points = new_centers
         except Exception:
-            pass
+            return
+        self._coords = np.asarray(new_centers, dtype=np.float64)
+        self._layer = self._build_layer(self._gp_values)
+        self._backend.update_layer(self._handle, self._layer)
+        self._register_pick()
 
     def detach(self) -> None:
         self._remove_scalar_bar(self._scalar_bar_title())
@@ -310,27 +274,32 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
                 pass
         self._lut = None
         self._lut_conn = None
-        # Phase 3.1 — drop the GP actor from the PickEngine inventory
-        # before clearing local state. Look up scene via ``self._scene``
-        # (set by :meth:`Diagram.attach`); skip when unavailable.
-        scene = getattr(self, "_scene", None)
-        pick_engine = getattr(scene, "pick_engine", None) if scene else None
-        if pick_engine is not None and self._actor is not None:
-            pick_engine.unregister_actor(self._actor)
-        self._cloud = None
-        self._glyphs = None
-        self._actor = None
-        self._scalar_array = None
-        self._glyph_scalar_array = None
-        self._pts_per_center = 0
+        # Drop the GP actor from the PickEngine inventory before
+        # clearing local state.
+        self._unregister_pick()
+        if self._backend is not None and self._handle is not None:
+            self._backend.remove_layer(self._handle)
+        self._layer = None
+        self._handle = None
+        self._coords = None
+        self._scales = None
+        self._gp_values = None
         self._element_ids_to_read = ()
         self._initial_clim = None
         self._gp_element_index = None
         self._gp_natural_coords = None
         self._gp_centers_at_build = None
-        self._base_glyph_pts = None
         self._glyph_cells_per_center = 0
         super().detach()
+
+    # ------------------------------------------------------------------
+    # Visibility (backend-routed)
+    # ------------------------------------------------------------------
+
+    def set_visible(self, visible: bool) -> None:
+        self._visible = visible
+        if self._backend is not None and self._handle is not None:
+            self._backend.set_layer_visible(self._handle, bool(visible))
 
     # ------------------------------------------------------------------
     # Picking — invert glyph cell index to GP center
@@ -352,9 +321,9 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         ``None`` as "not my pick" and fall through.
         """
         if (
-            self._glyphs is None
-            or self._glyph_cells_per_center <= 0
+            self._glyph_cells_per_center <= 0
             or self._gp_element_index is None
+            or self._coords is None
         ):
             return None
         try:
@@ -371,16 +340,61 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             element_id = int(eidx[center_idx])
         except Exception:
             return None
-        # World coords come from the live cloud (kept in sync by
+        # World coords come from the live centers (kept in sync by
         # ``sync_substrate_points``) so the highlight follows
         # deformation if the active geometry is warped.
         try:
             world = np.asarray(
-                self._cloud.points[center_idx], dtype=np.float64,
+                self._coords[center_idx], dtype=np.float64,
             ).copy()
         except Exception:
             return None
         return (element_id, int(center_idx), world)
+
+    def _register_pick(self) -> None:
+        """(Re)register the current backend glyph actor with the
+        scene's :class:`PickEngine`.
+
+        The backend rebuilds the glyph actor on every ``update_layer``,
+        so the registration is refreshed whenever the actor identity
+        changes. No-op when the scene has no pick engine (headless) or
+        the backend exposes no actor (recording stub).
+        """
+        scene = getattr(self, "_scene", None)
+        pick_engine = getattr(scene, "pick_engine", None) if scene else None
+        if pick_engine is None:
+            return
+        actor = getattr(self._handle, "actor", None)
+        if actor is None or actor is self._registered_actor:
+            return
+        if self._registered_actor is not None:
+            pick_engine.unregister_actor(self._registered_actor)
+        pick_engine.register_actor(actor, "gp", self.resolve_picked_cell)
+        self._registered_actor = actor
+
+    def _unregister_pick(self) -> None:
+        scene = getattr(self, "_scene", None)
+        pick_engine = getattr(scene, "pick_engine", None) if scene else None
+        if pick_engine is not None and self._registered_actor is not None:
+            pick_engine.unregister_actor(self._registered_actor)
+        self._registered_actor = None
+
+    def _update_glyph_cells_per_center(self) -> None:
+        """Derive cells-per-sphere from the backend handle's dataset.
+
+        The sphere geometry (and thus its cell count) is the backend's
+        choice; we read it back off the glyphed dataset so picking is
+        independent of the backend's sphere resolution. No-op for the
+        recording stub backend (no dataset).
+        """
+        dataset = getattr(self._handle, "dataset", None)
+        n_centers = self._coords.shape[0] if self._coords is not None else 0
+        if dataset is None or n_centers == 0:
+            return
+        try:
+            self._glyph_cells_per_center = int(dataset.n_cells // n_centers)
+        except Exception:
+            self._glyph_cells_per_center = 0
 
     # ------------------------------------------------------------------
     # Runtime style
@@ -398,17 +412,11 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
             self._lut.set_range(float(vmin), float(vmax))
             return
         self._runtime_clim = (float(vmin), float(vmax))
-        if self._actor is not None:
-            try:
-                self._actor.GetMapper().SetScalarRange(*self._runtime_clim)
-            except Exception:
-                pass
 
     def autofit_clim_at_current_step(self) -> Optional[tuple[float, float]]:
-        if self._scalar_array is None:
+        if self._gp_values is None:
             return None
-        data = np.asarray(self._scalar_array)
-        finite = data[np.isfinite(data)]
+        finite = self._gp_values[np.isfinite(self._gp_values)]
         if finite.size == 0:
             return None
         lo, hi = float(finite.min()), float(finite.max())
@@ -421,24 +429,12 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
         self._runtime_cmap = cmap
         if self._lut is not None:
             self._lut.set_preset(cmap)
-            return
-        if self._actor is None:
-            return
-        try:
-            lut = pv.LookupTable(cmap)
-            clim = self._runtime_clim or self._initial_clim or (0.0, 1.0)
-            lut.scalar_range = clim
-            mapper = self._actor.GetMapper()
-            mapper.SetLookupTable(lut)
-            mapper.SetScalarRange(*clim)
-        except Exception:
-            pass
 
     def current_clim(self) -> Optional[tuple[float, float]]:
         return self._runtime_clim or self._initial_clim
 
     # ------------------------------------------------------------------
-    # LUT mirror (plan 06)
+    # LUT mirror (diagram-side; changes pushed through the backend)
     # ------------------------------------------------------------------
 
     def _init_lut(self) -> None:
@@ -463,29 +459,57 @@ class GaussPointDiagram(ScalarBarSupport, Diagram):
 
     def _on_lut_changed(self) -> None:
         """LUT mutated — mirror into runtime overrides and re-apply."""
-        if self._lut is None or self._actor is None:
+        if self._lut is None or self._handle is None or self._backend is None:
             return
         self._runtime_cmap = self._lut.preset
         self._runtime_clim = (self._lut.vmin, self._lut.vmax)
-        self._apply_lut_to_actor()
-
-    def _apply_lut_to_actor(self) -> None:
-        if self._actor is None or self._lut is None:
-            return
-        try:
-            table = self._lut.to_pyvista_lookup_table()
-            mapper = self._actor.GetMapper()
-            mapper.SetLookupTable(table)
-            mapper.SetScalarRange(self._lut.vmin, self._lut.vmax)
-        except Exception:
-            pass
+        color = ColorSpec(
+            mode="by_array",
+            array_name=self._color_array_name(),
+            lut=self._current_lutspec(),
+        )
+        self._backend.set_layer_color(self._handle, color)
+        # Refresh the bar so it reflects the new LUT.
+        if self._effective_show_scalar_bar():
+            self._backend.add_scalar_bar(
+                self._handle,
+                ScalarBarSpec(
+                    layer_id=self._handle.layer_id,
+                    title=self._scalar_bar_title(),
+                    lut=self._current_lutspec(),
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _actor_name(self) -> str:
-        return f"diagram_gauss_{id(self):x}"
+    def _layer_id(self) -> str:
+        return f"gauss_{id(self):x}"
+
+    def _color_array_name(self) -> str:
+        return self.spec.selector.component or "_gp_value"
+
+    def _build_layer(self, gp_values: ndarray) -> GlyphLayer:
+        """Sphere glyph: fixed size; colour = raw GP value through the LUT."""
+        style: GaussMarkerStyle = self.spec.style    # type: ignore[assignment]
+        assert self._coords is not None
+        clim = self._runtime_clim or self._initial_clim or (0.0, 1.0)
+        cmap = self._runtime_cmap or style.cmap
+        color = ColorSpec(
+            mode="by_array",
+            array_name=self._color_array_name(),
+            lut=LutSpec(name=cmap, vmin=float(clim[0]), vmax=float(clim[1])),
+        )
+        return GlyphLayer(
+            layer_id=self._layer_id(),
+            positions=PointSet(self._coords),
+            kind="sphere",
+            scales=self._scales,
+            color_scalar=gp_values,
+            color=color,
+            opacity=style.opacity,
+        )
 
     def _scoped_results(self) -> "Optional[Results]":
         if self.spec.stage_id is not None:

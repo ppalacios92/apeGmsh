@@ -17,7 +17,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import pyvista as pv
 import pytest
 
 from apeGmsh.results import Results
@@ -64,18 +63,6 @@ def vector_results(g, tmp_path: Path):
         )
         w.end_stage()
     return Results.from_native(path, model=_open_model_from_h5(path))
-
-
-@pytest.fixture
-def pv_backend():
-    """A real offscreen PyVistaQtBackend for render-integration tests."""
-    from apeGmsh.viewers.backends import PyVistaQtBackend
-    try:
-        plotter = pv.Plotter(off_screen=True)
-    except Exception:  # pragma: no cover
-        pytest.skip("no offscreen render context")
-    yield PyVistaQtBackend(plotter)
-    plotter.close()
 
 
 def _spec(component: str = "displacement") -> DiagramSpec:

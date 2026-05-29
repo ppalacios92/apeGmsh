@@ -230,6 +230,7 @@ class GlyphLayer:
     color_scalar: Optional[np.ndarray] = None
     color: ColorSpec = field(default_factory=ColorSpec)
     visibility: VisibilityMask = field(default_factory=VisibilityMask)
+    opacity: float = 1.0
 
     def __post_init__(self) -> None:
         if self.orientations is not None:

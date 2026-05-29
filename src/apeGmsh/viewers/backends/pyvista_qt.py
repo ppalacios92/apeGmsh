@@ -407,7 +407,7 @@ class PyVistaQtBackend:
             orient="_vec" if layer.orientations is not None else False,
             scale="_size" if layer.scales is not None else False,
         )
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, Any] = {"opacity": layer.opacity}
         if color.mode == "by_array" and color.array_name:
             kwargs["scalars"] = color.array_name
             if color.lut is not None:

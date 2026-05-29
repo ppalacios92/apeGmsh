@@ -1,18 +1,20 @@
-"""GaussPointDiagram + GaussSlab.global_coords — Phase 4 tests.
+"""GaussPointDiagram + GaussSlab.global_coords tests.
 
 Verifies:
 
-* Hex8 shape functions evaluate correctly (corners + centre).
+* Hex8 / quad4 shape functions evaluate correctly (corners + centre).
 * GaussSlab.global_coords returns the documented (sum_GP, 3) array.
-* GaussPointDiagram attaches, mutates the scalar in place, identity-
-  stable across step changes.
+* GaussPointDiagram emits a sphere ``GlyphLayer`` through the render
+  backend (ADR 0042, R-B Wave 2): emission + LUT-mirror state via the
+  shared recording stub ``backend`` fixture (no GL); scalar bar / mapper
+  / glyph-cell picking via a real offscreen ``PyVistaQtBackend``
+  (``pv_backend`` fixture).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
-import pyvista as pv
 import pytest
 
 from apeGmsh.results import Results
@@ -30,6 +32,7 @@ from apeGmsh.viewers.diagrams import (
     GaussPointDiagram,
     SlabSelector,
 )
+from apeGmsh.viewers.scene_ir import GlyphLayer
 from apeGmsh.viewers.scene.fem_scene import build_fem_scene
 
 from tests.conftest import _open_model_from_h5
@@ -162,11 +165,17 @@ def test_gauss_slab_global_coords_returns_correct_shape(gauss_results):
 # GaussPointDiagram
 # =====================================================================
 
-@pytest.fixture
-def headless_plotter():
-    plotter = pv.Plotter(off_screen=True)
-    yield plotter
-    plotter.close()
+def _make_gauss_spec(**style_kwargs):
+    return DiagramSpec(
+        kind="gauss_marker",
+        selector=SlabSelector(component="stress_xx"),
+        style=GaussMarkerStyle(**style_kwargs),
+    )
+
+
+# =====================================================================
+# Construction + emission (recording stub backend)
+# =====================================================================
 
 
 def test_diagram_construction_requires_gauss_style(gauss_results):
@@ -181,111 +190,264 @@ def test_diagram_construction_requires_gauss_style(gauss_results):
         GaussPointDiagram(bad, results)
 
 
-def test_diagram_attach_builds_cloud(gauss_results, headless_plotter):
-    results, eids = gauss_results
-    scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
-    assert diagram._cloud is not None
-    assert diagram._cloud.n_points == len(eids)
+def test_attach_requires_scene(gauss_results, backend):
+    results, _ = gauss_results
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    with pytest.raises(RuntimeError, match="FEMSceneData"):
+        diagram.attach(backend, results.fem)
 
 
-def test_diagram_step_update_mutates_scalar(gauss_results, headless_plotter):
+def test_attach_emits_sphere_layer(gauss_results, backend):
     results, eids = gauss_results
     scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
-    initial = np.asarray(diagram._scalar_array).copy()
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+
+    layer = diagram._layer
+    assert isinstance(layer, GlyphLayer)
+    assert layer.kind == "sphere"
+    assert layer.positions.n_points == len(eids)
+    # Fixed size — one scale per center, all equal.
+    assert layer.scales is not None
+    assert layer.scales.shape == (len(eids),)
+    assert np.allclose(layer.scales, layer.scales[0])
+    # Coloured by the GP value.
+    assert layer.color.mode == "by_array"
+    assert layer.color_scalar is not None
+    assert layer.color_scalar.shape == (len(eids),)
+    # Scalar bar registered on the backend, keyed by layer id.
+    assert diagram._handle.layer_id in backend.scalar_bars
+
+
+def test_attach_carries_style_opacity(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(opacity=0.4), results)
+    diagram.attach(backend, results.fem, scene)
+    assert diagram._layer.opacity == pytest.approx(0.4)
+
+
+def test_attach_initial_clim_auto_fits(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    clim = diagram.current_clim()
+    assert clim is not None
+    lo, hi = clim
+    vals = np.asarray(diagram._layer.color_scalar)
+    assert lo <= vals.min() + 1e-6
+    assert hi >= vals.max() - 1e-6
+
+
+def test_step_update_changes_color_scalar(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    initial = np.asarray(diagram._layer.color_scalar).copy()
 
     diagram.update_to_step(1)
-    after = np.asarray(diagram._scalar_array)
-    # step 1 values are step*100 larger
+    after = np.asarray(diagram._layer.color_scalar)
+    # step 1 values are step*100 larger.
     assert (after - initial).max() == pytest.approx(100.0, rel=1e-6)
 
 
-def test_diagram_actor_identity_stable(gauss_results, headless_plotter):
-    results, eids = gauss_results
-    scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
-    initial_actor = diagram._actor
-    initial_cloud = diagram._cloud
-    initial_scalar = diagram._scalar_array
-
-    for step in range(2):
-        diagram.update_to_step(step)
-
-    assert diagram._actor is initial_actor
-    assert diagram._cloud is initial_cloud
-    assert diagram._scalar_array is initial_scalar
-
-
-def test_diagram_detach_clears_state(gauss_results, headless_plotter):
+def test_handle_stable_across_steps(gauss_results, backend):
     results, _ = gauss_results
     scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    initial_handle = diagram._handle
+    for step in range(2):
+        diagram.update_to_step(step)
+    assert diagram._handle is initial_handle
+
+
+def test_set_visible_routes_through_backend(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    diagram.set_visible(False)
+    assert diagram._handle.visible is False
+    diagram.set_visible(True)
+    assert diagram._handle.visible is True
+
+
+def test_diagram_detach_clears_state(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    layer_id = diagram._handle.layer_id
     diagram.detach()
-    assert diagram._cloud is None
-    assert diagram._actor is None
+    assert diagram._layer is None
+    assert diagram._handle is None
     assert not diagram.is_attached
+    assert layer_id in backend.removed
+    assert layer_id not in backend.scalar_bars
 
 
-def test_diagram_detach_removes_scalar_bar(
-    gauss_results, headless_plotter,
+# =====================================================================
+# LUT mirror (diagram-side state, recording stub backend)
+# =====================================================================
+
+
+def test_gauss_lut_is_none_before_attach(gauss_results):
+    results, _ = gauss_results
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    assert diagram.lut is None
+
+
+def test_gauss_attach_builds_lut_from_style(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    spec = _make_gauss_spec(cmap="plasma", clim=(-5.0, 5.0))
+    diagram = GaussPointDiagram(spec, results)
+    diagram.attach(backend, results.fem, scene)
+
+    lut = diagram.lut
+    assert lut is not None
+    assert lut.array_name == "stress_xx"
+    assert lut.preset == "plasma"
+    assert lut.range == (-5.0, 5.0)
+
+
+def test_gauss_attach_lut_picks_up_autofit_clim(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+
+    lut = diagram.lut
+    clim = diagram.current_clim()
+    assert lut.range == clim
+
+
+def test_gauss_set_cmap_routes_through_lut(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+
+    diagram.set_cmap("turbo")
+    assert diagram.lut.preset == "turbo"
+    assert diagram._runtime_cmap == "turbo"
+
+
+def test_gauss_set_clim_routes_through_lut(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+
+    diagram.set_clim(-2.0, 7.0)
+    assert diagram.lut.range == (-2.0, 7.0)
+    assert diagram.current_clim() == (-2.0, 7.0)
+
+
+def test_gauss_lut_change_pushes_colorspec_through_backend(
+    gauss_results, backend,
 ):
+    """LUT range change → backend.set_layer_color with the new clim."""
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+
+    diagram.lut.set_range(100.0, 200.0)
+    color = backend.colors[diagram._handle.layer_id]
+    assert color.mode == "by_array"
+    assert color.lut.vmin == pytest.approx(100.0)
+    assert color.lut.vmax == pytest.approx(200.0)
+
+
+def test_gauss_detach_clears_lut(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    assert diagram.lut is not None
+    diagram.detach()
+    assert diagram.lut is None
+
+
+def test_gauss_lut_changes_after_detach_are_noops(gauss_results, backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(backend, results.fem, scene)
+    held_lut = diagram.lut
+    diagram.detach()
+    # Must not raise.
+    held_lut.set_preset("magma")
+    held_lut.set_range(0.0, 1.0)
+
+
+# =====================================================================
+# Render integration (real offscreen PyVistaQtBackend)
+# =====================================================================
+
+
+def test_scalar_bar_appears_on_plotter(gauss_results, pv_backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(pv_backend, results.fem, scene)
+    assert "stress_xx" in pv_backend.plotter.scalar_bars
+
+
+def test_gauss_lut_change_updates_actor_mapper(gauss_results, pv_backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(pv_backend, results.fem, scene)
+
+    diagram.lut.set_range(100.0, 200.0)
+    mapper = diagram._handle.actor.GetMapper()
+    sr = mapper.GetScalarRange()
+    assert sr[0] == pytest.approx(100.0)
+    assert sr[1] == pytest.approx(200.0)
+
+
+def test_detach_removes_scalar_bar(gauss_results, pv_backend):
     """Repeated attach/detach cycles must not accumulate bars."""
     results, _ = gauss_results
     scene = build_fem_scene(results.fem)
     for _ in range(3):
-        spec = DiagramSpec(
-            kind="gauss_marker",
-            selector=SlabSelector(component="stress_xx"),
-            style=GaussMarkerStyle(),
-        )
-        diagram = GaussPointDiagram(spec, results)
-        diagram.attach(headless_plotter, results.fem, scene)
+        diagram = GaussPointDiagram(_make_gauss_spec(), results)
+        diagram.attach(pv_backend, results.fem, scene)
         diagram.detach()
-    bars = getattr(headless_plotter, "scalar_bars", {}) or {}
-    assert "stress_xx" not in bars
+    assert "stress_xx" not in (pv_backend.plotter.scalar_bars or {})
 
 
-def test_resolve_picked_cell_maps_glyph_cell_to_gp(
-    gauss_results, headless_plotter,
-):
-    """``resolve_picked_cell(cell_id)`` divides by the diagram's
-    fixed cells-per-glyph block to recover the GP center index, and
-    looks up the matching ``element_id`` from the diagram's GP
-    metadata."""
+def test_set_show_and_fmt_live(gauss_results, pv_backend):
+    results, _ = gauss_results
+    scene = build_fem_scene(results.fem)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(pv_backend, results.fem, scene)
+
+    diagram.set_show_scalar_bar(False)
+    assert "stress_xx" not in pv_backend.plotter.scalar_bars
+
+    diagram.set_show_scalar_bar(True)
+    assert "stress_xx" in pv_backend.plotter.scalar_bars
+
+    diagram.set_fmt("%.4f")
+    bar = pv_backend.plotter.scalar_bars["stress_xx"]
+    assert bar.GetLabelFormat() == "%.4f"
+
+
+def test_resolve_picked_cell_maps_glyph_cell_to_gp(gauss_results, pv_backend):
+    """``resolve_picked_cell(cell_id)`` divides by the diagram's fixed
+    cells-per-glyph block (derived from the backend's glyph dataset) to
+    recover the GP center index, and looks up the matching
+    ``element_id`` from the diagram's GP metadata."""
     results, eids = gauss_results
     scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
+    diagram = GaussPointDiagram(_make_gauss_spec(), results)
+    diagram.attach(pv_backend, results.fem, scene)
 
     cells_per = diagram._glyph_cells_per_center
     assert cells_per > 0
@@ -309,139 +471,3 @@ def test_resolve_picked_cell_maps_glyph_cell_to_gp(
     out_of_range = n_centers * cells_per + 1
     assert diagram.resolve_picked_cell(out_of_range) is None
     assert diagram.resolve_picked_cell(-1) is None
-
-
-# =====================================================================
-# LUT mirror (plan 06)
-# =====================================================================
-
-
-def _make_gauss_spec(**style_kwargs):
-    return DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(**style_kwargs),
-    )
-
-
-def test_gauss_lut_is_none_before_attach(gauss_results):
-    results, _ = gauss_results
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    assert diagram.lut is None
-
-
-def test_gauss_attach_builds_lut_from_style(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    spec = _make_gauss_spec(cmap="plasma", clim=(-5.0, 5.0))
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    lut = diagram.lut
-    assert lut is not None
-    assert lut.array_name == "stress_xx"
-    assert lut.preset == "plasma"
-    assert lut.range == (-5.0, 5.0)
-
-
-def test_gauss_attach_lut_picks_up_autofit_clim(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    lut = diagram.lut
-    clim = diagram.current_clim()
-    assert lut.range == clim
-
-
-def test_gauss_set_cmap_routes_through_lut(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    diagram.set_cmap("turbo")
-    assert diagram.lut.preset == "turbo"
-    assert diagram._runtime_cmap == "turbo"
-
-
-def test_gauss_set_clim_routes_through_lut(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    diagram.set_clim(-2.0, 7.0)
-    assert diagram.lut.range == (-2.0, 7.0)
-    assert diagram.current_clim() == (-2.0, 7.0)
-
-
-def test_gauss_lut_change_updates_actor_mapper(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    diagram.lut.set_range(100.0, 200.0)
-    mapper = diagram._actor.GetMapper()
-    sr = mapper.GetScalarRange()
-    assert sr[0] == pytest.approx(100.0)
-    assert sr[1] == pytest.approx(200.0)
-
-
-def test_gauss_detach_clears_lut(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-    assert diagram.lut is not None
-    diagram.detach()
-    assert diagram.lut is None
-
-
-def test_gauss_lut_changes_after_detach_are_noops(
-    gauss_results, headless_plotter,
-):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    diagram = GaussPointDiagram(_make_gauss_spec(), results)
-    diagram.attach(headless_plotter, results.fem, scene)
-    held_lut = diagram.lut
-    diagram.detach()
-    # Must not raise.
-    held_lut.set_preset("magma")
-    held_lut.set_range(0.0, 1.0)
-
-
-def test_set_show_and_fmt_live(gauss_results, headless_plotter):
-    results, _ = gauss_results
-    scene = build_fem_scene(results.fem)
-    spec = DiagramSpec(
-        kind="gauss_marker",
-        selector=SlabSelector(component="stress_xx"),
-        style=GaussMarkerStyle(),
-    )
-    diagram = GaussPointDiagram(spec, results)
-    diagram.attach(headless_plotter, results.fem, scene)
-
-    diagram.set_show_scalar_bar(False)
-    assert "stress_xx" not in headless_plotter.scalar_bars
-
-    diagram.set_show_scalar_bar(True)
-    assert "stress_xx" in headless_plotter.scalar_bars
-
-    diagram.set_fmt("%.4f")
-    assert headless_plotter.scalar_bars["stress_xx"].GetLabelFormat() == "%.4f"

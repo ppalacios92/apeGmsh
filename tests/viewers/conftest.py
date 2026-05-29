@@ -75,3 +75,17 @@ class RecordingBackend:
 @pytest.fixture
 def backend() -> RecordingBackend:
     return RecordingBackend()
+
+
+@pytest.fixture
+def pv_backend():
+    """A real offscreen ``PyVistaQtBackend`` for render-integration tests."""
+    import pyvista as pv
+
+    from apeGmsh.viewers.backends import PyVistaQtBackend
+    try:
+        plotter = pv.Plotter(off_screen=True)
+    except Exception:  # pragma: no cover
+        pytest.skip("no offscreen render context")
+    yield PyVistaQtBackend(plotter)
+    plotter.close()
