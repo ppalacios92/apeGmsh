@@ -700,6 +700,26 @@ class Results:
         self.close()
 
     # ------------------------------------------------------------------
+    # Demo / sample data
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def demo(cls, **kwargs) -> "Results":
+        """Return a ready-to-view demo :class:`Results` (cantilever pushover).
+
+        Zero-setup sample data so ``Results.demo().show_web()`` (or
+        ``.viewer()``) renders without supplying an ``.mpco`` /
+        ``model.h5`` pair — handy for docs, smoke tests, and trying the
+        viewer. A real ``apeSees``-emitted model with a synthetic, ramped
+        cantilever deflection (no OpenSees solve). See
+        :func:`apeGmsh.results.make_demo_results` for the keyword options
+        (``length`` / ``n_elements`` / ``n_steps`` / ``tip_drift`` /
+        ``path``).
+        """
+        from .demo import make_demo_results
+        return make_demo_results(**kwargs)
+
+    # ------------------------------------------------------------------
     # Static plotting (matplotlib)
     # ------------------------------------------------------------------
 
@@ -823,6 +843,9 @@ class Results:
         replaces the blocking Qt :meth:`viewer` in a notebook. View-only
         (picking is deferred to R-D), but with a step slider + per-layer
         visibility checkboxes when ``ipywidgets`` is available.
+
+        No results file handy? ``Results.demo().show_web()`` renders a
+        zero-setup cantilever-pushover sample.
 
         Parameters
         ----------
