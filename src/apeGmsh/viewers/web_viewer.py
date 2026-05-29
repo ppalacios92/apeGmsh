@@ -121,31 +121,125 @@ class WebViewer:
     # ------------------------------------------------------------------
 
     def set_step(self, step_index: int) -> None:
-        """Move the active step and re-render (programmatic scrub)."""
+        """Move the active step and re-render (programmatic scrub).
+
+        ``plotter.render()`` is what propagates the change to the trame
+        view: pyvista registers an on-render callback when the view is
+        created (``_BasePyVistaView``), so a render pushes the new frame
+        to the browser. The same call drives both the Qt and web paths.
+        """
         self._director.set_step(int(step_index))
+        self._plotter.render()
+
+    def set_layer_visible(self, diagram: Any, visible: bool) -> None:
+        """Show / hide one diagram layer and re-render."""
+        self._director.registry.set_visible(diagram, bool(visible))
         self._plotter.render()
 
     @property
     def n_steps(self) -> int:
         return self._director.n_steps
 
+    def layer_diagrams(self) -> list[Any]:
+        """The diagrams currently in the registry (one per toggle)."""
+        return list(self._director.registry.diagrams())
+
+    # ------------------------------------------------------------------
+    # Controls (ipywidgets — the Jupyter scrubbing / visibility UI)
+    # ------------------------------------------------------------------
+
+    def controls(self) -> Any:
+        """Build an ``ipywidgets`` control panel for this viewer.
+
+        A step :class:`~ipywidgets.IntSlider` (when the active stage has
+        more than one step) plus one :class:`~ipywidgets.Checkbox` per
+        diagram layer. The slider drives :meth:`set_step`; each checkbox
+        drives :meth:`set_layer_visible`. Both re-render, which pushes to
+        the trame view via pyvista's on-render callback.
+
+        Returns a :class:`~ipywidgets.VBox`. Raises if ``ipywidgets`` is
+        not installed — call :meth:`show` (which degrades gracefully to a
+        bare view) if you only need the render.
+        """
+        try:
+            import ipywidgets as W
+        except ImportError as exc:  # pragma: no cover - env-dependent
+            raise RuntimeError(
+                "WebViewer.controls() needs ipywidgets — install the "
+                "[viewer] extra, or call show(controls=False)."
+            ) from exc
+
+        children: list[Any] = []
+        n = self.n_steps
+        if n > 1:
+            slider = W.IntSlider(
+                value=0, min=0, max=n - 1, step=1, description="Step",
+                continuous_update=False,
+            )
+            slider.observe(
+                lambda change: self.set_step(int(change["new"])),
+                names="value",
+            )
+            children.append(slider)
+
+        for diagram in self.layer_diagrams():
+            checkbox = W.Checkbox(
+                value=bool(getattr(diagram, "is_visible", True)),
+                description=self._layer_label(diagram),
+            )
+
+            def _handler(diag: Any):
+                return lambda change: self.set_layer_visible(
+                    diag, bool(change["new"])
+                )
+
+            checkbox.observe(_handler(diagram), names="value")
+            children.append(checkbox)
+
+        return W.VBox(children)
+
+    @staticmethod
+    def _layer_label(diagram: Any) -> str:
+        label = getattr(diagram, "display_label", None)
+        if callable(label):
+            try:
+                return str(label())
+            except Exception:
+                pass
+        return getattr(diagram, "kind", "layer")
+
     # ------------------------------------------------------------------
     # Display
     # ------------------------------------------------------------------
 
-    def show(self, *, jupyter_backend: str = "trame", **kwargs: Any) -> Any:
+    def show(
+        self,
+        *,
+        controls: bool = True,
+        jupyter_backend: str = "trame",
+        **kwargs: Any,
+    ) -> Any:
         """Display the scene inline (Jupyter) via pyvista's trame backend.
 
-        Returns the trame/ipywidgets viewer object so a notebook renders
-        it. Honours ``APEGMSH_SKIP_VIEWER`` (returns ``None``) so the same
-        cell runs under ``nbconvert --execute`` / CI without a browser.
+        Returns the trame view widget — or, when ``controls`` is ``True``
+        and ``ipywidgets`` is available, a :class:`~ipywidgets.VBox` of the
+        control panel stacked above the view. Honours
+        ``APEGMSH_SKIP_VIEWER`` (returns ``None``) so the same cell runs
+        under ``nbconvert --execute`` / CI without a browser.
         """
         if os.environ.get("APEGMSH_SKIP_VIEWER"):
             print("[skip web viewer] APEGMSH_SKIP_VIEWER set")
             return None
-        return self._plotter.show(
+        view = self._plotter.show(
             jupyter_backend=jupyter_backend, return_viewer=True, **kwargs
         )
+        if not controls:
+            return view
+        try:
+            import ipywidgets as W
+        except ImportError:  # pragma: no cover - env-dependent
+            return view  # degrade: no controls, just the rendered view
+        return W.VBox([self.controls(), view])
 
 
 def show_web(
@@ -153,17 +247,20 @@ def show_web(
     *,
     stage: Optional[str] = None,
     show: bool = True,
+    controls: bool = True,
 ) -> Any:
     """Open the view-only web/Jupyter results viewer (ADR 0042, R-C).
 
     Builds a :class:`WebViewer` around ``results`` and, when ``show`` is
-    ``True`` (default), displays it inline. Returns the :class:`WebViewer`
-    so callers can add diagrams via ``viewer.director`` and call
-    ``viewer.show()`` again, or scrub with ``viewer.set_step(i)``.
+    ``True`` (default), displays it inline with an ``ipywidgets`` control
+    panel (step slider + per-layer visibility) when ``controls`` is
+    ``True``. Returns the :class:`WebViewer` so callers can add diagrams
+    via ``viewer.director`` and call ``viewer.show()`` again, or scrub
+    with ``viewer.set_step(i)``.
     """
     viewer = WebViewer(results, stage=stage)
     if show:
-        viewer.show()
+        viewer.show(controls=controls)
     return viewer
 
 

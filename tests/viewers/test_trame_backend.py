@@ -148,3 +148,108 @@ def test_show_web_returns_viewer_without_display(cube_results, monkeypatch):
 
     wv = web_viewer.show_web(cube_results, show=False)
     assert isinstance(wv, web_viewer.WebViewer)
+
+
+# ---------------------------------------------------------------------
+# ipywidgets controls (R-C slice 2) — wiring verified headlessly via
+# traitlets' synchronous .observe; the visual push is eyeballed.
+# ---------------------------------------------------------------------
+
+@pytest.fixture
+def cube_results_2steps(g, tmp_path: Path):
+    """Cube + a 2-step stage so the controls panel gets a slider."""
+    from apeGmsh.results import Results
+    from apeGmsh.results.writers import NativeWriter
+
+    g.model.geometry.add_box(0, 0, 0, 1.0, 1.0, 1.0, label="cube")
+    g.physical.add_volume("cube", name="Body")
+    g.mesh.sizing.set_global_size(1.0)
+    g.mesh.generation.generate(dim=3)
+    fem = g.mesh.queries.get_fem_data(dim=3)
+
+    node_ids = np.asarray(fem.nodes.ids, dtype=np.int64)
+    res_path = tmp_path / "run2.h5"
+    with NativeWriter(res_path) as w:
+        w.open(fem=fem)
+        sid = w.begin_stage(
+            name="static", kind="static",
+            time=np.array([0.0, 1.0], dtype=np.float64),
+        )
+        w.write_nodes(
+            sid, "partition_0", node_ids=node_ids,
+            components={
+                "displacement_x": np.zeros((2, node_ids.size)),
+                "displacement_y": np.zeros((2, node_ids.size)),
+                "displacement_z": np.zeros((2, node_ids.size)),
+            },
+        )
+        w.end_stage()
+    return Results.from_native(res_path, model=_open_model_from_h5(res_path))
+
+
+class _StubDiagram:
+    def __init__(self, label: str) -> None:
+        self._label = label
+        self.is_visible = True
+
+    def display_label(self) -> str:
+        return self._label
+
+
+def _slider(box):
+    W = pytest.importorskip("ipywidgets")
+    return next((c for c in box.children if isinstance(c, W.IntSlider)), None)
+
+
+def _checkboxes(box):
+    W = pytest.importorskip("ipywidgets")
+    return [c for c in box.children if isinstance(c, W.Checkbox)]
+
+
+def test_controls_slider_present_and_ranged(cube_results_2steps):
+    pytest.importorskip("ipywidgets")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
+    box = wv.controls()
+    slider = _slider(box)
+    assert slider is not None
+    assert slider.min == 0
+    assert slider.max == wv.n_steps - 1 == 1
+
+
+def test_controls_no_slider_for_single_step(cube_results):
+    pytest.importorskip("ipywidgets")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
+    assert _slider(wv.controls()) is None  # 1 step → no scrubber
+
+
+def test_controls_slider_drives_set_step(cube_results_2steps):
+    pytest.importorskip("ipywidgets")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
+    calls: list[int] = []
+    wv.set_step = lambda i: calls.append(int(i))  # spy (lambda is late-bound)
+    box = wv.controls()
+    _slider(box).value = 1  # traitlets fires .observe synchronously
+    assert calls == [1]
+
+
+def test_controls_checkbox_drives_set_layer_visible(cube_results, monkeypatch):
+    pytest.importorskip("ipywidgets")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
+    diag = _StubDiagram("contour — disp")
+    monkeypatch.setattr(wv, "layer_diagrams", lambda: [diag])
+    toggled: list[tuple] = []
+    wv.set_layer_visible = lambda d, v: toggled.append((d, v))
+    box = wv.controls()
+    cbs = _checkboxes(box)
+    assert len(cbs) == 1
+    assert cbs[0].description == "contour — disp"
+    cbs[0].value = False
+    assert toggled == [(diag, False)]
