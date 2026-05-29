@@ -75,10 +75,9 @@ class ScalarBarSupport:
                         layer_id=lid,
                         title=self._scalar_bar_title(),
                         lut=self._current_lutspec(),
+                        fmt=self._runtime_fmt or self._scalar_bar_default_fmt(),
                     ),
                 )
-                if self._runtime_fmt:
-                    self._backend.set_scalar_bar_format(lid, self._runtime_fmt)
             else:
                 self._backend.remove_scalar_bar(lid)
             return

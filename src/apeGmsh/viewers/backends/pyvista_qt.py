@@ -309,6 +309,15 @@ class PyVistaQtBackend:
             except Exception:
                 pass
 
+    def set_layer_opacity(self, handle: _PvHandle, opacity: float) -> None:
+        actor = handle.actor
+        if actor is None:
+            return
+        try:
+            actor.prop.opacity = float(opacity)
+        except Exception:
+            pass
+
     def add_scalar_bar(self, handle: _PvHandle, spec: ScalarBarSpec) -> None:
         actor = handle.actor
         if actor is None:
@@ -322,6 +331,7 @@ class PyVistaQtBackend:
         try:
             bar = self._plotter.add_scalar_bar(
                 title=spec.title, mapper=mapper, interactive=True,
+                fmt=spec.fmt,
             )
             self._scalar_bars[spec.layer_id] = (spec.title, bar)
         except Exception:
@@ -364,6 +374,10 @@ class PyVistaQtBackend:
         kwargs: dict[str, Any] = {
             "opacity": layer.opacity,
             "show_edges": layer.show_edges,
+            # Scalar bars are an explicit add_scalar_bar concern; never
+            # let add_mesh auto-create one (it would collide with the
+            # diagram's explicit bar and own the registry title).
+            "show_scalar_bar": False,
         }
         if layer.wireframe:
             kwargs["style"] = "wireframe"
@@ -415,7 +429,10 @@ class PyVistaQtBackend:
             orient="_vec" if layer.orientations is not None else False,
             scale="_size" if layer.scales is not None else False,
         )
-        kwargs: dict[str, Any] = {"opacity": layer.opacity}
+        kwargs: dict[str, Any] = {
+            "opacity": layer.opacity,
+            "show_scalar_bar": False,
+        }
         if color.mode == "by_array" and color.array_name:
             kwargs["scalars"] = color.array_name
             if color.lut is not None:

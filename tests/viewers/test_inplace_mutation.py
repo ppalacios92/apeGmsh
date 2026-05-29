@@ -97,19 +97,22 @@ def test_contour_actor_identity_stable_across_steps(
     diagram = ContourDiagram(spec, results_50_steps)
     diagram.attach(headless_plotter, results_50_steps.fem, scene)
 
-    initial_actor = diagram._actor
+    # Post-migration (ADR 0042): the backend owns the actor; the diagram
+    # holds a layer handle. The mesh fast path mutates the bound dataset
+    # in place when topology is stable, so the handle's actor + mapper +
+    # dataset are the same objects across all steps (no re-add).
+    handle = diagram._handle
+    initial_actor = handle.actor
     initial_mapper = initial_actor.GetMapper()
-    initial_actor_id = id(initial_actor)
-    initial_mapper_id = id(initial_mapper)
+    initial_dataset = handle.dataset
 
     for step in range(50):
         diagram.update_to_step(step)
 
-    # Same Python objects + same VTK objects throughout
-    assert diagram._actor is initial_actor
-    assert id(diagram._actor) == initial_actor_id
-    assert diagram._actor.GetMapper() is initial_mapper
-    assert id(diagram._actor.GetMapper()) == initial_mapper_id
+    assert diagram._handle is handle
+    assert handle.actor is initial_actor
+    assert handle.actor.GetMapper() is initial_mapper
+    assert handle.dataset is initial_dataset
 
 
 def test_contour_scalar_buffer_mutates_in_place(
@@ -124,25 +127,22 @@ def test_contour_scalar_buffer_mutates_in_place(
     diagram = ContourDiagram(spec, results_50_steps)
     diagram.attach(headless_plotter, results_50_steps.fem, scene)
 
-    # The scalar array reference saved at attach should still point to
-    # the *same buffer* used by the submesh's point_data after multiple
-    # step updates.
-    initial_scalar_ref = diagram._scalar_array
-    initial_buffer_id = id(np.asarray(initial_scalar_ref).data)
+    # The persistent scalar buffer the diagram scatters into should be
+    # the *same* numpy object across many steps — no per-step
+    # reallocation.
+    initial_scalar_ref = diagram._scalar_values
+    initial_buffer_id = id(diagram._scalar_values.data)
 
     diagram.update_to_step(10)
     diagram.update_to_step(25)
     diagram.update_to_step(49)
 
-    # Same Python reference, same data buffer
-    assert diagram._scalar_array is initial_scalar_ref
-    assert id(np.asarray(diagram._scalar_array).data) == initial_buffer_id
+    assert diagram._scalar_values is initial_scalar_ref
+    assert id(diagram._scalar_values.data) == initial_buffer_id
 
-    # And the values reflect the most recent step
-    final = np.asarray(diagram._submesh.point_data["_contour"])
-    fem_ids = scene.node_ids[
-        np.asarray(diagram._submesh.point_data["vtkOriginalPointIds"], dtype=np.int64)
-    ]
+    # The bound dataset reflects the most recent step's values.
+    final = np.asarray(diagram._handle.dataset.point_data["displacement_z"])
+    fem_ids = diagram._fem_ids_to_read
     np.testing.assert_allclose(final, fem_ids.astype(np.float64) + 49 * 0.3)
 
 

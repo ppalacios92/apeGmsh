@@ -128,15 +128,18 @@ def test_attach_unrestricted_paints_all_nodes(
     diagram = ContourDiagram(_make_spec(), results_with_known_disp)
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
 
-    submesh = diagram._submesh
-    assert submesh is not None
-    assert submesh.n_points == scene.grid.n_points
-    # Step 0 values: node_id + 0*1000 == node_id
-    scalars = np.asarray(submesh.point_data["_contour"])
-    fem_ids_in_submesh = scene.node_ids[
-        np.asarray(submesh.point_data["vtkOriginalPointIds"], dtype=np.int64)
-    ]
-    np.testing.assert_array_equal(scalars, fem_ids_in_submesh.astype(np.float64))
+    layer = diagram._layer
+    assert layer is not None
+    assert layer.points.n_points == scene.grid.n_points
+    # Step 0 values: node_id + 0*1000 == node_id. The emitted point
+    # ScalarField is in submesh-point order, row-aligned with the FEM
+    # ids the diagram cached for that order (_fem_ids_to_read).
+    field = layer.field_named("displacement_z")
+    assert field is not None and field.location == "point"
+    fem_ids_in_submesh = diagram._fem_ids_to_read
+    np.testing.assert_array_equal(
+        np.asarray(field.values), fem_ids_in_submesh.astype(np.float64),
+    )
 
 
 def test_attach_with_pg_paints_only_pg_nodes(
@@ -149,8 +152,8 @@ def test_attach_with_pg_paints_only_pg_nodes(
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
     # All nodes are in Body for this single-volume fixture, so submesh
     # contains every node — but the resolved IDs go through PG resolution.
-    assert diagram._submesh is not None
-    assert diagram._submesh.n_points > 0
+    assert diagram._layer is not None
+    assert diagram._layer.points.n_points > 0
 
 
 def test_attach_initial_clim_auto_fits(
@@ -193,15 +196,13 @@ def test_update_to_step_scatters_correctly(
     diagram = ContourDiagram(_make_spec(), results_with_known_disp)
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
 
-    fem_ids_in_submesh = scene.node_ids[
-        np.asarray(diagram._submesh.point_data["vtkOriginalPointIds"], dtype=np.int64)
-    ]
+    fem_ids_in_submesh = diagram._fem_ids_to_read
 
     for step in (1, 2, 3, 0):    # also test going back to 0
         diagram.update_to_step(step)
-        scalars = np.asarray(diagram._submesh.point_data["_contour"])
+        field = diagram._layer.field_named("displacement_z")
         expected = fem_ids_in_submesh.astype(np.float64) + step * 1000.0
-        np.testing.assert_array_equal(scalars, expected)
+        np.testing.assert_array_equal(np.asarray(field.values), expected)
 
 
 # =====================================================================
@@ -282,12 +283,13 @@ def test_detach_clears_state(
     diagram = ContourDiagram(_make_spec(), results_with_known_disp)
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
     assert diagram.is_attached
-    assert diagram._submesh is not None
+    assert diagram._layer is not None
 
     diagram.detach()
     assert not diagram.is_attached
-    assert diagram._submesh is None
-    assert diagram._scalar_array is None
+    assert diagram._layer is None
+    assert diagram._handle is None
+    assert diagram._scalar_values is None
 
 
 def test_detach_then_reattach_works(
@@ -299,7 +301,7 @@ def test_detach_then_reattach_works(
     diagram.detach()
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
     assert diagram.is_attached
-    assert diagram._submesh is not None
+    assert diagram._layer is not None
 
 
 # =====================================================================
@@ -379,7 +381,7 @@ def test_lut_change_updates_actor_mapper(
     diagram.attach(headless_plotter, results_with_known_disp.fem, scene)
 
     diagram.lut.set_range(100.0, 200.0)
-    mapper = diagram._actor.GetMapper()
+    mapper = diagram._handle.actor.GetMapper()
     sr = mapper.GetScalarRange()
     assert sr[0] == pytest.approx(100.0)
     assert sr[1] == pytest.approx(200.0)

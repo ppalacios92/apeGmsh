@@ -25,6 +25,7 @@ class RecordingBackend:
         self.layers: dict[str, Any] = {}
         self.removed: list[str] = []
         self.colors: dict[str, Any] = {}        # layer_id -> ColorSpec
+        self.opacities: dict[str, float] = {}   # layer_id -> opacity
         self.scalar_bars: dict[str, Any] = {}   # layer_id -> ScalarBarSpec
         self.bar_formats: dict[str, str] = {}
 
@@ -49,6 +50,9 @@ class RecordingBackend:
 
     def set_layer_color(self, handle: _Handle, color: Any) -> None:
         self.colors[handle.layer_id] = color
+
+    def set_layer_opacity(self, handle: _Handle, opacity: float) -> None:
+        self.opacities[handle.layer_id] = float(opacity)
 
     def add_scalar_bar(self, handle: _Handle, spec: Any) -> None:
         self.scalar_bars[handle.layer_id] = spec

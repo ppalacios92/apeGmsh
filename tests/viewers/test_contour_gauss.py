@@ -172,8 +172,7 @@ def test_nodes_topology_uses_nodal_scalar_path(
     diagram = ContourDiagram(_spec("displacement_z", topology="nodes"), r)
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
     assert diagram._effective_topology == "nodes"
-    assert diagram._scalar_array is not None
-    assert diagram._cell_scalar_array is None
+    assert diagram._scalar_location == "point"
 
 
 def test_gauss_discrete_with_one_gp_uses_cell_data(
@@ -185,8 +184,7 @@ def test_gauss_discrete_with_one_gp_uses_cell_data(
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
     assert diagram._effective_topology == "gauss_cell"
-    assert diagram._cell_scalar_array is not None
-    assert diagram._scalar_array is None
+    assert diagram._scalar_location == "cell"
 
 
 def test_gauss_averaged_with_one_gp_uses_smoothed_point_data(
@@ -198,8 +196,7 @@ def test_gauss_averaged_with_one_gp_uses_smoothed_point_data(
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
     assert diagram._effective_topology == "gauss_cell_averaged"
-    assert diagram._scalar_array is not None
-    assert diagram._cell_scalar_array is None
+    assert diagram._scalar_location == "point"
 
 
 def test_explicit_gauss_discrete_uses_cell_data(
@@ -212,8 +209,8 @@ def test_explicit_gauss_discrete_uses_cell_data(
     scene = build_fem_scene(r.fem)
     diagram.attach(headless_plotter, r.fem, scene)
     assert diagram._effective_topology == "gauss_cell"
-    assert diagram._submesh.n_cells == scene.grid.n_cells
-    assert diagram._cell_scalar_array.shape[0] == diagram._submesh.n_cells
+    assert diagram._layer.cells.n_cells == scene.grid.n_cells
+    assert diagram._scalar_values.shape[0] == diagram._layer.cells.n_cells
 
 
 def test_invalid_topology_value_raises(
@@ -240,14 +237,17 @@ def test_attach_paints_expected_per_cell_values(
     )
     diagram.attach(headless_plotter, r.fem, scene)
 
-    orig = np.asarray(
-        diagram._submesh.cell_data["vtkOriginalCellIds"], dtype=np.int64,
-    )
-    fem_eids_in_submesh = scene.cell_to_element_id[orig]
+    # The diagram caches the per-cell element ids in CellBlocks (grouped)
+    # order — the same order as the emitted cell ScalarField. For this
+    # single-cell-type cube the grouping is the identity.
+    fem_eids_in_submesh = diagram._fem_eids_to_read
     expected = fem_eids_in_submesh.astype(np.float64) * 10.0
     np.testing.assert_array_equal(
-        np.asarray(diagram._cell_scalar_array), expected,
+        np.asarray(diagram._scalar_values), expected,
     )
+    field = diagram._layer.field_named("stress_xx")
+    assert field is not None and field.location == "cell"
+    np.testing.assert_array_equal(np.asarray(field.values), expected)
 
 
 def test_update_to_step_mutates_cell_data_in_place(
@@ -260,23 +260,24 @@ def test_update_to_step_mutates_cell_data_in_place(
     )
     diagram.attach(headless_plotter, r.fem, scene)
 
-    array_id_before = id(diagram._cell_scalar_array)
-    mapper_id_before = id(diagram._actor.GetMapper())
+    buffer_before = diagram._scalar_values
+    initial_actor = diagram._handle.actor
+    mapper_id_before = id(diagram._handle.actor.GetMapper())
 
-    orig = np.asarray(
-        diagram._submesh.cell_data["vtkOriginalCellIds"], dtype=np.int64,
-    )
-    fem_eids_in_submesh = scene.cell_to_element_id[orig]
+    fem_eids_in_submesh = diagram._fem_eids_to_read
 
     for step in (1, 2, 3, 0):
         diagram.update_to_step(step)
         expected = fem_eids_in_submesh.astype(np.float64) * 10.0 + step
         np.testing.assert_array_equal(
-            np.asarray(diagram._cell_scalar_array), expected,
+            np.asarray(diagram._scalar_values), expected,
         )
 
-    assert id(diagram._cell_scalar_array) == array_id_before
-    assert id(diagram._actor.GetMapper()) == mapper_id_before
+    # Persistent scalar buffer mutated in place; backend reuses the
+    # actor + mapper across steps (mesh fast path).
+    assert diagram._scalar_values is buffer_before
+    assert diagram._handle.actor is initial_actor
+    assert id(diagram._handle.actor.GetMapper()) == mapper_id_before
 
 
 def test_initial_clim_brackets_step_0_values(
@@ -329,8 +330,7 @@ def test_two_gp_averaged_routes_to_gauss_node(
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
     assert diagram._effective_topology == "gauss_node"
-    assert diagram._scalar_array is not None
-    assert diagram._cell_scalar_array is None
+    assert diagram._scalar_location == "point"
 
 
 def test_two_gp_discrete_routes_to_shattered_submesh(
@@ -346,14 +346,15 @@ def test_two_gp_discrete_routes_to_shattered_submesh(
     )
     diagram.attach(headless_plotter, r.fem, scene)
     assert diagram._effective_topology == "gauss_node_discrete"
-    assert diagram._scalar_array is not None
-    assert diagram._cell_scalar_array is None
-    # Shattered: each cell has its own copies of its corners.
-    expected_n_points = sum(
-        diagram._submesh.GetCell(c).GetNumberOfPoints()
-        for c in range(diagram._submesh.n_cells)
+    assert diagram._scalar_location == "point"
+    # Shattered: each cell has its own copies of its corners, so the
+    # emitted layer carries more points than the shared substrate and
+    # exactly the cumulative per-cell corner count.
+    assert diagram._layer.points.n_points > scene.grid.n_points
+    assert (
+        diagram._layer.points.n_points
+        == int(diagram._discrete_cell_point_offsets[-1])
     )
-    assert diagram._submesh.n_points == expected_n_points
 
 
 def test_gauss_node_path_in_place_mutation_across_steps(
@@ -367,14 +368,16 @@ def test_gauss_node_path_in_place_mutation_across_steps(
         _spec("stress_xx", topology="gauss", averaging="averaged"), r,
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
-    array_id_before = id(diagram._scalar_array)
-    mapper_id_before = id(diagram._actor.GetMapper())
+    buffer_before = diagram._scalar_values
+    initial_actor = diagram._handle.actor
+    mapper_id_before = id(diagram._handle.actor.GetMapper())
 
     diagram.update_to_step(1)
     diagram.update_to_step(0)
 
-    assert id(diagram._scalar_array) == array_id_before
-    assert id(diagram._actor.GetMapper()) == mapper_id_before
+    assert diagram._scalar_values is buffer_before
+    assert diagram._handle.actor is initial_actor
+    assert id(diagram._handle.actor.GetMapper()) == mapper_id_before
 
 
 def test_gauss_discrete_path_in_place_mutation_across_steps(
@@ -387,14 +390,16 @@ def test_gauss_discrete_path_in_place_mutation_across_steps(
         _spec("stress_xx", topology="gauss", averaging="discrete"), r,
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
-    array_id_before = id(diagram._scalar_array)
-    mapper_id_before = id(diagram._actor.GetMapper())
+    buffer_before = diagram._scalar_values
+    initial_actor = diagram._handle.actor
+    mapper_id_before = id(diagram._handle.actor.GetMapper())
 
     diagram.update_to_step(1)
     diagram.update_to_step(0)
 
-    assert id(diagram._scalar_array) == array_id_before
-    assert id(diagram._actor.GetMapper()) == mapper_id_before
+    assert diagram._scalar_values is buffer_before
+    assert diagram._handle.actor is initial_actor
+    assert id(diagram._handle.actor.GetMapper()) == mapper_id_before
 
 
 # =====================================================================
@@ -411,8 +416,9 @@ def test_detach_clears_gauss_state(
     )
     diagram.attach(headless_plotter, r.fem, build_fem_scene(r.fem))
     diagram.detach()
-    assert diagram._submesh is None
-    assert diagram._cell_scalar_array is None
+    assert diagram._layer is None
+    assert diagram._handle is None
+    assert diagram._scalar_values is None
     assert diagram._submesh_cell_pos_of_eid is None
     assert diagram._fem_eids_to_read is None
     assert diagram._discrete_cell_point_offsets is None

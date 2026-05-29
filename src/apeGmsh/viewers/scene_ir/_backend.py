@@ -92,6 +92,15 @@ class RenderBackend(Protocol):
         """
         ...
 
+    def set_layer_opacity(self, handle: LayerHandle, opacity: float) -> None:
+        """Set the layer's opacity live without re-adding it.
+
+        The runtime counterpart of an opacity slider — pokes the actor's
+        opacity directly (the in-place ``update_layer`` fast path does
+        not touch opacity, which is baked into the actor at add time).
+        """
+        ...
+
     def add_scalar_bar(self, handle: LayerHandle, spec: "ScalarBarSpec") -> None:
         """Show a scalar bar bound to ``handle``'s mapper.
 

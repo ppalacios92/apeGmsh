@@ -286,6 +286,7 @@ class ScalarBarSpec:
     layer_id: str
     title: str
     lut: LutSpec
+    fmt: str = "%.3g"
 
 
 #: The union a ``RenderBackend.add_layer`` accepts.
