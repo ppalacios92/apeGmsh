@@ -387,6 +387,65 @@ ADR 0038 import. No new `Assembly` object is required for the initial
 split-emit slice; the explicit `Assembly` graph + `couple`-edge
 declaration layers on top once split emit is proven.
 
+#### Slice 1.1 — SHIPPED 2026-05-28
+
+`apeSees(fem).tcl(path, split=True)` / `.py(path, split=True)` write a
+driver + one `parts/<module>.{tcl,py}` fragment per composed module.
+
+**Framing (settled in the slice-1.1 design discussion — keep scope honest):**
+
+- **Split is canonical, by compose module — no free-form carve.** The
+  modules *are* the cut lines (they already carry provenance compose /
+  the viewer / the lineage DAG track). A "split however you like" knob
+  was rejected as configurability nobody needs.
+- **Split is ergonomic-only, not semantic.** The emitted model is
+  byte-identical whether split or not; `split` only changes the
+  on-disk layout (hence a plain `bool`, not a `"parts"`/`…` menu). Its
+  value is parsing / diffing / editing the analysis without the
+  geometry bulk — the bulk lands in fragments, the editable logic
+  stays in the small driver.
+- **The Workbench is *multiple emits*, not this split machinery.**
+  Emitting is cheap, so "many decks, run the one for your analysis" is
+  N normal emits (mode B / `Assembly`), each a whole self-contained
+  deck. Split serves only the single coupled-deck (`couple`) case. A
+  standalone part is just *its own emit* — there is **no
+  `part().tcl()`**; emission always needs a bridge over a model.
+
+**Implementation (locking the seam choice for later slices):**
+
+- **No `Emitter` Protocol change.** The split is a *write-time*
+  concern, not a per-primitive one, so widening the frozen Protocol
+  (Live / H5 / Recording would have to no-op a method only Tcl / Py
+  use) was rejected. Instead `BuiltModel._emit_split` drives a single
+  emitter in module-grouped order and records `[start, end)` line
+  spans (`_SplitLayout`); the Tcl / Py writers slice the one buffer.
+  The default single-file path (`_emit_flat`) is untouched →
+  byte-identical by construction.
+- **Bucket split.** Fragment = that module's `node` + `element` +
+  `mass` + intra-part `fix`. Driver = `model` + all definitions +
+  `geomTransf` fan-out + fragment wiring + regions + loads +
+  MP-constraint interface + patterns + recorders + `analyze`.
+  Definitions carry no module provenance (only nodes / elements do —
+  the `module_label` parallel datasets), so they are driver-side by
+  invariant, not heuristic.
+- **Module ownership** reads the new public `FEMData.nodes.module_label`
+  / `FEMData.elements.module_label_by_id()` accessors. Host (`""`)
+  rows form a `host` fragment; `.tcl` fragments are `source`d, `.py`
+  fragments expose `def build(ops): ...` loaded by explicit file path
+  via `importlib` (no `sys.path` mutation, no bare-name collisions).
+- **Fail-loud (out of scope for 1.1):** partitioned, staged,
+  `initial_stress`, and non-composed (or all-host) models raise a
+  `BridgeError` under `split`. A further guard rejects any element
+  whose module label disagrees with its connectivity nodes' module
+  (red/blue review Finding B — partial/inconsistent compose metadata
+  would otherwise route an element into the host-first fragment
+  referencing not-yet-defined nodes).
+- The Q1 caveat is visible here already: ops element tags are
+  allocator-assigned and do **not** equal `fem_eid` over a composed
+  model — the split test asserts on element *connectivity*, not tag.
+  The recorder/`fem_eid` join over a composed model is the open
+  correctness item for the next slice.
+
 ## References
 
 - [decisions/0038-compose-model-composition.md](0038-compose-model-composition.md)

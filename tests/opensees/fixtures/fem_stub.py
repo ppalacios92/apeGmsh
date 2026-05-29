@@ -167,12 +167,19 @@ class _NodesStub:
         coords: list[tuple[float, float, float]],
         node_pgs: dict[str, list[int]],
         labels: dict[str, list[int]] | None = None,
+        module_label: list[str] | None = None,
     ) -> None:
         self._ids = np.asarray(ids, dtype=np.int64)
         self._coords = np.asarray(coords, dtype=np.float64)
         self._id_to_idx = {int(n): i for i, n in enumerate(self._ids)}
         self._pgs = {k: list(v) for k, v in node_pgs.items()}
         self.labels = _NodeLabelsStub(labels or {})
+        # ADR 0043 split: per-node compose labels aligned to ``ids``;
+        # ``None`` mirrors the uncomposed broker (no metadata).
+        self._module_label = (
+            None if module_label is None
+            else np.asarray(module_label, dtype=object)
+        )
         # Per-node ndf channel — mirrors :attr:`NodeComposite._ndf`
         # (S2 / ADR 0033).  ``None`` means "no declarations" — every
         # ``ndf_for`` call raises ``LookupError`` (matching the real
@@ -187,6 +194,10 @@ class _NodesStub:
     @property
     def coords(self) -> ndarray:
         return self._coords
+
+    @property
+    def module_label(self) -> "ndarray | None":
+        return self._module_label
 
     def index(self, node_id: int) -> int:
         try:
@@ -288,9 +299,18 @@ class _ElementsStub:
         self,
         elem_pgs: dict[str, _ElementGroupView],
         labels: dict[str, list[int]] | None = None,
+        module_label: dict[int, str] | None = None,
     ) -> None:
         self._pgs = dict(elem_pgs)
         self.labels = _ElementLabelsStub(labels or {})
+        # ADR 0043 split: flat ``element-id -> compose label`` map;
+        # ``None`` mirrors the uncomposed broker (no metadata).
+        self._module_label_by_id = (
+            None if module_label is None else dict(module_label)
+        )
+
+    def module_label_by_id(self) -> "dict[int, str] | None":
+        return self._module_label_by_id
 
     def get(
         self,
@@ -624,6 +644,38 @@ def make_two_column_frame_with_labels_and_selection() -> FEMStub:
         elements=elements,
         mesh_selection=mesh_selection,
     )
+
+
+def make_two_module_frame() -> FEMStub:
+    """:func:`make_two_column_frame` geometry tagged as two compose modules.
+
+    Column A (nodes 1, 2; element 1) carries label ``"A"``; column B
+    (nodes 3, 4; element 2) carries label ``"B"`` — no host rows.  Used
+    by the ADR 0043 split-emit element-partitioning test: a single
+    ``ops.element(pg="Cols")`` fans over both eids, and the split path
+    routes each eid into its owning module fragment.
+    """
+    nodes = _NodesStub(
+        ids=[1, 2, 3, 4],
+        coords=[
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 0.0, 1.0),
+        ],
+        node_pgs={"Base": [1, 3], "Top": [2, 4]},
+        module_label=["A", "A", "B", "B"],
+    )
+    elements = _ElementsStub(
+        elem_pgs={
+            "Cols": _ElementGroupView(
+                ids=(1, 2),
+                connectivity=((1, 2), (3, 4)),
+            ),
+        },
+        module_label={1: "A", 2: "B"},
+    )
+    return FEMStub(nodes=nodes, elements=elements)
 
 
 def make_two_column_frame_partitioned() -> FEMStub:

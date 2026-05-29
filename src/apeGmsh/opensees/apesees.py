@@ -18,6 +18,7 @@ allocator). Phase 4 wires:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -293,6 +294,143 @@ class _MPCOFilterPlan:
 
 
 # ---------------------------------------------------------------------------
+# Split-emit layout (ADR 0043 slice 1.1, mode A)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class _SplitLayout:
+    """Line-span map produced by :meth:`BuiltModel._emit_split`.
+
+    Carves the single emitter buffer into a contiguous per-module band
+    ``[module_start, module_end)`` and, within it, each module's
+    ``(label, start, end)`` sub-span.  The Tcl / Py writers slice the
+    buffer with this map: ``lines[start:end]`` is module ``label``'s
+    fragment body; ``lines[:module_start]`` is the driver preamble
+    (model + definitions + transforms) and ``lines[module_end:]`` is the
+    driver tail (interface + loads + patterns + recorders).
+    """
+
+    module_start: int
+    module_end: int
+    modules: "list[tuple[str, int, int]]"
+
+
+def _split_safe_name(label: str, used: "set[str]") -> str:
+    """Map a compose module label to a collision-free fragment stem.
+
+    Empty (host) label → ``"host"``; any character outside
+    ``[0-9A-Za-z_-]`` (e.g. the nested-compose ``/`` separator) →
+    ``_``; duplicates are disambiguated with a numeric suffix.
+    """
+    base = label if label != "" else "host"
+    safe = re.sub(r"[^0-9A-Za-z_-]", "_", base) or "host"
+    candidate = safe
+    i = 1
+    while candidate in used:
+        candidate = f"{safe}_{i}"
+        i += 1
+    used.add(candidate)
+    return candidate
+
+
+def _write_split_tcl(
+    path: str, lines: "list[str]", layout: "_SplitLayout",
+) -> None:
+    """Write a Tcl driver at ``path`` + ``parts/<label>.tcl`` fragments.
+
+    The driver ``source``s each fragment (relative to its own
+    location, so the deck runs from any cwd) between the definitions
+    preamble and the interface / loads / recorders tail.
+    """
+    out_dir = os.path.dirname(os.path.abspath(path))
+    parts_dir = os.path.join(out_dir, "parts")
+    os.makedirs(parts_dir, exist_ok=True)
+
+    used: set[str] = set()
+    source_lines: list[str] = []
+    for label, start, end in layout.modules:
+        safe = _split_safe_name(label, used)
+        body = lines[start:end]
+        with open(
+            os.path.join(parts_dir, f"{safe}.tcl"), "w", encoding="utf-8",
+        ) as f:
+            f.write(f"# apeGmsh split fragment: {label or 'host'}\n")
+            if body:
+                f.write("\n".join(body) + "\n")
+        source_lines.append(
+            f"source [file join [file dirname [info script]] "
+            f"parts {safe}.tcl]"
+        )
+
+    driver = (
+        lines[: layout.module_start]
+        + ["", "# --- module fragments (ADR 0043 split='parts') ---"]
+        + source_lines
+        + [""]
+        + lines[layout.module_end:]
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(driver) + "\n")
+
+
+def _write_split_py(
+    path: str, lines: "list[str]", layout: "_SplitLayout",
+) -> None:
+    """Write a Py driver at ``path`` + ``parts/<label>.py`` fragments.
+
+    Each fragment exposes ``def build(ops): ...``; the driver loads
+    each fragment by explicit file path via ``importlib`` (no
+    ``sys.path`` mutation, no bare-module-name collisions) and calls
+    ``build(ops)`` against the driver's own ``ops`` handle.
+    """
+    out_dir = os.path.dirname(os.path.abspath(path))
+    parts_dir = os.path.join(out_dir, "parts")
+    os.makedirs(parts_dir, exist_ok=True)
+
+    used: set[str] = set()
+    call_lines: list[str] = []
+    for label, start, end in layout.modules:
+        safe = _split_safe_name(label, used)
+        body = lines[start:end]
+        with open(
+            os.path.join(parts_dir, f"{safe}.py"), "w", encoding="utf-8",
+        ) as f:
+            f.write(f"# apeGmsh split fragment: {label or 'host'}\n")
+            f.write("def build(ops):\n")
+            if body:
+                for ln in body:
+                    f.write(f"    {ln}\n")
+            else:
+                f.write("    pass\n")
+        # Load each fragment by explicit file path (no sys.path
+        # mutation, no bare-module-name collisions) and call its
+        # ``build(ops)`` against the driver's own ops handle.
+        call_lines.append(
+            f"_apesees_load('_apesees_frag_{safe}', '{safe}.py').build(ops)"
+        )
+
+    inject = (
+        [
+            "",
+            "# --- module fragments (ADR 0043 split='parts') ---",
+            "import importlib.util as _ilu, os as _os",
+            "def _apesees_load(_name, _file):",
+            "    _path = _os.path.join(_os.path.dirname("
+            "_os.path.abspath(__file__)), 'parts', _file)",
+            "    _spec = _ilu.spec_from_file_location(_name, _path)",
+            "    _mod = _ilu.module_from_spec(_spec)",
+            "    _spec.loader.exec_module(_mod)",
+            "    return _mod",
+        ]
+        + call_lines
+        + [""]
+    )
+    driver = lines[: layout.module_start] + inject + lines[layout.module_end:]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(driver) + "\n")
+
+
+# ---------------------------------------------------------------------------
 # BuiltModel — the immutable read-only artifact emitters consume
 # ---------------------------------------------------------------------------
 
@@ -385,12 +523,22 @@ class BuiltModel:
             for r in stage.stage_constraint_records
         }
 
-    def emit(self, emitter: Emitter) -> int:
+    def emit(
+        self, emitter: Emitter, *, split: bool = False,
+    ) -> "int | _SplitLayout":
         """Drive ``emitter`` over the model, returning ``analyze``'s exit value.
 
         Returns ``0`` if no ``analyze`` was registered (the bridge's
         ``apeSees.analyze`` would have populated one); otherwise the
         last ``analyze`` call's return value.
+
+        When ``split=True`` (ADR 0043 slice 1.1, mode A) the bridge
+        drives the module-grouped :meth:`_emit_split` path instead of
+        the flat / partitioned paths and returns a :class:`_SplitLayout`
+        for the Tcl / Py writers to slice the single buffer into
+        per-module fragments + a driver.  ``split`` is honoured only by
+        the Tcl / Py emit targets; every other path leaves it ``False``
+        and is byte-identical to the pre-0043 behaviour.
 
         Topological order rules:
           1. Materials & sections & time series & transforms come
@@ -504,6 +652,22 @@ class BuiltModel:
                 post_element.append(p)
             else:
                 pre_element.append(p)
+
+        # ADR 0043 slice 1.1: split (mode A) dispatch.  Routed before
+        # the partitioned branch so the split guards (which fail loud
+        # on partitioned / staged / initial_stress / non-composed
+        # models) own the decision.  The single-file paths below are
+        # untouched when ``split`` is ``False``.
+        if split:
+            return self._emit_split(
+                emitter=emitter,
+                tags=tags,
+                transforms=transforms,
+                elements=elements,
+                pre_element=pre_element,
+                post_element=post_element,
+                base_resolver=_base_resolver,
+            )
 
         # ADR 0027: partitioned vs unpartitioned branch.  The
         # unpartitioned path must be **byte-identical** to the pre-ADR
@@ -753,6 +917,254 @@ class BuiltModel:
                 overrides=overrides,
                 base_resolver=base_resolver,
             )
+
+    # -- Split (mode A, ADR 0043 slice 1.1) emit path ---------------------
+
+    def _emit_split(
+        self,
+        *,
+        emitter: Emitter,
+        tags: TagAllocator,
+        transforms: "list[GeomTransf]",
+        elements: "list[Element]",
+        pre_element: "list[Primitive]",
+        post_element: "list[Primitive]",
+        base_resolver: object,
+    ) -> "_SplitLayout":
+        """Module-grouped emit for ``split="parts"`` (ADR 0043 mode A).
+
+        Drives a single ``emitter`` in three bands:
+
+        * **driver-pre** — definitions (materials / sections / time
+          series / beamIntegration) + the analysis chain + the
+          ``geomTransf`` fan-out.  Module-agnostic; lands in the driver.
+        * **per module** — for each composed module label, that
+          module's ``node`` + ``element`` + ``mass`` + intra-part
+          ``fix`` lines, emitted contiguously.  The ``[start, end)``
+          line span is recorded so the writer carves the fragment file.
+        * **driver-post** — regions, broker loads, the cross-module
+          MP-constraint interface, the auto constraint handler, then
+          patterns + recorders.  All land in the driver.
+
+        Returns the :class:`_SplitLayout` describing the contiguous
+        module band + each module's sub-span.
+
+        Fail-loud for slice-1.1 out-of-scope models (partitioned,
+        staged, ``initial_stress``, non-composed): the split seam is a
+        single-Domain, single-pass, write-only export that does not
+        compose with those axes yet.
+        """
+        if is_partitioned(self.fem):
+            raise BridgeError(
+                "split='parts' does not support partitioned models "
+                "(ADR 0043 slice 1.1).  Partition emit (ADR 0027) is an "
+                "orthogonal split axis; emit the single-file deck instead."
+            )
+        if self.stage_records:
+            raise BridgeError(
+                "split='parts' does not support staged models "
+                "(ADR 0043 slice 1.1).  Emit the single-file deck instead."
+            )
+        if self.initial_stress_records:
+            raise BridgeError(
+                "split='parts' does not support initial_stress models "
+                "(ADR 0043 slice 1.1).  Emit the single-file deck instead."
+            )
+
+        node_label_arr = self.fem.nodes.module_label
+        elem_label_by_id = self.fem.elements.module_label_by_id()
+        if node_label_arr is None or elem_label_by_id is None:
+            raise BridgeError(
+                "split='parts' requires a composed model (g.compose); "
+                "this model carries no per-row module labels.  Emit the "
+                "single-file deck instead."
+            )
+
+        nid_to_label: dict[int, str] = {
+            int(nid): str(lbl)
+            for nid, lbl in zip(self.fem.nodes.ids, node_label_arr)
+        }
+        present = set(nid_to_label.values()) | set(elem_label_by_id.values())
+        if not any(lbl != "" for lbl in present):
+            raise BridgeError(
+                "split='parts' requires a composed model with at least "
+                "one composed source module; every row is host-owned "
+                "(empty label).  Emit the single-file deck instead."
+            )
+
+        # Host ("") first, then composed sources alphabetically — a
+        # deterministic source order, stable across runs.
+        ordered_labels = sorted(present, key=lambda s: (s != "", s))
+
+        # -- driver-pre: definitions + analysis chain (no nodes —
+        #    nodes are per-module).  Mirrors _emit_flat step 4a; staged
+        #    skip is unreachable here (gated out above).
+        for p in pre_element:
+            p._emit(emitter, self.tag_for[id(p)])
+
+        overrides = emit_transform_specs(
+            transforms=transforms,
+            elements=elements,
+            emitter=emitter,
+            fem=self.fem,
+            tags=tags,
+            spec_to_own_tag=self.tag_for,
+            ndm=self.ndm,
+        )
+
+        element_plan = allocate_element_tags(elements, self.fem, tags)
+        fem_eid_to_ops_tag = {
+            eid: ele_tag
+            for _, sub in element_plan
+            for eid, _conn, ele_tag in sub
+        }
+
+        # Fail loud if any element's module label disagrees with its
+        # connectivity nodes' module (red/blue review, Finding B).  A
+        # silent host-default ('') for an element whose nodes live in a
+        # composed module would route that element into the ``host``
+        # fragment — emitted FIRST — referencing nodes not yet defined
+        # (they live in a later fragment), producing a deck that fails
+        # to load.  ``g.compose`` never produces cross-module element
+        # connectivity (every module is offset into a disjoint tag
+        # namespace), so this guards against partial / inconsistent
+        # module-label metadata, not normal composed models.
+        for _spec, sub in element_plan:
+            for eid, conn, _ele_tag in sub:
+                node_labels = {
+                    nid_to_label[int(n)]
+                    for n in conn
+                    if int(n) in nid_to_label
+                }
+                if len(node_labels) > 1:
+                    raise BridgeError(
+                        f"split='parts': element fem_eid={eid} spans "
+                        f"modules {sorted(node_labels)} through its "
+                        "connectivity. Every element's nodes must belong "
+                        "to one module; cross-module coupling must go "
+                        "through interface constraints, not shared "
+                        "element connectivity."
+                    )
+                elem_label = elem_label_by_id.get(int(eid), "")
+                if node_labels and elem_label not in node_labels:
+                    owner = next(iter(node_labels))
+                    raise BridgeError(
+                        f"split='parts': element fem_eid={eid} carries "
+                        f"module label {elem_label!r} but its nodes "
+                        f"belong to module {owner!r} (inconsistent / "
+                        "partial compose metadata). Refusing to emit a "
+                        "fragment that would reference undefined nodes."
+                    )
+
+        # -- per-module band.
+        module_start = len(emitter.lines())
+        modules: list[tuple[str, int, int]] = []
+        node_idx = {int(nid): i for i, nid in enumerate(self.fem.nodes.ids)}
+        for label in ordered_labels:
+            span_start = len(emitter.lines())
+            owned_nodes = {
+                nid for nid, lbl in nid_to_label.items() if lbl == label
+            }
+            # Nodes — FEM-id order for a grep-friendly, stable fragment.
+            for nid in sorted(owned_nodes):
+                xyz = self.fem.nodes.coords[node_idx[nid]]
+                _emit_node_with_broker_ndf(
+                    emitter, self.fem, int(nid),
+                    (float(xyz[0]), float(xyz[1]), float(xyz[2])),
+                )
+            # Elements owned by this module.
+            self._emit_element_subset(
+                emitter,
+                element_plan=element_plan,
+                eid_label=elem_label_by_id,
+                label=label,
+                overrides=overrides,
+                base_resolver=base_resolver,
+            )
+            # Intra-part fix + mass (reuse the owned-node-set filter).
+            self._emit_fixes_partitioned(emitter, owned_nodes)
+            self._emit_masses_partitioned(emitter, owned_nodes)
+            modules.append((label, span_start, len(emitter.lines())))
+        module_end = len(emitter.lines())
+
+        # -- driver-post: regions, loads, interface, patterns, recorders.
+        self._emit_regions(emitter, tags)
+        self._emit_broker_loads(emitter, tags)
+        emit_mp_constraints(
+            emitter, self.fem, tags,
+            claimed_ids=frozenset(self._claimed_constraint_ids()),
+        )
+        self._maybe_auto_emit_constraint_handler(emitter, pre_element)
+
+        claimed_recorder_ids = self._claimed_recorder_ids()
+        for p in post_element:
+            tag = self.tag_for[id(p)]
+            if isinstance(p, Pattern):
+                emit_pattern_spec(p, emitter, tag, self.fem)
+            elif isinstance(p, Recorder):
+                if id(p) in claimed_recorder_ids:
+                    continue
+                emit_recorder_spec(
+                    p, emitter, tag, self.fem,
+                    tags=tags,
+                    fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+                )
+
+        return _SplitLayout(
+            module_start=module_start,
+            module_end=module_end,
+            modules=modules,
+        )
+
+    def _emit_element_subset(
+        self,
+        emitter: Emitter,
+        *,
+        element_plan: "list[tuple[Element, list[tuple[int, tuple[int, ...], int]]]]",
+        eid_label: "dict[int, str]",
+        label: str,
+        overrides: "dict[tuple[int, int], int] | None",
+        base_resolver: object,
+    ) -> None:
+        """Emit ``element`` lines for elements owned by ``label``.
+
+        Factored from the :meth:`_emit_flat` element loop so the split
+        path reuses the exact orientation-override resolver dance
+        (ADR 0010) without duplicating it.
+        """
+        for spec, sub in element_plan:
+            transf_spec = _build_element_transf(spec)
+            for eid, node_tags, ele_tag in sub:
+                if eid_label.get(int(eid), "") != label:
+                    continue
+                set_element_nodes(emitter, node_tags)
+                set_current_fem_element_id(emitter, eid)
+                if (
+                    transf_spec is not None
+                    and overrides is not None
+                    and (id(transf_spec), eid) in overrides
+                ):
+                    override_tag = overrides[(id(transf_spec), eid)]
+                    base = base_resolver
+                    override = transf_spec
+
+                    def _resolver_with_override(
+                        p: Primitive,
+                        _base: object = base,
+                        _override_spec: Primitive = override,
+                        _override_tag: int = override_tag,
+                    ) -> int:
+                        if p is _override_spec:
+                            return _override_tag
+                        return int(_base(p))  # type: ignore[operator]
+
+                    set_tag_resolver(emitter, _resolver_with_override)
+                    try:
+                        spec._emit(emitter, ele_tag)
+                    finally:
+                        set_tag_resolver(emitter, base_resolver)  # type: ignore[arg-type]
+                else:
+                    spec._emit(emitter, ele_tag)
 
     def _emit_stages_flat(
         self,
@@ -4056,6 +4468,7 @@ class apeSees:
         bin: str | None = None,
         analyze_steps: int | None = None,
         analyze_dt: float | None = None,
+        split: bool = False,
     ) -> None:
         """Emit a Tcl deck to ``path``; optionally subprocess OpenSees.
 
@@ -4065,16 +4478,32 @@ class apeSees:
         :meth:`initial_stress` calls registered step hooks (Phase
         SSI-1).  Without ``analyze_steps``, the emitted deck declares
         the model but does not drive an analysis.
+
+        ``split=True`` (ADR 0043 slice 1.1, mode A) writes a driver
+        deck at ``path`` plus one ``parts/<module>.tcl`` fragment per
+        composed module (``g.compose``); the driver ``source``s each
+        fragment.  The split is canonical — by compose module, no
+        free-form carve — and changes only the on-disk layout: the
+        default ``split=False`` writes the single self-contained deck,
+        byte-identical to the pre-0043 output.  Requires a composed
+        model; partitioned / staged / ``initial_stress`` models are not
+        supported under ``split``.
         """
         from .emitter.tcl import TclEmitter
 
         bm = self.build()
         emitter = TclEmitter()
-        bm.emit(emitter)
-        if analyze_steps is not None:
-            emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(emitter.lines()) + "\n")
+        if not split:
+            bm.emit(emitter)
+            if analyze_steps is not None:
+                emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(emitter.lines()) + "\n")
+        else:
+            layout = bm.emit(emitter, split=True)
+            if analyze_steps is not None:
+                emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
+            _write_split_tcl(path, emitter.lines(), layout)  # type: ignore[arg-type]
 
         if not run:
             return
@@ -4099,21 +4528,36 @@ class apeSees:
         run: bool = False,
         analyze_steps: int | None = None,
         analyze_dt: float | None = None,
+        split: bool = False,
     ) -> None:
         """Emit an openseespy Python deck to ``path``; optionally run it.
 
         ``analyze_steps`` / ``analyze_dt`` semantics mirror :meth:`tcl`
         (Phase SSI-1).
+
+        ``split=True`` (ADR 0043 slice 1.1, mode A) writes a driver
+        script at ``path`` plus one ``parts/<module>.py`` fragment per
+        composed module; each fragment exposes ``def build(ops): ...``
+        and the driver loads + calls them.  The default ``split=False``
+        writes the single self-contained script, byte-identical to the
+        pre-0043 output.  Same composed-model requirement as
+        :meth:`tcl`.
         """
         from .emitter.py import PyEmitter
 
         bm = self.build()
         emitter = PyEmitter()
-        bm.emit(emitter)
-        if analyze_steps is not None:
-            emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(emitter.lines()) + "\n")
+        if not split:
+            bm.emit(emitter)
+            if analyze_steps is not None:
+                emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(emitter.lines()) + "\n")
+        else:
+            layout = bm.emit(emitter, split=True)
+            if analyze_steps is not None:
+                emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
+            _write_split_py(path, emitter.lines(), layout)  # type: ignore[arg-type]
 
         if not run:
             return

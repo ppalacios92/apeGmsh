@@ -288,6 +288,18 @@ class NodeComposite:
         return self._coords
 
     @property
+    def module_label(self) -> ndarray | None:
+        """Per-node compose labels aligned 1:1 with :attr:`ids`.
+
+        Object ndarray of source-module labels (empty string for
+        host-owned rows), populated by the ``g.compose`` merge engine
+        (ADR 0038 §"Schema").  ``None`` when the broker carries no
+        module-label metadata (the uncomposed case).  Read-only view
+        of the underlying array; consumers must not mutate it.
+        """
+        return self._module_label
+
+    @property
     def partitions(self) -> list[int]:
         """Sorted list of partition IDs (empty if not partitioned)."""
         return sorted(self._partitions.keys())
@@ -719,6 +731,40 @@ class ElementComposite:
                 f"Use .resolve(element_type=...) or iterate groups."
             )
         return next(iter(self._groups.values())).connectivity
+
+    @property
+    def module_label(self) -> "dict[int, ndarray] | None":
+        """Per-element compose labels keyed by element-type code.
+
+        Each value is an object ndarray aligned 1:1 with that type's
+        group ``ids`` (empty string for host-owned rows), populated by
+        the ``g.compose`` merge engine (ADR 0038 §"Schema").  ``None``
+        when the broker carries no module-label metadata (the
+        uncomposed case).  Read-only view; consumers must not mutate.
+        """
+        return self._module_label
+
+    def module_label_by_id(self) -> "dict[int, str] | None":
+        """Flat ``element-id -> compose label`` map across all types.
+
+        Concatenates the per-type :attr:`module_label` arrays against
+        each type's ``ids``.  ``None`` when no module-label metadata is
+        carried (the uncomposed case).  Used by the split-emit path to
+        bucket each element into its owning module fragment.
+        """
+        if self._module_label is None:
+            return None
+        out: dict[int, str] = {}
+        for code, grp in self._groups.items():
+            labels = self._module_label.get(int(code))
+            if labels is None:
+                # No metadata for this type — host-owned by convention.
+                for eid in grp.ids:
+                    out[int(eid)] = ""
+                continue
+            for eid, lbl in zip(grp.ids, labels):
+                out[int(eid)] = str(lbl)
+        return out
 
     @property
     def types(self) -> list[ElementTypeInfo]:
