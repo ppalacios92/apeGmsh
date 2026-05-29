@@ -39,9 +39,11 @@ from .readers import (
     TimeSlice,
 )
 from .Results import Results
+from .demo import make_demo_results
 
 __all__ = [
     "Results",
+    "make_demo_results",
     # Backend-protocol exports
     "ResultsReader",
     "NativeReader",
