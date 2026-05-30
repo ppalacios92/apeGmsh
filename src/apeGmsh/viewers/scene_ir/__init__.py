@@ -12,6 +12,7 @@ by ``tests/test_scene_ir_pure.py``.
 from __future__ import annotations
 
 from ._backend import LayerHandle, RenderBackend
+from ._bbox import BBox
 from ._layers import (
     CellBlocks,
     ColorSpec,
@@ -25,6 +26,7 @@ from ._layers import (
     SceneLayer,
     VisibilityMask,
 )
+from ._targets import SelectionTarget, Substrate
 
 __all__ = [
     # value types
@@ -39,6 +41,10 @@ __all__ = [
     "LabelLayer",
     "ScalarBarSpec",
     "SceneLayer",
+    # selection IR (ADR 0045)
+    "Substrate",
+    "SelectionTarget",
+    "BBox",
     # protocols
     "LayerHandle",
     "RenderBackend",
