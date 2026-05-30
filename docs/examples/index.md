@@ -13,10 +13,23 @@ Recognizable structural problems, built end to end through the **typed
     `ops.eigen`, the first three natural frequencies read back through
     `Results` and matched to the Euler–Bernoulli closed form.
 
+-   __[Fiber sections & moment–curvature](fiber-moment-curvature.md)__ — a
+    `W14×90` fibre section (dimensions from **apeSteel**) driven through
+    yield with `ZeroLengthSection`; the M–κ curve passes through
+    $M_y=F_yS_x$ and plateaus at $M_p=F_yZ_x$, shape factor 1.10.
+
+-   __[Multi-part assembly](multipart-assembly.md)__ — build a column once
+    as a reusable `Part`, stamp it three times with `g.parts.add`, and read
+    each copy's deflection back by its own label (each exactly $PL^3/3EI$).
+
+-   __[STEP import: plate with a hole](step-plate-with-hole.md)__ — import
+    a CAD part, heal it, name edges by geometric query, refine at the
+    hole, and recover the classic stress concentration $K_t\approx3$.
+
 </div>
 
-More rungs (fiber sections, STEP import, mesh ties, compose, pushover,
-staged SSI) are landing wave by wave.
+More rungs (multi-part assembly, mesh ties, shell-on-solid, compose,
+pushover, staged SSI) are landing wave by wave.
 
 ## Legacy notebook gallery
 

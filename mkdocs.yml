@@ -180,6 +180,9 @@ nav:
       - Worked examples:
           - "Portal frame (2D)": examples/portal-frame.md
           - "Modal analysis (cantilever)": examples/modal-analysis.md
+          - "Fiber sections & moment–curvature": examples/fiber-moment-curvature.md
+          - "Multi-part assembly": examples/multipart-assembly.md
+          - "STEP import: plate with a hole": examples/step-plate-with-hole.md
       - Notebook gallery (legacy):
           - "Hello plate": examples/notebooks/01_hello_plate.ipynb
           - "Cantilever beam (2D)": examples/notebooks/02_cantilever_beam_2D.ipynb

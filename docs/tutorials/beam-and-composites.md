@@ -433,6 +433,39 @@ ever need the *exact* distributed-load deflection on a coarse mesh,
 load vector instead of simple tributary lumping — it matters most for
 higher-order elements.)
 
+## The deflected shape
+
+The figure at the top of the page overlays the FEM deflection on the exact
+elastic curve. Here's the code that draws it — we read the captured `Span`
+slab and plot it node-by-node against the closed-form curve
+$w(x) = \dfrac{w\,x}{24EI}\,(L^3 - 2Lx^2 + x^3)$:
+
+```python
+import matplotlib
+matplotlib.use("Agg")                  # headless backend
+import matplotlib.pyplot as plt
+
+uy = results.nodes.get(pg="Span", component="displacement_y")
+xs = np.array([coords[list(ids).index(n)][0] for n in uy.node_ids])
+order = np.argsort(xs)
+w_fem = np.abs(uy.values[-1]) * 1e3                      # mm, downward positive
+
+xx = np.linspace(0.0, L, 200)
+w_exact = w * xx * (L**3 - 2*L*xx**2 + xx**3) / (24.0 * E * Iz) * 1e3
+
+fig, ax = plt.subplots(figsize=(7.2, 3.6))
+ax.plot(xx, w_exact, "-", color="0.55", lw=1.6, label="exact elastic curve")
+ax.plot(xs[order], w_fem[order], "o", ms=4.5, color="#1f77b4", label="FEM nodes")
+ax.set_xlabel("position along span  x [m]")
+ax.set_ylabel("deflection [mm]  (downward)")
+ax.set_title("Simply-supported beam under UDL — deflected shape")
+ax.legend(loc="lower center"); ax.grid(alpha=0.3); ax.invert_yaxis()
+fig.tight_layout(); fig.savefig("ssbeam-deflection.png", dpi=120)
+```
+
+Every FEM node lands on the analytical curve — the 0.2 % we saw is in the
+*midspan magnitude*, not the shape.
+
 ## See it
 
 ```python
@@ -440,9 +473,9 @@ results.show_web()
 ```
 
 `results.show_web()` launches the **notebook-safe** web viewer — an interactive
-deformed-shape view right in your Jupyter cell. (For the static figure above we
-used the headless matplotlib renderer, `results.plot`, which is the right tool
-in scripts and CI; `show_web()` is the interactive one for notebooks.)
+deformed-shape view right in your Jupyter cell. (The static figure above is plain
+matplotlib over the captured slab — the right tool in scripts and CI; `show_web()`
+is the interactive one for notebooks.)
 
 !!! warning "Don't call `results.viewer()` in a notebook"
     The desktop viewer (`results.viewer()`, default `blocking=True`) runs a
