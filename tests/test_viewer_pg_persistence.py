@@ -184,6 +184,23 @@ def test_seed_from_gmsh_pulls_existing_groups_into_staging(pg_gmsh_session):
     assert {t.dimtag for t in sel.staged_groups["Existing"]} == {(3, 1)}
 
 
+def test_reactivating_deleted_group_does_not_resurrect_from_gmsh(pg_gmsh_session):
+    # Adversarial-review finding: staging is authoritative, so activating a
+    # tombstoned name must NOT reload its lingering gmsh PG (that would undo
+    # the delete). It resolves to an empty, live group instead.
+    sel = SelectionState()
+    sel.set_active_group("Foo")
+    sel.pick((3, 1))
+    sel.flush_to_gmsh()
+    assert "Foo" in _pg_names()                 # PG exists in gmsh
+
+    sel.delete_group("Foo")
+    sel.set_active_group("Foo")                 # re-click before flush
+    assert sel.picks == []                      # NOT the stale (3,1) member
+    sel.flush_to_gmsh()
+    assert "Foo" not in _pg_names()             # delete stands
+
+
 def test_rename_roundtrip_keeps_live_group(pg_gmsh_session):
     # Foo -> Bar -> Foo within one session: the original name must survive
     # the flush (the tombstone is cleared when the name is reborn).

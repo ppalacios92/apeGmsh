@@ -344,6 +344,16 @@ class SelectionState:
             if name not in self._group_order:
                 self._group_order.append(name)
 
+    def _picks_for_group(self, name: str) -> list[SelectionTarget]:
+        """Load a group's working set. Staging is authoritative (ADR 0045
+        S3c): a tombstoned (deleted) name resolves to empty rather than
+        resurrecting its stale gmsh PG, which lingers only until flush."""
+        if name in self._staged_groups:
+            return list(self._staged_groups[name])
+        if name in self._pending_deletes:
+            return []
+        return _load_targets(name)
+
     def set_active_group(self, name: str | None) -> None:
         """Switch active group. Pure in-memory staging — no gmsh write
         (writes are deferred to :meth:`flush_to_gmsh`, ADR 0045 S3c).
@@ -351,12 +361,12 @@ class SelectionState:
         If *name* is the same as the current active group, reloads from
         staging without re-staging the working set.
         """
-        # Reload same group -> just reload its staged members.
+        # Reload same group -> just reload its staged members. (Resolve
+        # picks BEFORE clearing the tombstone, so a tombstoned name loads
+        # empty rather than from its stale gmsh PG.)
         if name is not None and name == self._active_group:
-            if name in self._staged_groups:
-                self._picks = list(self._staged_groups[name])
-            else:
-                self._picks = _load_targets(name)
+            self._picks = self._picks_for_group(name)
+            self._pending_deletes.discard(name)
             self._log.reset(self._picks)
             self._fire()
             return
@@ -370,10 +380,11 @@ class SelectionState:
             self._group_order.append(name)
         if name is None:
             self._picks = []
-        elif name in self._staged_groups:
-            self._picks = list(self._staged_groups[name])
         else:
-            self._picks = _load_targets(name)
+            self._picks = self._picks_for_group(name)
+            # Activating a name makes it live again — drop any stale
+            # tombstone so it is not deleted at the next flush.
+            self._pending_deletes.discard(name)
         # Group load is the new undo floor — undo does not cross a switch.
         self._log.reset(self._picks)
         self._fire()
@@ -458,9 +469,11 @@ class SelectionState:
         boundary (ADR 0045 S3c). This is the ONLY method that writes PGs.
 
         Tombstoned names (deleted / renamed-away originals) are removed,
-        then every staged group is (re)written; an empty staged group is
-        deleted. Returns the count of groups *written* (deletions not
-        counted).
+        then each staged group is (re)written if it has members, or
+        deleted from gmsh if empty. Empty staged groups are *kept* in
+        staging (an active group mid-build is legitimately empty); they
+        simply have no gmsh PG. Returns the count of groups *written*
+        (deletions not counted).
         """
         # Stage current active group's working set.
         if self._active_group is not None:
