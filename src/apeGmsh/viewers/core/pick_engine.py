@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
+from .frustum import frustum_planes
+
 if TYPE_CHECKING:
     import pyvista as pv
     from apeGmsh._types import DimTag
@@ -408,39 +410,103 @@ class PickEngine:
                     corner_counts.append(1)
 
         if entities:
-            # Project all corners via the camera projection matrix in
-            # one matmul — ~40x faster than per-point WorldToDisplay at
-            # 100k pts, sub-pixel parity (validated in test_core_perf).
-            from .results_pick import _project_points_to_display
             pts_all = np.vstack(all_corners)
-            xy = _project_points_to_display(pts_all, renderer)
-            screen_x = xy[:, 0]
-            screen_y = xy[:, 1]
-
-            # Check each entity's points against the box
-            offset = 0
-            for i, dt in enumerate(entities):
-                n = corner_counts[i]
-                sx = screen_x[offset:offset + n]
-                sy = screen_y[offset:offset + n]
-                hit = _entity_in_box(sx, sy, bx0, bx1, by0, by1, crossing)
-                if _debug:
-                    print(
-                        f"[box]   dt={dt} n={n} "
-                        f"sx=[{sx.min():.1f}..{sx.max():.1f}] "
-                        f"sy=[{sy.min():.1f}..{sy.max():.1f}] "
-                        f"-> {'HIT' if hit else 'miss'}",
-                        flush=True,
-                    )
-                if hit:
-                    hits.append(dt)
-                offset += n
+            planes = self._box_frustum_planes(bx0, by0, bx1, by1)
+            if planes is not None:
+                # ADR 0045 S5-box: exact 3D frustum half-space test. A
+                # point is inside the screen box's frustum iff it is on
+                # the inner side of all six planes — tighter than the 2D
+                # projection at angled views and respects near/far clip.
+                # One matmul over all points preserves the ~20x perf.
+                dist = pts_all @ planes[:, :3].T + planes[:, 3]   # (N, 6)
+                inside_all = np.all(dist >= -1e-9, axis=1)        # (N,)
+                offset = 0
+                for i, dt in enumerate(entities):
+                    n = corner_counts[i]
+                    ins = inside_all[offset:offset + n]
+                    if crossing:
+                        hit = bool(np.any(ins))
+                    else:
+                        hit = bool(np.all(ins)) if n else False
+                    if _debug:
+                        print(
+                            f"[box]   dt={dt} n={n} inside={int(ins.sum())}"
+                            f"/{n} -> {'HIT' if hit else 'miss'} (frustum)",
+                            flush=True,
+                        )
+                    if hit:
+                        hits.append(dt)
+                    offset += n
+            else:
+                # Fallback (no camera / un-projection unavailable): the
+                # legacy 2D screen-box projection — the parity oracle.
+                from .results_pick import _project_points_to_display
+                xy = _project_points_to_display(pts_all, renderer)
+                screen_x = xy[:, 0]
+                screen_y = xy[:, 1]
+                offset = 0
+                for i, dt in enumerate(entities):
+                    n = corner_counts[i]
+                    sx = screen_x[offset:offset + n]
+                    sy = screen_y[offset:offset + n]
+                    hit = _entity_in_box(sx, sy, bx0, bx1, by0, by1, crossing)
+                    if _debug:
+                        print(
+                            f"[box]   dt={dt} n={n} "
+                            f"sx=[{sx.min():.1f}..{sx.max():.1f}] "
+                            f"sy=[{sy.min():.1f}..{sy.max():.1f}] "
+                            f"-> {'HIT' if hit else 'miss'} (2d)",
+                            flush=True,
+                        )
+                    if hit:
+                        hits.append(dt)
+                    offset += n
 
         if _debug:
             print(f"[box] total hits={len(hits)}: {hits}", flush=True)
 
         if self.on_box_select is not None:
             self.on_box_select(hits, ctrl)
+
+    def _box_frustum_planes(self, bx0: int, by0: int, bx1: int, by1: int):
+        """Six inward frustum planes for the screen box, or ``None`` if
+        the renderer cannot un-project (no camera / headless context).
+
+        The four box corners are un-projected at the near (z=0) and far
+        (z=1) clip depths to world space, in CCW [bl, br, tr, tl] order,
+        and handed to :func:`frustum_planes` (ADR 0045 S5-box).
+
+        Set ``APEGMSH_BOX_2D=1`` to force the legacy 2D-projection path
+        (the parity oracle / escape hatch)."""
+        import os
+        if os.environ.get("APEGMSH_BOX_2D"):
+            return None
+        renderer = getattr(self._plotter, "renderer", None)
+        if renderer is None:
+            return None
+
+        def _unproject(x: float, y: float, z: float):
+            renderer.SetDisplayPoint(float(x), float(y), float(z))
+            renderer.DisplayToWorld()
+            wp = renderer.GetWorldPoint()
+            w = wp[3]
+            if w == 0.0:
+                return None
+            return (wp[0] / w, wp[1] / w, wp[2] / w)
+
+        corners = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)]
+        try:
+            near, far = [], []
+            for (x, y) in corners:
+                n = _unproject(x, y, 0.0)
+                f = _unproject(x, y, 1.0)
+                if n is None or f is None:
+                    return None
+                near.append(n)
+                far.append(f)
+            return frustum_planes(np.array(near), np.array(far))
+        except Exception:
+            return None
 
     @property
     def hover_entity(self) -> "DimTag | None":
