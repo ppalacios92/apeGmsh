@@ -174,9 +174,12 @@ class OpenSeesModel:
             neutral zone.  Default ``"/"`` rehydrates from a
             standalone ``model.h5``.  Per ADR 0020 (Phase 4 cleanup),
             composed ``results.h5`` files carry the same rich layout
-            under ``/model/``; pass ``fem_root="/model"`` together
-            with ``opensees_root="/opensees"`` to rehydrate from a
-            composed file.
+            under ``/model/``.  The default auto-detects this: when a
+            composed ``results.h5`` is passed without overriding
+            ``fem_root``, the embedded ``/model/`` zone is resolved
+            transparently (paired with the verbatim ``/opensees`` zone
+            at root).  Pass ``fem_root="/model"`` explicitly to force
+            it; any explicit value is honoured unchanged.
         opensees_root
             HDF5 path to the bridge ``/opensees`` zone.  Default
             ``"/opensees"`` works for both standalone model.h5 files
@@ -203,6 +206,10 @@ class OpenSeesModel:
         from .emitter import h5_reader
 
         spath = str(path)
+        # Auto-detect the composed results.h5 layout (ADR 0020) so a
+        # caller can pass the composed file directly without knowing the
+        # neutral zone lives under /model/.  Explicit fem_root is kept.
+        fem_root = _resolve_fem_root_for_read(spath, fem_root)
         fem = FEMData.from_h5(spath, root=fem_root)
 
         # Locate the bridge meta — it lives at ``{fem_root}/meta`` so
@@ -1169,6 +1176,46 @@ def _resolve_neutral_group(f: Any, fem_root: str) -> Any:
     if key not in f:
         return None
     return f[key]
+
+
+def _resolve_fem_root_for_read(path: str, fem_root: str) -> str:
+    """Resolve the neutral-zone root, auto-detecting composed results.h5.
+
+    Composed results files (ADR 0020) embed the rich neutral zone under
+    ``/model/`` while the file-root ``/meta`` carries only the results
+    envelope's lineage stub (written by
+    :meth:`NativeWriter._require_lineage_meta_group` — no
+    ``schema_version``, no neutral zone).  A caller who passes a
+    composed ``results.h5`` to :meth:`OpenSeesModel.from_h5` without
+    overriding ``fem_root`` would otherwise read that stub and raise
+    ``MalformedH5Error: /meta/schema_version attribute is empty``.
+
+    When the standalone default (``"/"``) is in effect and the file has
+    no root-level neutral zone but does carry a ``/model`` one,
+    transparently resolve to ``/model`` so the embedded zone Just Works.
+    Any explicit ``fem_root`` is honoured unchanged.  Probes children
+    with ``in`` (never ``Group.get``) per the h5py optional-child
+    hazard.
+    """
+    if fem_root not in ("", "/"):
+        return fem_root
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        # A usable root-level neutral zone ⇒ standalone model.h5.
+        root_has_neutral = (
+            "meta" in f
+            and "schema_version" in f["meta"].attrs
+            and bool(str(f["meta"].attrs["schema_version"]))
+            and "nodes" in f
+        )
+        if root_has_neutral:
+            return fem_root
+        # Composed-results signature: embedded /model carrying its own
+        # meta + neutral zone.
+        if "model" in f and "meta" in f["model"] and "nodes" in f["model"]:
+            return "/model"
+    return fem_root
 
 
 def _infer_ndm_from_transforms(f: Any) -> int:

@@ -52,3 +52,26 @@ def test_demo_rejects_bad_args():
         make_demo_results(n_steps=0)
     with pytest.raises(ValueError):
         make_demo_results(n_elements=0)
+
+
+def test_demo_composed_model_zone_is_readable():
+    """OpenSeesModel.from_h5(composed results.h5) reads the embedded zone.
+
+    Regression for the composed-file read gap (ADR 0020): the rich
+    neutral zone lives under ``/model/`` while the file-root ``/meta``
+    is only the results envelope's lineage stub.  Passing the composed
+    file straight to ``from_h5`` (no ``fem_root`` override) used to raise
+    ``MalformedH5Error: /meta/schema_version attribute is empty``; it now
+    auto-detects the ``/model/`` zone.
+    """
+    from apeGmsh.results import make_demo_results
+    from apeGmsh.opensees import OpenSeesModel
+
+    r = make_demo_results(n_elements=4, n_steps=3)
+    model = OpenSeesModel.from_h5(str(r._path))
+    assert model.model_name == "demo_model"
+    # The embedded zone rehydrates to the same snapshot the writer
+    # stamped on /model/meta.
+    assert model.snapshot_id
+    assert model.fem.nodes.ids.size > 0
+    r.close()
