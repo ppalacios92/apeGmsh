@@ -446,6 +446,37 @@ driver + one `parts/<module>.{tcl,py}` fragment per composed module.
   The recorder/`fem_eid` join over a composed model is the open
   correctness item for the next slice.
 
+#### Slice 1.4 — SHIPPED 2026-05-29
+
+The explicit `Assembly` + `couple` API
+(`Assembly(name).add(label, h5, …).couple(part_a, part_b, kind=, ports=,
+…).materialize() -> apeGmsh`) — a declarative front-end that resolves to
+`apeGmsh.from_h5(parts[0])` (first part = host) + `g.compose(rest,
+label=…)` + `g.constraints.<kind>(…)` (chain-phase-routed, ADR 0041) and
+returns the composed session.
+
+**v1.0 Assembly removal — reckoned with (gap this ADR previously left).**
+A pre-v1.0 `Assembly` class was *deliberately removed* in the v1.0
+cleanup (the surviving guard: `tests/test_library_contracts.py` asserts
+no top-level `Assembly` — "the session IS the assembly"). The slice-1.4
+red/blue pass took that seriously: `materialize()` *returns a session*,
+which confirms the session remains the assembly; this `Assembly` is sugar
+that **produces** one, not a replacement. So 1.4 ships it at a **sub-path**
+(`from apeGmsh.assembly import Assembly`), **not** the top-level export the
+"Proposed API surface" sketch showed. `hasattr(apeGmsh, "Assembly")` stays
+`False`; the v1.0 guard is honored literally. The top-level name (and the
+conscious reversal of the "session is the assembly" stance) is **reserved**
+until the graph/scheduler layer (slice 1.5+) gives the type
+non-speculative weight and this ADR is promoted Proposed → Accepted.
+
+**Scope.** `kind ∈ {equal_dof, tied_contact}` (embedded/rigid_link
+deferred — embedded needs host-volume geometry the bare-PG ports model
+can't express). Host-port asymmetry handled (host PGs stay un-namespaced,
+composed parts prefixed → ports are bare per-part PG names, namespaced at
+materialize). Fail-loud: a declared couple resolving to zero constraint
+records raises `AssemblyError`. `Assembly.emit` (split-deck) +
+`Assembly.graph` (inspect, reuse `compose_tree` + lineage) are slice 1.5.
+
 ## References
 
 - [decisions/0038-compose-model-composition.md](0038-compose-model-composition.md)
