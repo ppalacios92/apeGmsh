@@ -68,6 +68,22 @@ def test_true_perspective_frustum_narrows_toward_camera() -> None:
     assert points_inside_frustum(planes, [[3, 0, 5.5]])[0]
 
 
+def test_near_and_far_planes_clip_depth() -> None:
+    # The core 3D guarantee over the 2D path: points outside the [z0, z1]
+    # depth range are rejected even when they project into the screen box.
+    planes = _axis_box(-1, 1, -1, 1, z0=-1.0, z1=1.0)
+    on_axis = np.array([
+        [0.0, 0.0, -3.0],   # before the near plane -> outside
+        [0.0, 0.0, -1.0],   # on the near plane     -> inside
+        [0.0, 0.0, 0.0],    # mid                   -> inside
+        [0.0, 0.0, 1.0],    # on the far plane      -> inside
+        [0.0, 0.0, 3.0],    # beyond the far plane  -> outside
+    ])
+    assert points_inside_frustum(planes, on_axis).tolist() == [
+        False, True, True, True, False,
+    ]
+
+
 def test_degenerate_zero_area_box_does_not_crash() -> None:
     # Collapsed box (x0==x1): planes must be well-formed, no exception.
     planes = _axis_box(0.0, 0.0, -1.0, 1.0)
