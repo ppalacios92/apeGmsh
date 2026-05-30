@@ -114,3 +114,27 @@ def test_demo_subprocess_viewer_opens():
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(argv, capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr[-2000:]
+
+
+def test_demo_viewer_data_reads_composed_file():
+    """The blocking desktop viewer's read seam — `ViewerData.from_h5` →
+    `h5_reader.open` — must open the composed demo_results.h5 directly:
+    the `/model` neutral zone is auto-detected while `/opensees`
+    orientation stays at root. Regression for the in-process
+    `Results.demo().viewer()` crash (`MalformedH5Error: /meta/schema_version
+    attribute is empty` — the root `/meta` is only a lineage stub)."""
+    from apeGmsh.results import make_demo_results
+    from apeGmsh.viewers.data._h5_probe import resolve_orientation_source
+    from apeGmsh.viewers.data._viewer_data import ViewerData
+
+    r = make_demo_results(n_elements=4, n_steps=3)
+    try:
+        # The viewer resolves its read source to the composed results file
+        # (it carries /opensees orientation at root), then reads it.
+        source = resolve_orientation_source(r)
+        assert source is not None and str(source) == str(r._path)
+        vd = ViewerData.from_h5(str(source))
+        assert vd.nodes.ids.size > 0
+        assert vd.snapshot_id
+    finally:
+        r.close()

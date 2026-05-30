@@ -155,6 +155,26 @@ def open(path: str, *, meta_path: str = "meta") -> H5Model:
     f = h5py.File(path, "r")
     try:
         meta_key = meta_path.lstrip("/")
+        # Auto-detect the composed results.h5 layout (ADR 0020): the
+        # caller used the standalone default, but the root ``/meta`` is
+        # only a lineage stub (no ``schema_version``) while ``/model/meta``
+        # carries the bridge-stamped meta — so read the bridge zone from
+        # ``/model``.  Mirrors ``OpenSeesModel.from_h5``'s
+        # ``_resolve_fem_root_for_read`` (#441).  Probe children with
+        # ``in`` (never ``Group.get``) per the h5py optional-child hazard.
+        if meta_key == "meta":
+            root_meta_ok = (
+                "meta" in f
+                and "schema_version" in f["meta"].attrs
+                and bool(str(f["meta"].attrs["schema_version"]))
+            )
+            if (
+                not root_meta_ok
+                and "model" in f
+                and "meta" in f["model"]
+                and "schema_version" in f["model"]["meta"].attrs
+            ):
+                meta_key = "model/meta"
         if meta_key not in f:
             raise MalformedH5Error(
                 f"{path}: missing /{meta_key} group; not a bridge model.h5"
@@ -241,6 +261,22 @@ class H5Model:
         # works whether the caller passed ``/meta`` or ``meta``.  The
         # default ``meta`` keeps the standalone-file case byte-identical.
         self._meta_path: str = meta_path.lstrip("/")
+        # Neutral-zone base group.  A standalone ``model.h5`` keeps the
+        # neutral zone (nodes / elements / physical_groups / labels /
+        # loads / masses / constraints / compose provenance) at root.  A
+        # composed ``results.h5`` (ADR 0020; ``meta_path`` like
+        # ``"model/meta"``) puts it under that parent group instead, while
+        # ``/opensees`` orientation + ``/stages`` results stay at root.
+        # For the standalone case ``self._neutral is self._f`` so every
+        # existing read is byte-identical.
+        _neutral_root = (
+            self._meta_path.rsplit("/", 1)[0] if "/" in self._meta_path else ""
+        )
+        self._neutral = (
+            self._f[_neutral_root]
+            if _neutral_root and _neutral_root in self._f
+            else self._f
+        )
 
     # -- Lifecycle -------------------------------------------------------
 
@@ -953,7 +989,7 @@ class H5Model:
 
         ``ids`` is a 1-D int64 array; ``coords`` is ``(N, 3)`` float64.
         """
-        g = self._f.get("nodes")
+        g = self._neutral.get("nodes")
         if g is None:
             return {}
         return {
@@ -967,7 +1003,7 @@ class H5Model:
         Companion to :meth:`elements` (which exposes only attrs).
         Raises ``KeyError`` if the type group is missing.
         """
-        sub = self._f[f"elements/{type_name}"]
+        sub = self._neutral[f"elements/{type_name}"]
         out: dict[str, Any] = {"ids": sub["ids"][:]}
         if "connectivity" in sub:
             out["connectivity"] = sub["connectivity"][:]
@@ -1004,7 +1040,7 @@ class H5Model:
         ``payload`` rows from :mod:`apeGmsh.mesh._record_h5`).  Empty
         dict if no ``/constraints`` group is present.
         """
-        g = self._f.get("constraints")
+        g = self._neutral.get("constraints")
         if g is None:
             return {}
         return {kind: g[kind][:] for kind in g}
@@ -1016,7 +1052,7 @@ class H5Model:
         a per-pattern dict of compound arrays.  Empty dict if no
         ``/loads`` group is present.
         """
-        g = self._f.get("loads")
+        g = self._neutral.get("loads")
         if g is None:
             return {}
         out: dict[str, dict[str, Any]] = {}
@@ -1027,7 +1063,7 @@ class H5Model:
 
     def masses(self) -> Any:
         """Return the ``/masses`` compound array, or ``None`` if absent."""
-        ds = self._f.get("masses")
+        ds = self._neutral.get("masses")
         if ds is None:
             return None
         return ds[:]
@@ -1063,9 +1099,9 @@ class H5Model:
         """
         from apeGmsh._kernel.records._compose import ComposeRecord
 
-        if "composed_from" not in self._f:
+        if "composed_from" not in self._neutral:
             return
-        parent = self._f["composed_from"]
+        parent = self._neutral["composed_from"]
         # ``hasattr(.keys)`` filters out the case where a stray non-group
         # ended up at this key — mirrors ``_read_composed_from`` in the
         # broker reader.
@@ -1142,9 +1178,9 @@ class H5Model:
         :meth:`analysis` and :meth:`masses` (which also collapse
         "absent" and "empty" into ``None``).
         """
-        if "nodes" not in self._f:
+        if "nodes" not in self._neutral:
             return None
-        nodes_grp = self._f["nodes"]
+        nodes_grp = self._neutral["nodes"]
         if "ids" not in nodes_grp or "module_label" not in nodes_grp:
             return None
         import numpy as np
@@ -1174,9 +1210,9 @@ class H5Model:
         schema 2.8.x file (no ``module_label`` dataset), or
         ``element_id`` not present in any element-type group.
         """
-        if "elements" not in self._f:
+        if "elements" not in self._neutral:
             return None
-        elements_grp = self._f["elements"]
+        elements_grp = self._neutral["elements"]
         if not hasattr(elements_grp, "keys"):
             return None
         import numpy as np
@@ -1222,9 +1258,9 @@ class H5Model:
         optional-child .get() hazard documented in PR #261.
         """
         out: dict[int, str] = {}
-        if "nodes" not in self._f:
+        if "nodes" not in self._neutral:
             return out
-        nodes_grp = self._f["nodes"]
+        nodes_grp = self._neutral["nodes"]
         if "ids" not in nodes_grp or "module_label" not in nodes_grp:
             return out
         import numpy as np
@@ -1258,9 +1294,9 @@ class H5Model:
         optional-child .get() hazard documented in PR #261.
         """
         out: dict[int, str] = {}
-        if "elements" not in self._f:
+        if "elements" not in self._neutral:
             return out
-        elements_grp = self._f["elements"]
+        elements_grp = self._neutral["elements"]
         if not hasattr(elements_grp, "keys"):
             return out
         import numpy as np
@@ -1298,7 +1334,7 @@ class H5Model:
         side-discriminator the existing callers need.  ``{}`` when
         the root group is absent or both sub-trees are absent.
         """
-        parent = self._f.get(group_name)
+        parent = self._neutral.get(group_name)
         if parent is None:
             return {}
         out: dict[str, dict[str, Any]] = {}
@@ -1350,7 +1386,14 @@ class H5Model:
     def _group_attrs_map(
         self, group: str,
     ) -> dict[str, dict[str, Any]]:
-        g = self._f.get(group)
+        # ``opensees/*`` orientation lives at root; the neutral ``elements``
+        # group follows the neutral base (root, or ``/model`` for composed).
+        base = (
+            self._f
+            if group.split("/", 1)[0] in ("opensees", "stages")
+            else self._neutral
+        )
+        g = base.get(group)
         if g is None:
             return {}
         return {name: _attrs_as_dict(g[name]) for name in g}
