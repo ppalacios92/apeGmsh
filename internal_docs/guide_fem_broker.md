@@ -337,10 +337,11 @@ with h5py.File("run.h5", "r") as f:
 assert fem2.snapshot_id == fem.snapshot_id    # same hash
 ```
 
-`from_native_h5` reconstructs nodes, elements (per type), physical
-groups, and labels. Loads / masses / constraints are not round-tripped
-because they don't influence `snapshot_id` and the viewer doesn't need
-them.
+`from_native_h5` reconstructs the full neutral zone — nodes, elements
+(per type), physical groups, labels, mesh selections, **and** loads /
+masses / constraints (ADR 0020 Phase 4 cleanup). The rebuilt FEM's
+`snapshot_id` matches the source's `/meta/snapshot_id` attribute — the
+linking contract the viewer relies on.
 
 ```python
 # Synthesize a partial FEMData from an MPCO MODEL/ group
@@ -353,6 +354,105 @@ class tag instead of Gmsh codes), and physical groups derived from
 MPCO Regions. Labels and pre-mesh declarations are absent. The
 `snapshot_id` will not match a native FEMData built from the same
 mesh — that's expected.
+
+
+## Native `model.h5` round-trip
+
+The `to_native_h5` / `from_native_h5` pair above is the **embedded**
+form — a FEMData living inside an open HDF5 group of some larger file.
+For a standalone, file-path-based snapshot the broker exposes a
+file-level pair (`FEMData.py:1548, 1603`):
+
+```python
+# Write a fresh model.h5 containing only the neutral zone
+fem.to_h5("plate.h5", model_name="plate")
+
+# Resume it in a later script — no Gmsh, no live session
+fem = FEMData.from_h5("plate.h5")
+```
+
+`to_h5(path, *, model_name="", apegmsh_version="", ndf=0)` dumps
+everything the broker knows — nodes, elements per type, physical
+groups, labels, mesh selections, constraints, loads, masses — into a
+root-level file. No `/opensees/` content is emitted; an absent bridge
+zone is the right "no solver loaded" signal.
+
+`from_h5(path, *, root="/")` is the inverse. It is **integrity-checked**:
+the rebuilt FEM's `snapshot_id` is verified against the stored
+`/meta/snapshot_id`, and a mismatch raises `MalformedH5Error` rather
+than handing back a silently-wrong model. Composed `results.h5` files
+carry the same rich layout under `/model/`; pass `root="/model"` to
+rehydrate from one.
+
+> [!note] Two zones, two writers
+> `fem.to_h5(...)` and `g.save(...)` write the **neutral zone only**.
+> To get a fully enriched file (neutral zone **+** `/opensees/...`),
+> run the bridge: `apeSees(fem).h5(path)`.
+
+
+### Session autosave — `save_to=` and `g.save()`
+
+You rarely call `to_h5` by hand. The session writes the same neutral
+zone for you (`_core.py:251`, `_session.py:146`):
+
+```python
+# Autosave on context-exit
+with apeGmsh(model_name="plate", save_to="plate.h5") as g:
+    g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="blk")
+    g.physical.add_volume(["blk"], name="Body")
+    g.mesh.generation.generate(dim=3)
+# plate.h5 written automatically when the block exits
+
+# Or save explicitly at any point
+path = g.save("plate.h5")            # returns the resolved Path
+path = g.save()                      # reuses the constructor's save_to=
+```
+
+`save_to=None` (the default) disables autosave. `overwrite=True` (the
+constructor default) lets `g.save()` clobber an existing file; with
+`overwrite=False`, a pre-existing target raises `FileExistsError`.
+`g.save()` with neither an argument nor a `save_to=` raises.
+
+
+### Resuming into a chain-phase session — `apeGmsh.from_h5`
+
+`FEMData.from_h5` gives you back a bare broker. To resume a saved model
+as a **session** — so you can `compose(...)` further modules into it or
+`save()` again — use the session-level constructor (`_core.py:142`):
+
+```python
+# Day 1 — build & save
+with apeGmsh(model_name="host", save_to="host.h5") as g:
+    ...
+
+# Day 2 — reopen and compose, no Gmsh build phase
+g = apeGmsh.from_h5("host.h5")
+g.compose("module_a.h5", label="A")
+g.save("assembly.h5")
+```
+
+`apeGmsh.from_h5(path, *, model_name=None, verbose=False)` skips the
+Gmsh build phase entirely: the loaded FEMData becomes the session's
+chain head, and only `compose(...)` / `compose_inspect(...)` /
+`compose_list()` / `save()` are functional. Geometry and mesh
+operations (`g.model.X`, `g.mesh.generation.X`) have no Gmsh state to
+mutate and will fail. `model_name` defaults to the file's stem.
+
+
+### Schema versions and the reader window
+
+The two zones carry independent schema constants:
+
+| Constant | Value | Location |
+|---|---|---|
+| `NEUTRAL_SCHEMA_VERSION` | `"2.10.0"` | `mesh/_femdata_h5_io.py` |
+| `SCHEMA_VERSION` (bridge) | `"2.12.0"` | `opensees/emitter/h5.py` |
+
+Per ADR 0023, readers honour a **two-version window**: a reader
+tolerates files written by its own schema version and the one
+immediately prior, so a `model.h5` written by a slightly older apeGmsh
+still loads. Additive changes stay inside the window; a layout break
+needs a major bump.
 
 
 ## SP records (prescribed displacements)

@@ -394,7 +394,7 @@ Available CLAIM verbs on `_StageBuilder`: `s.embedded`, `s.tie`,
 `s.distributing`, `s.equal_dof`, `s.rigid_link`,
 `s.rigid_diaphragm`, `s.kinematic_coupling`, `s.node_to_surface`,
 `s.node_to_surface_spring`. `s.tied_contact` and `s.mortar` are
-deferred — see [_DEFERRED.md](../src/apeGmsh/opensees/architecture/_DEFERRED.md).
+deferred — see [_DEFERRED.md](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/_DEFERRED.md).
 Forgetting to claim is caught at build time by the V1 ownership-
 tier validator with an actionable offender list.
 

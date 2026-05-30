@@ -17,7 +17,7 @@ entirely.
 The guide is grounded in the current source:
 
 - `src/apeGmsh/core/_model_io.py` — `load_iges`, `load_step`,
-  `heal_shapes`, `load_msh`, `save_*`
+  `heal_shapes`, `diagnose` / `ImportHealth`, `load_msh`, `save_*`
 - `src/apeGmsh/mesh/MshLoader.py` — standalone and composite `.msh`
   loader
 - `src/apeGmsh/mesh/_fem_extract.py` — the broker builder used by both
@@ -132,7 +132,101 @@ locations. A tolerance much larger than the smallest genuine feature
 in the part will merge features you wanted to keep — always verify
 visually with `g.inspect.show()` after aggressive healing.
 
-### 1.5 The full CAD → mesh → solver path
+#### Healing at import time — `heal=` and `dedupe=`
+
+For the common case of "import and clean in one shot", `load_step`,
+`load_iges`, and `g.parts.import_step` all accept a `heal=` keyword that
+runs `heal_shapes` on the freshly-imported entities before returning:
+
+```python
+# scale-aware: derives a tolerance from the model bbox (≈ 1e-6 · diagonal)
+imported = g.model.io.load_step("legacy_part.step", heal="auto")
+
+# heal=True is identical to heal="auto"
+imported = g.model.io.load_step("legacy_part.step", heal=True)
+
+# a float pins an absolute tolerance, exactly like heal_shapes(tolerance=...)
+imported = g.model.io.load_step("legacy_part.step", heal=1e-3)
+```
+
+`heal="auto"` (and the equivalent `heal=True`) is the recommended
+default for messy CAD: a fixed absolute tolerance is meaningless across
+unit systems (a `1e-3` mm gap and a `1e-3` m gap are wildly different),
+so apeGmsh derives `≈ 1e-6 · bbox_diagonal` from the loaded geometry.
+For the non-tolerance knobs (`sew_faces`, `make_solids`, …), call
+`heal_shapes()` directly after a raw import.
+
+`dedupe=` runs `g.model.queries.remove_duplicates` after the import (and
+after healing, when both are set) to merge coincident entities that came
+in as separate copies — common when a STEP assembly repeats shared
+faces across bodies:
+
+```python
+imported = g.model.io.load_step("assembly.step", heal="auto", dedupe=True)
+```
+
+`dedupe=True` uses the current Gmsh tolerance; a float overrides it for
+the call. (`g.parts.import_step` exposes the same `heal=` / `dedupe=`
+pair.)
+
+### 1.5 Diagnosing import health — `diagnose()`
+
+When you import *raw* (no `heal=`) and the result contains slivers —
+edges or faces far below the model scale — apeGmsh emits a non-mutating
+`WarnGeomImportHealth` advisory so the problem doesn't surface later as
+a cryptic meshing failure. To inspect the geometry on demand without
+re-importing, call `diagnose()`:
+
+```python
+g.model.io.load_step("messy.step")          # raw — advisory may fire
+
+report = g.model.io.diagnose()               # -> ImportHealth (non-mutating)
+print(report)
+# ImportHealth(solids=1, dims={0: 24, 1: 38, 2: 14, 3: 1},
+#              highest_dim=3, short_edges=3, tiny_faces=1,
+#              bbox_diag=412.3, suggested_tolerance=4.12e-04)
+
+if report.is_suspect:                        # True iff slivers present
+    # re-import with the suggested scale-aware healing
+    imported = g.model.io.load_step("messy.step", heal="auto", dedupe=True)
+    body = imported[3][0]
+```
+
+`diagnose()` scans the live OCC geometry and returns a frozen
+`ImportHealth` carrying:
+
+| Field / property        | Meaning                                                    |
+|-------------------------|------------------------------------------------------------|
+| `dim_counts`            | `{dim: count}` of entities currently in the model          |
+| `highest_dim`           | top dimension present (`3` solids, `2` shells, …)          |
+| `bbox_diag`             | model bounding-box diagonal (the scale)                    |
+| `short_edges`           | tuple of edge tags shorter than `1e-4 · diag`              |
+| `tiny_faces`            | tuple of face tags far below the model scale               |
+| `suggested_tolerance`   | the `heal="auto"` tolerance for this model (`≈ 1e-6 · diag`)|
+| `n_solids` *(property)* | shortcut for `dim_counts.get(3, 0)`                        |
+| `is_suspect` *(property)* | `True` when `short_edges` or `tiny_faces` is non-empty   |
+
+`is_suspect` keys off **slivers only** — a surface-only import
+(`highest_dim < 3`) is *not* flagged on its own, because shell models
+import that way on purpose and shouldn't trip a false advisory.
+
+`diagnose()` never heals, dedupes, or renumbers — it is the
+look-before-you-leap counterpart to `heal_shapes` (which *does* mutate).
+Pass `warn=True` to have it emit the `WarnGeomImportHealth` advisory
+itself when the report is suspect; `load_step` / `load_iges` use that
+internally on a raw import. To silence or catch the advisory, filter on
+the category:
+
+```python
+import warnings
+from apeGmsh.core._geometry_errors import WarnGeomImportHealth
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", WarnGeomImportHealth)
+    g.model.io.load_step("known_messy.step")
+```
+
+### 1.6 The full CAD → mesh → solver path
 
 Putting it all together, a typical import-and-mesh workflow for a STEP
 file looks like this:
@@ -176,7 +270,7 @@ your job, exactly as if you had built the geometry inside apeGmsh. STEP
 import is not a shortcut to a solver-ready model — it is a shortcut to
 a solver-ready *geometry*.
 
-### 1.6 Multi-part STEP assemblies
+### 1.7 Multi-part STEP assemblies
 
 A STEP file can contain multiple bodies (assemblies). `load_step`
 returns all of them under the same `imported[3]` list:
@@ -415,6 +509,7 @@ All import/export lives in `core/_model_io.py` and
 | `g.model.io.load_step(path)`       | in        | `{dim: [tag,...]}`             |
 | `g.model.io.load_iges(path)`       | in        | `{dim: [tag,...]}`             |
 | `g.model.io.heal_shapes(...)`      | —         | `self` (chainable)             |
+| `g.model.io.diagnose(warn=False)`  | —         | `ImportHealth` (non-mutating)  |
 | `g.model.io.save_step(path)`       | out       | `None`                         |
 | `g.model.io.save_iges(path)`       | out       | `None`                         |
 | `g.model.io.load_msh(path)`        | in        | `{dim: [tag,...]}` (entities)  |

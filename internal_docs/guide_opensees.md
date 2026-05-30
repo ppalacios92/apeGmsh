@@ -372,7 +372,7 @@ Available CLAIM verbs: `s.embedded`, `s.tie`, `s.distributing`,
 `s.equal_dof`, `s.rigid_link`, `s.rigid_diaphragm`,
 `s.kinematic_coupling`, `s.node_to_surface`,
 `s.node_to_surface_spring`. `s.tied_contact` / `s.mortar` are
-deferred (see [_DEFERRED.md](../src/apeGmsh/opensees/architecture/_DEFERRED.md)).
+deferred (see [_DEFERRED.md](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/_DEFERRED.md)).
 Forgetting to claim is caught by the V1 ownership-tier validator
 with an actionable error pointing at the offending node and stage.
 
@@ -449,6 +449,17 @@ ops.analyze(steps=10, dt=0.01)  # drive the analysis chain
 `ops.h5(path)` writes the canonical model.h5: the bridge's emitted
 `/opensees/` zone **plus** the broker neutral zone (which carries the
 session's loads/masses/constraints for the viewer / `Results`).
+
+> **Two zones vs. neutral-only.** `apeSees(fem).h5(path)` is the only
+> writer that emits **both** zones. The session-side persistence verbs
+> write the **neutral zone only** (no `/opensees/`): `g.save(path=None)`
+> (or `apeGmsh(..., save_to="model.h5")`, which autosaves on
+> context-exit) and the broker's own `fem.to_h5(path)`. Round-trip with
+> `FEMData.from_h5(path)` or rebuild a chain-phase session for
+> composition with `apeGmsh.from_h5(path)` (no gmsh — only
+> `compose`/`save`). A neutral-only file feeds the viewer / `Results`
+> but is **not** a runnable deck; emit Tcl/Py or call `apeSees(fem).h5`
+> for the solver zone.
 
 ### 6.4 Recorders
 
@@ -608,9 +619,9 @@ g.node_ndf.set("ShellRegion", ndf=6)   # shell nodes get rotational DOFs
 
 apeGmsh resolves per-node `ndf` at FEM-build time; nodes not covered
 by any declaration raise `LookupError` from `fem.nodes.ndf_for(nid)`.
-See [ADR 0032](../src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
+See [ADR 0032](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
 for the explicit-only doctrine and the dimensional-resolution-contract
-alignment. See [ADR 0033](../src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
+alignment. See [ADR 0033](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
 for how the broker's per-node `ndf` flows into the OpenSees emit paths:
 `-ndf K` is passed per-node when an override exists (`g.node_ndf.set`);
 sentinel slots elide `-ndf` and the envelope (`apeSees(fem).model(ndm,
@@ -639,7 +650,7 @@ viewer / `Results`, **and** emits into the runnable Tcl / Py deck as
 you'll need to stage-bind the constraint via
 `s.tie(name="col_slab_tie")` inside a stage block (see §4.4).
 `s.tied_contact` / `s.mortar` remain deferred for stage-binding — see
-[_DEFERRED.md](../src/apeGmsh/opensees/architecture/_DEFERRED.md).
+[_DEFERRED.md](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/_DEFERRED.md).
 
 ### Loads/masses/SP are not ingested
 

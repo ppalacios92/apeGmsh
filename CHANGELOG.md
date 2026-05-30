@@ -333,7 +333,7 @@ end-to-end atomic-replace pattern.
 
 - **Emit pipeline:** new `emit_stage_mp_constraints` /
   `emit_stage_mp_constraints_partitioned` orchestrators in
-  [`_internal/build.py`](src/apeGmsh/opensees/_internal/build.py) wrap a
+  [`_internal/build.py`](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/_internal/build.py) wrap a
   flat list of stage records via `_StageConstraintAdapter` and reuse
   the six per-kind helpers unchanged. The global emit orchestrators
   receive a `claimed_ids=` set and wrap the FEMData broker in
@@ -393,7 +393,7 @@ end-to-end atomic-replace pattern.
   pressure=False)`. All five concrete emitters (Tcl, Py, LiveOps,
   H5, Recording) honour the same kwargs; a shared
   `_build_embedded_flag_args` helper in
-  [emitter/base.py](src/apeGmsh/opensees/emitter/base.py) materialises
+  [emitter/base.py](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/emitter/base.py) materialises
   the flag tokens in parser order for the text-based emitters.
 
 - **H5 schema 2.11.0 → 2.12.0 (additive).**
@@ -412,7 +412,7 @@ end-to-end atomic-replace pattern.
   constraint differed between the two pipelines. The exposure
   closes that gap and gives users the knob to tune K-conditioning
   on stiff-penalty models. See
-  [ADR 0035](src/apeGmsh/opensees/architecture/decisions/0035-asd-embedded-node-element-option-exposure.md).
+  [ADR 0035](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0035-asd-embedded-node-element-option-exposure.md).
 
 ### CHANGED — boolean.fragment default (BREAKING)
 
@@ -511,10 +511,10 @@ end-to-end atomic-replace pattern.
   deserialises the same broker, so all ranks agree on per-node `ndf`
   for shared nodes without explicit cross-rank communication.
 
-- **Architecture:** [ADR 0033](src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
+- **Architecture:** [ADR 0033](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
   codifies the wiring, validator sites, phantom carveout, and
   hash-guaranteed cross-rank consistency. Extends
-  [ADR 0032](src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
+  [ADR 0032](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
   (the broker contract S2 consumes).
 
 - **PR #328 (S2 follow-up):** stateful `set_phantom_node_mode(emitter,
@@ -573,7 +573,7 @@ end-to-end atomic-replace pattern.
      and `_emit_surface_couplings_for_rank` restarted its per-call
      counter from that base on every rank — so two distinct embedded
      records emitted on different ranks both received tag
-     `1_000_000`, violating [ADR 0027](src/apeGmsh/opensees/architecture/decisions/0027-cross-partition-mp-constraints.md) §"Tag determinism".
+     `1_000_000`, violating [ADR 0027](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0027-cross-partition-mp-constraints.md) §"Tag determinism".
   2. **Duplicate emit on boundary-shared masters.**
      `_plan_rank_constraints` used `if partition_rank in
      node_owners[masters[0]]` — when `masters[0]` was a partition-
@@ -699,10 +699,10 @@ end-to-end atomic-replace pattern.
   V2-fix branch, recorder emit position (after region declarations),
   and V2-mass branch respectively.
 
-- **Architecture:** [ADR 0034](src/apeGmsh/opensees/architecture/decisions/0034-stage-bound-bcs-and-recorders.md),
-  [staged-analysis.md](src/apeGmsh/opensees/architecture/staged-analysis.md)
+- **Architecture:** [ADR 0034](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0034-stage-bound-bcs-and-recorders.md),
+  [staged-analysis.md](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/staged-analysis.md)
   (refreshed with the SSI-2.D slot order + V1-V4 + per-stage tag
-  cache), [api-design.md §"Staged analysis"](src/apeGmsh/opensees/architecture/api-design.md)
+  cache), [api-design.md §"Staged analysis"](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/api-design.md)
   (refreshed with the four new verbs + PUSH vs PULL note).
 
 - **Test coverage:** 38 new tests across four files (15 unit V1-V3

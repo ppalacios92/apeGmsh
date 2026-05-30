@@ -2,6 +2,55 @@
 
 Post-processing container.
 
+## Construction — `model=` is required
+
+Every `Results` constructor requires a model, so the post-processing
+container always has a read-side broker to resolve names, PGs, and
+connectivity against:
+
+```python
+from apeGmsh import Results
+from apeGmsh.opensees import OpenSeesModel
+
+# Native apeGmsh HDF5 (a Composed file carrying results + model is common)
+model = OpenSeesModel.from_h5("run.h5")
+results = Results.from_native("run.h5", model=model)     # model= REQUIRED
+
+# STKO .mpco — model_h5= points at the sibling model archive
+results = Results.from_mpco("run.mpco", model_h5="model.h5")  # model_h5= REQUIRED
+
+# Live recorders — fem= and model=
+results = Results.from_recorders(spec, "out/", fem=fem, model=model)
+```
+
+Omitting `model=` (or `model_h5=` for `from_mpco`) raises `TypeError`.
+
+`results.model` is **never `None`** on a constructed `Results` (ADR 0020
+INV-1). Reach the neutral `FEMData` zone through the broker chain:
+
+```python
+osm = results.model            # OpenSeesModel broker (never None)
+fem = results.model.fem        # neutral FEMData zone
+```
+
+`results.fem` is the locally-bound snapshot and may differ from
+`results.model.fem` after a `.bind()`.
+
+### Lineage — `results.lineage` warns, never raises
+
+`results.lineage` returns a `Lineage(fem_hash, model_hash,
+results_hash, warnings)` describing the git-style `fem → model →
+results` hash chain. Stored-vs-recomputed mismatches surface as
+`[lineage] ...` strings in `lineage.warnings`; the property itself
+**never raises**. Call `lineage.assert_clean()` to escalate any
+warnings to `LineageError`.
+
+!!! note "`BindError` is gone"
+    Construction no longer rejects a mismatched FEM with `BindError`
+    (deleted in the three-broker refactor). `results.bind(fem)`
+    performs no hash validation — pairing a FEM with the right run is
+    the user's responsibility, reported through `lineage.warnings`.
+
 ## Fluent selection — `.nodes.select()` / `.elements.select()`
 
 `results.nodes.select(...)` and `results.elements.select(...)` are the

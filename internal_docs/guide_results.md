@@ -24,40 +24,47 @@ There are three constructors, one per supported backend:
 For files written by domain capture (Strategy B) or by the recorder transcoder (Strategy A₁/A₂/A₃ via the cache).
 
 ```python
-results = Results.from_native("run.h5")
-results = Results.from_native("run.h5", fem=fem)   # explicit bind override
+from apeGmsh.opensees import OpenSeesModel
+
+model = OpenSeesModel.from_h5("run.h5")             # the broker (ADR 0020)
+results = Results.from_native("run.h5", model=model)
+results = Results.from_native("run.h5", model=model, fem=fem)   # explicit bind override
 ```
 
-A native file embeds a frozen `FEMData` snapshot under `/model/`. If `fem=` is omitted, that snapshot is the bound FEMData. If `fem=` is provided it is preferred (it typically carries richer apeGmsh-specific labels and provenance than the embedded snapshot). The `snapshot_id` hash is computed and stored as metadata, but bind never enforces equality — pairing a FEMData with a results file from the same run is the user's responsibility.
+`model=` is **required** (ADR 0020 INV-1) — omitting it raises `TypeError`. The model carries the `/opensees/` zone broker; on a Composed file the model path is often the same path as the results file, as above. A native file also embeds a frozen `FEMData` snapshot under `/model/`. If `fem=` is omitted, that snapshot is the bound FEMData (reachable via `results.model.fem`). If `fem=` is provided it is preferred (it typically carries richer apeGmsh-specific labels and provenance than the embedded snapshot). The `snapshot_id` hash is computed and stored as metadata, but bind never enforces equality — pairing a FEMData with a results file from the same run is the user's responsibility.
 
 ### `Results.from_mpco` — STKO HDF5
 
 For files written by the STKO MPCO recorder (Strategy C₁/C₂).
 
 ```python
-results = Results.from_mpco("run.mpco")
+results = Results.from_mpco("run.mpco", model_h5="model.h5")
 
 # Multi-partition (parallel runs) — auto-discover .part-N siblings
-results = Results.from_mpco("run.part-0.mpco")
+results = Results.from_mpco("run.part-0.mpco", model_h5="model.h5")
 
 # Or pass an explicit partition list
-results = Results.from_mpco(["run.part-0.mpco", "run.part-1.mpco"])
+results = Results.from_mpco(
+    ["run.part-0.mpco", "run.part-1.mpco"], model_h5="model.h5"
+)
 ```
 
-MPCO doesn't embed a full FEMData; the reader synthesises a partial one from the file's `MODEL/` group. Pass `fem=` to bind your session-side FEMData (recommended — it carries labels and Parts that the synthesised one doesn't).
+`model_h5=` is **required** (ADR 0020 INV-1) — omitting it raises `TypeError`. It points at the sibling apeGmsh `model.h5` (written by `apeSees(fem).h5(...)`); the broker is rehydrated via `OpenSeesModel.from_h5` and held in memory (INV-3 — no derived results h5 is written). MPCO doesn't embed a full FEMData; the reader synthesises a partial one from the file's `MODEL/` group. Pass `fem=` to bind your session-side FEMData (recommended — it carries labels and Parts that the synthesised one doesn't).
 
 ### `Results.from_recorders` — classic OpenSees recorders
 
 For `.out` / `.xml` files written by `ops.tcl(..., recorders=spec)`, `ops.py(..., recorders=spec)`, or `spec.emit_recorders(...)` (Strategy A₁/A₂/A₃). Here `ops` is the `apeSees(fem)` bridge.
 
 ```python
-results = Results.from_recorders(spec, "out/", fem=fem)
+results = Results.from_recorders(spec, "out/", fem=fem, model=model)
 
 # Multi-stage — pick the stage you want by id
-gravity = Results.from_recorders(spec, "out/", fem=fem, stage_id="gravity")
+gravity = Results.from_recorders(
+    spec, "out/", fem=fem, model=model, stage_id="gravity"
+)
 ```
 
-`from_recorders` transcodes the recorder files into a cached HDF5 (`writers/_cache.py`), keyed on file mtimes + spec `snapshot_id`, and then opens that through `from_native`. Subsequent calls with unchanged inputs return the cached HDF5 directly. `fem=` is required (omitting it raises `TypeError`) because the spec's `snapshot_id` participates in the cache key — but no hash equality is enforced against the resulting file.
+`from_recorders` transcodes the recorder files into a cached HDF5 (`writers/_cache.py`), keyed on file mtimes + spec `snapshot_id`, and then opens that through `from_native`. Subsequent calls with unchanged inputs return the cached HDF5 directly. Both `fem=` and `model=` are required (omitting either raises `TypeError`): `fem`'s `snapshot_id` participates in the cache key, and `model`'s `/opensees/` zone is embedded into the transcoded native h5 (the Composed-file pattern) so the broker is auto-resolved on the downstream `from_native`. No hash equality is enforced against the resulting file.
 
 
 ## Stage scoping
@@ -101,19 +108,37 @@ Mode-scoped instances additionally expose `.eigenvalue`, `.frequency_hz`, `.peri
 
 ## FEM access and binding
 
-The bound `FEMData` snapshot is available as `.fem`:
+A constructed `Results` always holds an `OpenSeesModel` broker, and the FEM is reached *through* it — `results.model` is never `None` (ADR 0020 INV-1):
 
 ```python
-results.fem            # FEMData | None
+results.model          # OpenSeesModel        — the broker, always present
+results.model.fem      # FEMData              — chain-forward to the mesh snapshot
+results.fem            # FEMData | None       — shorthand for the bound snapshot
 ```
+
+`results.model.fem` is the canonical broker path; `results.fem` is the directly-bound snapshot (which `from_native`/`from_mpco` populate from the embedded/synthesised FEMData, or from your `fem=` override).
 
 `.bind(other_fem)` swaps in a different FEMData (typically your session-side one, which carries labels and Parts that the embedded snapshot doesn't):
 
 ```python
-results = Results.from_native("run.h5").bind(fem)
+results = Results.from_native("run.h5", model=model).bind(fem)
 ```
 
-**No hash validation is performed by `bind`** — pairing the FEMData with the right results file is the user's responsibility. This is intentional; see the bind-contract memory note for the design rationale.
+**No hash validation is performed by `bind`** — pairing the FEMData with the right results file is the user's responsibility. This is intentional; see the bind-contract memory note for the design rationale. (`BindError` was deleted; there is no exception to catch.)
+
+### Lineage — warn, never raise
+
+`results.lineage` returns a `Lineage` — a git-style `fem_hash → model_hash → results_hash` chain (ADR 0021). Each layer's hash folds in its parent's, so the chain is tamper-evident. Mismatches between stored and recomputed hashes surface as `[lineage] ...` strings in `lineage.warnings`; reading the property **never raises** (INV-2):
+
+```python
+lin = results.lineage
+lin.fem_hash, lin.model_hash, lin.results_hash   # hex digests
+lin.warnings                                      # tuple[str, ...] — empty when clean
+
+lin.assert_clean()    # opt-in escalation: raises LineageError if warnings present
+```
+
+Call `lin.assert_clean()` when you *want* drift to be fatal (e.g. in a regression check); the default is to warn and continue.
 
 
 ## Lifecycle
@@ -122,12 +147,12 @@ results = Results.from_native("run.h5").bind(fem)
 
 ```python
 # Explicit close
-results = Results.from_native("run.h5")
+results = Results.from_native("run.h5", model=model)
 # ... use it ...
 results.close()
 
 # Context manager
-with Results.from_native("run.h5") as results:
+with Results.from_native("run.h5", model=model) as results:
     # ... use it ...
     pass
 # closed on exit
@@ -138,17 +163,22 @@ On Windows in particular, an open HDF5 handle blocks the writer from re-creating
 
 ## Visualisation
 
+### Interactive Qt viewer
+
 ```python
-results.viewer()                       # blocking, in-process (default)
+results.viewer()                       # blocking, in-process (DEFAULT)
 results.viewer(blocking=False)         # subprocess; notebook keeps running
 results.viewer(title="Gravity push")
 results.viewer(restore_session=False)  # ignore any saved viewer-session.json
 results.viewer(save_session=False)     # don't auto-save on close
 ```
 
-The blocking path opens `ResultsViewer` in-process and blocks the caller until the window closes. The non-blocking path spawns `python -m apeGmsh.viewers <path>` so the kernel can keep running; this requires that the Results was opened from disk (in-memory Results raise).
+!!! danger "`viewer()` is blocking by default — it crashes the Jupyter kernel"
+    `results.viewer()` opens the Qt/VTK `ResultsViewer` **in-process** and blocks the caller. Inside a notebook this kills the ipykernel. In a notebook either spawn the subprocess (`results.viewer(blocking=False)`) or, better, use the kernel-safe web viewer `results.show_web()` (below). The blocking path is fine from a plain terminal script.
 
-When non-blocking spawns, the parent reader is closed automatically — this lets you re-run the capture script (which deletes/recreates the file) without hitting Windows' "file in use" error. To keep querying after the spawn, re-open with `Results.from_native(path)`.
+The non-blocking path spawns `python -m apeGmsh.viewers <path>` so the kernel can keep running; this requires that the Results was opened from disk (in-memory Results raise).
+
+When non-blocking spawns, the parent reader is closed automatically — this lets you re-run the capture script (which deletes/recreates the file) without hitting Windows' "file in use" error. To keep querying after the spawn, re-open with `Results.from_native(path, model=model)`.
 
 The `restore_session` flag controls whether a sibling `<results>.viewer-session.json` is loaded:
 - `True` — restore silently
@@ -159,6 +189,37 @@ The `restore_session` flag controls whether a sibling `<results>.viewer-session.
 environment variable to make `viewer(...)` print a skip marker and
 return `None` immediately — useful when running notebooks under
 `jupyter nbconvert --execute` or in CI without a display.
+
+### Web / Jupyter viewer (kernel-safe)
+
+`results.show_web()` renders the FEM substrate plus any director diagrams through a `pyvista.trame` backend — the kernel-safe replacement for the blocking Qt viewer in a notebook (ADR 0042 R-C). It is view-only (picking is deferred), with a step slider and per-layer visibility checkboxes when `ipywidgets` is present.
+
+```python
+results.show_web()                       # inline in the notebook
+results.show_web(stage="gravity")        # activate a specific stage
+results.show_web(controls=False)         # bare view, no ipywidgets panel
+results.show_web(render_mode="server")   # render on the kernel, stream images
+viewer = results.show_web(show=False)    # get the WebViewer handle, add diagrams first
+```
+
+`render_mode` is `"client"` (default — renders in the browser via WebGL, fast camera), `"server"` (renders on the kernel and streams images; most VTK-feature-complete, for very large models), or `"hybrid"` (a local/remote toggle in the toolbar).
+
+For a standalone (non-Jupyter) app, `results.serve_web()` builds a vuetify3 single-page app and serves it at a local URL, opening a browser tab and blocking until Ctrl-C:
+
+```python
+results.serve_web()                      # auto-picked port, opens a browser tab
+results.serve_web(port=8080, title="Gravity push")
+```
+
+Both require the `[viewer]` extra (`pip install "apeGmsh[viewer]"` — pulls `trame` + `ipywidgets`).
+
+No results file handy? `Results.demo()` returns a zero-setup cantilever-pushover sample (a real `apeSees`-emitted model with a synthetic ramped tip deflection, no OpenSees solve) — ideal for trying the viewers:
+
+```python
+from apeGmsh import Results
+
+Results.demo().show_web()                # instant sample render
+```
 
 
 ## Reading fields
@@ -188,7 +249,7 @@ Full coverage of selectors, slab dataclass shapes, time slicing, and the `.avail
 
 ```python
 from apeGmsh import apeGmsh, Results
-from apeGmsh.opensees import apeSees
+from apeGmsh.opensees import apeSees, OpenSeesModel
 import openseespy.opensees as ops
 
 with apeGmsh(model_name="slab") as g:
@@ -199,6 +260,11 @@ with apeGmsh(model_name="slab") as g:
 bridge = apeSees(fem)
 bridge.model(ndm=3, ndf=3)
 # ... materials, elements, fix, patterns (re-declare explicitly) ...
+
+# Persist the canonical two-zone model.h5 once, then rehydrate the
+# read-side broker — every Results constructor below requires it.
+bridge.h5("model.h5")
+model = OpenSeesModel.from_h5("model.h5")
 
 # Declare recorders and resolve the spec — see guide_obtaining_results.md
 # for the full five-strategy walkthrough.  The recorder declaration API
@@ -216,7 +282,7 @@ with spec.capture(path="run.h5", fem=fem, ndm=3, ndf=3) as cap:
     cap.end_stage()
 
 # Open the file
-results = Results.from_native("run.h5", fem=fem)
+results = Results.from_native("run.h5", fem=fem, model=model)
 
 # Query
 gravity = results.stage("gravity")

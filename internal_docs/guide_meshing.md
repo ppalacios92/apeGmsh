@@ -145,6 +145,53 @@ materials meeting at an interface). **fuse_group** when the parts are really
 one body and you want a single label downstream (e.g. a welded assembly of
 many small STEP pieces that should be treated as one component).
 
+### Orphan-geometry inspection and cleanup
+
+The `cleanup_free=True` sweep above runs automatically after every `cut` /
+`cut_by_surface` / `cut_by_plane` / `slice` / `fragment`. The same algorithm
+is exposed directly on `g.model.geometry` so you can inspect or sweep after a
+hand-written OCC operation, after reloading geometry from a side channel, or
+just to assert a model is clean before meshing (`core/_model_geometry.py`):
+
+```python
+g.model.geometry.find_orphans()  -> dict[int, list[int]]   # dry-run scan
+g.model.geometry.remove_orphans(*, dry_run=False) -> dict[int, list[int]]
+g.model.geometry.find_stale_metadata() -> list[(dim, tag)]
+g.model.geometry.validate_pre_mesh(*, strict=False) -> None
+```
+
+- **`find_orphans()`** returns `{0: [...], 1: [...], 2: [...]}` — the dim≤2
+  tags that bound no registered volume and are not user-intentional (not in
+  `model._metadata`, no label). An empty list at every key means the model is
+  clean. It never modifies the model.
+- **`remove_orphans()`** actually reaps them (pass `dry_run=True` to behave
+  like `find_orphans`). Returns the same dict shape, listing what was removed.
+- **`find_stale_metadata()`** is the *closed-world* counterpart: it returns
+  `model._metadata` keys whose `(dim, tag)` is no longer a live OCC entity —
+  i.e. an apeGmsh boolean / cut / fragment consumed an entity but left its
+  metadata key behind. By construction it cannot false-positive on raw
+  `gmsh.model.geo.*` / `gmsh.model.occ.*` workflows, because those never
+  populate `_metadata`.
+- **`validate_pre_mesh()`** raises `GeometryValidationError` on pre-mesh
+  hazards. It has two modes, gated by `strict`:
+  - `strict=False` (default) runs `find_stale_metadata()` only — closed-world.
+    **This is the check `g.mesh.generation.generate()` auto-fires** before
+    meshing, because it cannot punish users who work below the apeGmsh facade.
+  - `strict=True` (opt-in) runs `find_orphans()` and raises on any orphan
+    dim≤2 entity — open-world. Only opt in when your build script stays inside
+    the apeGmsh facade (`_metadata` + `g.labels` channels); raw-gmsh users will
+    trip it on legitimate models, which is exactly why `generate()` never
+    fires this mode for you.
+
+A common pattern is to assert cleanliness explicitly when you have done manual
+OCC surgery:
+
+```python
+g.model.geometry.remove_orphans()           # sweep any danglers
+g.model.geometry.validate_pre_mesh(strict=True)  # then assert open-world clean
+g.mesh.generation.generate(3)
+```
+
 
 ## 3. Dimension and higher-dimensional meshing
 
@@ -199,6 +246,55 @@ depending on recombination). Order changes must be applied *after*
 `g.mesh.generation.refine()` performs one round of uniform subdivision.
 It is cheap for diagnostics but rarely what you want for production meshes —
 prefer size fields (Section 5) for targeted refinement.
+
+### Demoting higher-order frame lines
+
+`set_order(2)` is global: it elevates *every* line entity in the model,
+including 1D curves you meant to mesh as OpenSees frame elements. Those become
+Line3 (Gmsh type 8, three nodes `(i, j, mid)`), but OpenSees beam-columns are
+strictly 2-node 1st-order, so the bridge raises whenever it sees a Line3 in a
+frame physical group. The broker-side resolution (ADR 0037) lives on
+`g.mesh.editing` (`mesh/_mesh_editing.py`):
+
+```python
+g.mesh.editing.split_higher_order_lines(
+    physical_group: str | Iterable[str], *, policy, dim=1
+) -> _Editing
+```
+
+`policy` is a required keyword (no default — destructive mesh mutation never
+happens by accident) and takes one of three values:
+
+- **`"split"`** — each Line3 `(i, j, mid)` is replaced by two Line2 elements
+  `(i, mid)` and `(mid, j)` on the *same* dim=1 entity, so PG membership tracks
+  at the entity level with no rebinding. The mid-node becomes a real FE node
+  with its own DOFs. This is exact subdivision for prismatic elastic frames.
+  Note: for distributed-plasticity frames the integration-point count doubles
+  (each sub-element gets its own N-IP rule), which can shift hinge locations;
+  concentrated-plasticity integration rules (`HingeRadau`, `HingeRadauTwo`,
+  `HingeMidpoint`, `HingeEndpoint`) are structurally incompatible with this
+  policy.
+- **`"forbid"`** — fail loud (`RuntimeError`, naming the PG and Line3 count) if
+  the named PG(s) contain any Line3 element. Use it as a build-time invariant
+  lock when you must guarantee a PG stayed 1st-order through meshing. No-op
+  when the PG is already pure Line2.
+- **`"constrain"`** — RESERVED but not implemented this round; raises
+  `NotImplementedError`. The kinematically clean answer (linearly interpolate
+  the mid-node from `i`/`j` via a 2-master/1-slave constraint) needs an
+  OpenSees primitive that does not exist today — `ASDEmbeddedNodeElement`
+  accepts 3 or 4 retained nodes, not a 2-node master pair.
+
+Call timing matters: invoke it **after** `generate()` (it rewrites the live
+mesh) and **before** `get_fem_data()` (the snapshot must see the rewritten
+topology). `dim` defaults to `1` and is currently the only supported value;
+unknown PG names raise `KeyError`. The method returns `self` so it chains.
+
+```python
+# Quadratic shells + 1st-order frame lines in one model
+g.mesh.generation.generate(3).set_order(2)
+g.mesh.editing.split_higher_order_lines("BeamLines", policy="split")
+fem = g.mesh.queries.get_fem_data(dim=3)
+```
 
 ### What `generate()` inherits from Gmsh (the default contract)
 

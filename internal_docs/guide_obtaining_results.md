@@ -26,7 +26,7 @@ Every strategy starts here:
 
 ```python
 from apeGmsh import apeGmsh, Results
-from apeGmsh.opensees import apeSees
+from apeGmsh.opensees import apeSees, OpenSeesModel
 
 with apeGmsh(model_name="demo") as g:
     # ... build geometry, mesh, physical groups ...
@@ -36,6 +36,12 @@ with apeGmsh(model_name="demo") as g:
 ops_bridge = apeSees(fem)
 ops_bridge.model(ndm=3, ndf=3)
 # ... materials, elements, fix, patterns (re-declare explicitly) ...
+
+# Persist the canonical two-zone model.h5 once, then rehydrate the
+# read-side broker. Every Results constructor below requires it
+# (model=/model_h5=); omitting it raises TypeError (ADR 0020 INV-1).
+ops_bridge.h5("model.h5")
+model = OpenSeesModel.from_h5("model.h5")
 
 # Declare what you want recorded on the apeSees bridge
 ops_bridge.recorder.Node(
@@ -76,7 +82,7 @@ ops_bridge.tcl("model.tcl", recorders=spec)
 Then from your laptop, parse the recorder output:
 
 ```python
-results = Results.from_recorders(spec, "out/", fem=fem)
+results = Results.from_recorders(spec, "out/", fem=fem, model=model)
 disp = results.nodes.get(component="displacement_z", pg="Top")
 ```
 
@@ -96,7 +102,7 @@ Same as A₁ but `ops.recorder(...)` source instead of Tcl.
 ops_bridge.py("model.py", recorders=spec)
 # … run python model.py, files land in out/ …
 
-results = Results.from_recorders(spec, "out/", fem=fem)
+results = Results.from_recorders(spec, "out/", fem=fem, model=model)
 ```
 
 Use when the rest of your production pipeline is Python.
@@ -130,8 +136,8 @@ with spec.emit_recorders("out/") as live:
     live.end_stage()
 
 # Read each stage independently
-grav = Results.from_recorders(spec, "out/", fem=fem, stage_id="gravity")
-dyn  = Results.from_recorders(spec, "out/", fem=fem, stage_id="dynamic")
+grav = Results.from_recorders(spec, "out/", fem=fem, model=model, stage_id="gravity")
+dyn  = Results.from_recorders(spec, "out/", fem=fem, model=model, stage_id="dynamic")
 ```
 
 When `stage_id` is set and `stage_name` is left at its default (`"analysis"`), `from_recorders` mirrors `stage_name = stage_id` automatically so the loaded Results stage carries the meaningful name (`Results.py:179-180`).
@@ -197,7 +203,7 @@ with spec.capture(path="run.h5", fem=fem, ndm=3, ndf=3) as cap:
     cap.capture_modes(n_modes=10)
 
 # One file holds all stages including modes
-results = Results.from_native("run.h5", fem=fem)
+results = Results.from_native("run.h5", fem=fem, model=model)
 
 for mode in results.modes:
     print(mode.mode_index, mode.frequency_hz, mode.period_s)
@@ -246,21 +252,24 @@ For the STKO ecosystem and big parallel runs.
 ops_bridge.tcl("model.tcl", recorders=spec, mpco=True)
 # … run with STKO loaded — produces run.mpco …
 
-results = Results.from_mpco("run.mpco")
+results = Results.from_mpco("run.mpco", model_h5="model.h5")
 ```
 
 apeGmsh emits a single `recorder mpco …` line into the script; STKO
 writes the HDF5 file. apeGmsh's `MPCOReader` reads it directly without
-re-transcoding.
+re-transcoding. `from_mpco` takes the broker as a **path**
+(`model_h5=`, the canonical `model.h5`), not the in-memory `model`
+object; omitting it raises TypeError.
 
 For parallel runs:
 
 ```python
 # Multi-partition .mpco — auto-discovers .part-N siblings
-results = Results.from_mpco("run.part-0.mpco")
+results = Results.from_mpco("run.part-0.mpco", model_h5="model.h5")
 
 # Opt out of auto-discovery (read only the named partition)
-results = Results.from_mpco("run.part-0.mpco", merge_partitions=False)
+results = Results.from_mpco(
+    "run.part-0.mpco", model_h5="model.h5", merge_partitions=False)
 ```
 
 | Pros | Cons |
@@ -285,7 +294,7 @@ with spec.emit_mpco("run.mpco"):
     for _ in range(n_steps):
         ops.analyze(1, dt)
 
-results = Results.from_mpco("run.mpco")
+results = Results.from_mpco("run.mpco", model_h5="model.h5")
 ```
 
 ### How it works
@@ -378,8 +387,10 @@ for mode in results.modes:
     print(mode.mode_index, mode.frequency_hz)
     shape = mode.nodes.get(component="displacement_z")
 
-# Visualize
-results.viewer()
+# Visualize — in a notebook use the kernel-safe web viewer.
+# results.viewer() defaults to blocking=True, which CRASHES the
+# Jupyter kernel; use show_web() (trame) or viewer(blocking=False).
+results.show_web()
 ```
 
 See [`apeGmsh.results.Results`](../api/results.md) for the full
@@ -402,10 +413,10 @@ If you used `emit_recorders` (Strategy A₃), you **must** pass
 
 ```python
 # Wrong — looks for r_disp.out
-Results.from_recorders(spec, "out/", fem=fem)
+Results.from_recorders(spec, "out/", fem=fem, model=model)
 
 # Right — looks for gravity__r_disp.out
-Results.from_recorders(spec, "out/", fem=fem, stage_id="gravity")
+Results.from_recorders(spec, "out/", fem=fem, model=model, stage_id="gravity")
 ```
 
 ### "`emit_mpco` raises about the build"

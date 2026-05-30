@@ -327,11 +327,12 @@ Backend dispatch rules (from `_mesh_partitioning.py`):
 ## 5. HDF5 round-trip and post-processing
 
 `ops.h5(path)` writes the bridge's canonical `model.h5`. When
-`len(fem.partitions) > 1`, the bridge populates the schema 2.11.0
-partition zone:
+`len(fem.partitions) > 1`, the bridge populates the partition zone
+(group structure landed in opensees schema 2.10.0; current bridge
+version is 2.12.0):
 
 ```
-/meta                                 (carries opensees=2.11.0)
+/meta                                 (carries opensees=2.12.0)
 /opensees/...                         (nodes, elements, materials, ...)
 /opensees/partitions/                 (n_partitions = N attr)
   partition_00/
@@ -395,9 +396,11 @@ with h5_reader.open("frame_partitioned.h5") as model:
               f"{len(rec.boundary_node_ids)} boundary nodes")
 ```
 
-Schema version: **opensees 2.11.0** (per ADR 0023 two-version
-reader window — 2.10.x readers still open 2.11.x files; rank attr
-/ `partition_ids` row values became 0-based in 2.11.0).
+Schema version: **opensees 2.12.0** (current bridge
+`SCHEMA_VERSION`). The rank attr / `partition_ids` row values became
+0-based in the 2.11.0 bump; 2.12.0 added the ADR 0035 embeddedNode
+columns. Per ADR 0023 two-version reader window, both 2.11.x and
+2.12.x files are accepted.
 
 ### 5.1. MPCO recorder regions under partitioning (ADR 0027 INV-4)
 
@@ -644,7 +647,7 @@ expected to change.
     `select(partition=k)` survives H5 unchanged.
   - the **OpenSees zone** `/opensees/partitions/partition_NN/` stores
     the **0-based runtime rank** (`rank` attr / `partition_ids` column,
-    schema 2.11.0), matching `getPID()`.
+    0-based since the schema 2.11.0 bump), matching `getPID()`.
 
   A reader that needs the runtime rank must use the OpenSees zone (or
   re-enumerate `fem.partitions`), **not** the neutral-zone `id`.
@@ -690,7 +693,7 @@ expected to change.
   undeclared nodes naming both fixes
   (`g.node_ndf.set(target, ndf=K)` and
   `g.node_ndf.set_default(ndf=K)`). See
-  [ADR 0032](../src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
+  [ADR 0032](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md)
   for the doctrine.
 
   Foreign node declarations under cross-partition replication (§ 7)
@@ -705,11 +708,11 @@ expected to change.
   rank boundaries.
 
   Cross-rank consistency is **hash-guaranteed** per
-  [ADR 0021](../src/apeGmsh/opensees/architecture/decisions/0021-lineage-chain-replaces-snapshot-id.md):
+  [ADR 0021](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0021-lineage-chain-replaces-snapshot-id.md):
   the resolved `_ndf` array folds into `fem_hash`, so every rank
   deserialises identical declarations and agrees on per-node `ndf`
   for shared nodes without explicit cross-rank communication. See
-  [ADR 0033](../src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
+  [ADR 0033](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md)
   for the full emit-wiring contract (override-only semantics +
   validator at three materialisation sites + phantom carveout).
 
