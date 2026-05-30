@@ -80,16 +80,21 @@ def _load_targets(name: str) -> list[SelectionTarget]:
     return [_as_target(dt) for dt in _load_group_members(name)]
 
 
-def _write_group(name: str, members: list[SelectionTarget]) -> None:
+def _write_group(
+    name: str, members: list["SelectionTarget | DimTag"],
+) -> None:
     """Write a physical group to Gmsh (replaces existing with same name).
 
     A physical-group name maps to a single dimension.  Members
     spanning more than one dimension are rejected — multi-dimensional
     physical groups are not supported.
+
+    Accepts ``SelectionTarget`` (the ``SelectionState`` internal form)
+    or a bare ``(dim, tag)`` DimTag (the direct-call/test contract).
     """
     by_dim: dict[int, list[int]] = {}
     for m in members:
-        dim, tag = m.dimtag
+        dim, tag = _as_target(m).dimtag
         by_dim.setdefault(dim, []).append(tag)
     if len(by_dim) > 1:
         raise ValueError(
