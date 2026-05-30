@@ -190,24 +190,52 @@ def validate_node_ndf_element_compat(
     The check is conservative: it fires ONLY when two elements with
     DISJOINT ``ndf_ok`` sets (e.g. shell ``{6}`` vs solid ``{3}``)
     genuinely share a node — a configuration OpenSees can never
-    assemble.  Element types absent from the capability registry are
-    skipped (treated as unconstrained), so the guard never raises a
-    false positive.  The correct idiom for a real shell-on-solid
-    interface is SEPARATE coincident nodes (shell ``ndf=6`` + solid
-    ``ndf=3``) tied by ``g.constraints.equal_dof`` / ``tie`` on the
-    translational DOFs (plus a shell-edge rotation clamp for the
-    line-hinge), never shared nodes — see ADR 0033.
+    assemble (whatever single ndf the shared node is given, one of the
+    two elements mis-maps).  Element types absent from the capability
+    registry resolve to ``ndf_ok = None`` and are skipped (treated as
+    unconstrained), so the guard never raises a false positive; it also
+    never flags multi-ndf elements (beams / trusses carry ``{3, 6}`` /
+    ``{2, 3, 6}``, which intersect both solids and shells) — a beam
+    sharing a node with a solid is therefore NOT caught here (a rarer,
+    distinct mistake; out of scope for this shell-on-solid guard).  The
+    correct idiom for a real shell-on-solid interface is SEPARATE
+    coincident nodes (shell ``ndf=6`` + solid ``ndf=3``) tied by
+    ``g.constraints.equal_dof`` / ``tie`` on the translational DOFs
+    (plus a shell-edge rotation clamp for the line-hinge), never shared
+    nodes — see ADR 0033 / 0046.
     """
     from .._element_capabilities import element_class_ndf_ok
 
-    # node tag -> (accumulated ndf_ok intersection, first element type seen)
-    acc: dict[int, "frozenset[int]"] = {}
-    owner: dict[int, str] = {}
+    # Classify each spec once (skip the unclassifiable — fail-safe).
+    classified: list[tuple["Element", str, "frozenset[int]"]] = []
     for spec in elements:
         etype = type(spec).__name__
         ndf_ok = element_class_ndf_ok(etype)
-        if ndf_ok is None:
-            continue
+        if ndf_ok is not None:
+            classified.append((spec, etype, ndf_ok))
+
+    # Fast path: the per-node walk can only find a conflict if two
+    # distinct ndf_ok families are mutually disjoint (shell {6} vs
+    # solid {3}).  Single-family models (all solids, all shells, solids
+    # + beams, ...) — the overwhelming common case — can never trip the
+    # guard, so skip the O(E) connectivity expansion entirely.
+    families = list({nf for _s, _e, nf in classified})
+    has_disjoint_pair = any(
+        not (families[i] & families[j])
+        for i in range(len(families))
+        for j in range(i + 1, len(families))
+    )
+    if not has_disjoint_pair:
+        return None
+
+    # node tag -> (running ndf_ok intersection, element type that last
+    # narrowed it).  ``owner`` tracks the narrowing element so the error
+    # names the element actually responsible for the surviving set, not
+    # merely the first one seen (matters when a compatible multi-ndf
+    # element is processed between two incompatible ones).
+    acc: dict[int, "frozenset[int]"] = {}
+    owner: dict[int, str] = {}
+    for spec, etype, ndf_ok in classified:
         for _eid, node_tags in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
             for raw in node_tags:
                 t = int(raw)
@@ -235,9 +263,11 @@ def validate_node_ndf_element_compat(
                         f"g.constraints.equal_dof (conformal) or "
                         f"g.constraints.tie (non-matching), then clamp the "
                         f"shell-edge rotations for the line hinge. See ADR "
-                        f"0033 / the shell-on-solid idiom."
+                        f"0033 / 0046 / the shell-on-solid idiom."
                     )
-                acc[t] = inter
+                if inter != prev:
+                    acc[t] = inter
+                    owner[t] = etype
     return None
 
 

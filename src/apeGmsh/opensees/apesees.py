@@ -3972,7 +3972,18 @@ class apeSees:
         # ``NativeWriter.write_opensees_from`` propagate the envelope
         # ndf onto ``/model/meta`` so node_ndf models round-trip through
         # ``Results.from_native``.
-        return DomainCapture(resolved, path, self._fem, ops=ops, bridge=self)
+        #
+        # BUT the sidecar is written via ``self.h5(...)``, which raises
+        # ``NotImplementedError`` for staged / initial-stress builds (H5
+        # archival of those is deferred — see :meth:`h5`).  For such
+        # builds keep the pre-Composed behaviour (no sidecar, no
+        # ``/opensees/`` zone) so ``ops.domain_capture`` still works for
+        # the staged-SSI capture workflow; the ndf round-trip just isn't
+        # available there until H5 staged-archival lands.
+        bridge = self
+        if self._stage_records or self._initial_stress_records:
+            bridge = None
+        return DomainCapture(resolved, path, self._fem, ops=ops, bridge=bridge)
 
     def fix(
         self,

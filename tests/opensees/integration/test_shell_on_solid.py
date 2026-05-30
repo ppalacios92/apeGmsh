@@ -128,11 +128,6 @@ class _NullEmitter:
         return _noop
 
 
-# ---------------------------------------------------------------------------
-# 2. Correct idiom — separate coincident nodes + equalDOF + rotation clamp
-#    transmits the full load (Σ reactions == Σ applied).
-# ---------------------------------------------------------------------------
-
 from apeGmsh._kernel.records._constraints import NodePairRecord
 from apeGmsh._kernel.records._kinds import ConstraintKind
 
@@ -142,6 +137,123 @@ from tests.opensees.fixtures.fem_stub import (
     _ElementsStub,
     _NodesStub,
 )
+
+
+# ---------------------------------------------------------------------------
+# 1b. Guard coverage — every shell family is classified ndf={6}, and the
+#     guard fires for the registry-gap shell (ASDShellT3) too.
+# ---------------------------------------------------------------------------
+
+
+def test_element_class_ndf_ok_classifies_all_shell_families():
+    """All five shells resolve to ndf={6}, solids/quads to {3}/{2}, and
+    multi-ndf beams to a superset — so the guard's disjoint-family test
+    is correct for every shell-vs-solid pair, including ASDShellT3 (which
+    has no _ELEM_REGISTRY entry and is covered via _EXTRA_CLASS_NDF_OK).
+    """
+    from apeGmsh.opensees._element_capabilities import element_class_ndf_ok
+
+    for shell in ("ShellMITC3", "ShellMITC4", "ShellDKGQ",
+                  "ASDShellQ4", "ASDShellT3"):
+        assert element_class_ndf_ok(shell) == frozenset({6}), shell
+    for solid in ("FourNodeTetrahedron", "stdBrick", "TenNodeTetrahedron"):
+        assert element_class_ndf_ok(solid) == frozenset({3}), solid
+    assert element_class_ndf_ok("FourNodeQuad") == frozenset({2})
+    # Multi-ndf beam — intersects both solids and shells (never flagged).
+    assert element_class_ndf_ok("elasticBeamColumn") == frozenset({3, 6})
+    # Unknown class -> None (conservative skip).
+    assert element_class_ndf_ok("NotARealElement") is None
+
+
+def test_asdshellt3_on_solid_fails_loud():
+    """A registry-gap shell (ASDShellT3, ndf=6) sharing a node with a
+    solid tet (ndf=3) trips the guard — the coverage hole the
+    _EXTRA_CLASS_NDF_OK fallback closes.  Build-time only (the guard
+    raises before any element is emitted), so no openseespy needed.
+    """
+    nodes = _NodesStub(
+        ids=[1, 2, 3, 4, 5, 6],
+        coords=[
+            (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),                      # 1-4 tet
+            (1.0, 1.0, 0.0), (0.0, 1.0, 1.0),     # 5,6 extra shell corners
+        ],
+        node_pgs={"Solid": [1, 2, 3, 4], "Shell": [4, 5, 6]},
+    )
+    elements = _ElementsStub(elem_pgs={
+        "Solid": _ElementGroupView(ids=(1,), connectivity=((1, 2, 3, 4),)),
+        # ASDShellT3 (3-node shell) shares node 4 with the tet.
+        "Shell": _ElementGroupView(ids=(2,), connectivity=((4, 5, 6),)),
+    })
+    fem = FEMStub(nodes=nodes, elements=elements)
+
+    ops = apeSees(fem)
+    ops.model(ndm=3, ndf=6)
+    ops.element.FourNodeTetrahedron(
+        pg="Solid", material=ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2),
+    )
+    ops.element.ASDShellT3(
+        pg="Shell",
+        section=ops.section.ElasticMembranePlateSection(E=30e9, nu=0.0, h=0.1),
+    )
+    with pytest.raises(BridgeError) as exc_info:
+        ops.build().emit(_NullEmitter())
+    msg = str(exc_info.value)
+    assert "ASDShellT3" in msg and "FourNodeTetrahedron" in msg, msg
+
+
+# ---------------------------------------------------------------------------
+# 1c. domain_capture sidecar gate — staged / initial-stress builds keep
+#     the pre-Composed behaviour (no NotImplementedError regression).
+# ---------------------------------------------------------------------------
+
+
+def test_domain_capture_gates_sidecar_for_initial_stress_builds(tmp_path):
+    """ops.h5() (the sidecar writer) raises NotImplementedError for
+    staged / initial-stress builds, so domain_capture must NOT forward
+    the bridge for those — else `with ops.domain_capture(...)` would blow
+    up at __enter__, regressing the staged-SSI capture workflow.
+
+    A plain build forwards the bridge (bridge is ops); adding an
+    initial-stress record flips the gate so bridge becomes None.
+    """
+    from apeGmsh.opensees._internal.build import InitialStressRecord
+    from apeGmsh.results.capture.spec import DomainCaptureSpec
+
+    nodes = _NodesStub(
+        ids=[1, 2, 3, 4],
+        coords=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)],
+        node_pgs={"Solid": [1, 2, 3, 4]},
+    )
+    elements = _ElementsStub(elem_pgs={
+        "Solid": _ElementGroupView(ids=(1,), connectivity=((1, 2, 3, 4),)),
+    })
+    fem = FEMStub(nodes=nodes, elements=elements)
+    fem.snapshot_id = "stub"  # spec resolve reads fem.snapshot_id
+    ops = apeSees(fem)
+    ops.model(ndm=3, ndf=3)
+
+    spec = DomainCaptureSpec(opensees=ops)
+    spec.nodes(ids=[1], components=["displacement_x"], name="probe")
+
+    # Plain build: sidecar forwarded so node_ndf can round-trip.
+    cap_plain = ops.domain_capture(spec, path=str(tmp_path / "plain.h5"))
+    assert cap_plain._bridge is ops
+
+    # Initial-stress build: sidecar gated off (ops.h5 would NotImplementedError).
+    ops._initial_stress_records.append(InitialStressRecord(
+        name="insitu", pg="Solid", elements=None,
+        sigma_xx=0.0, sigma_yy=0.0, sigma_zz=-1.0,
+        ramp_steps=1, lambda_install=1.0,
+    ))
+    cap_is = ops.domain_capture(spec, path=str(tmp_path / "is.h5"))
+    assert cap_is._bridge is None
+
+
+# ---------------------------------------------------------------------------
+# 2. Correct idiom — separate coincident nodes + equalDOF + rotation clamp
+#    transmits the full load (Σ reactions == Σ applied).
+# ---------------------------------------------------------------------------
 
 
 def _make_shell_on_solid_correct(*, b=1.0, H=2.0, depth=0.5, nz=4):

@@ -317,10 +317,24 @@ _CLASS_TOKEN_ALIASES: dict[str, str] = {
     "CorotTruss": "corotTruss",
 }
 
+#: ``ndf_ok`` for ``Element`` subclasses that ship a ``_emit`` but have
+#: no :data:`_ELEM_REGISTRY` entry yet.  Without this the shell-on-solid
+#: guard would silently skip them.  ``ASDShellT3`` is the load-bearing
+#: one — a 3-node ``ndf=6`` shell; missing it would leave an
+#: ASDShellT3-on-solid model unguarded (the exact trap ADR 0046
+#: targets).  Multi-ndf beams (``forceBeamColumn`` / ``dispBeamColumn``,
+#: ``{3, 6}``) are intentionally NOT listed: they intersect both solids
+#: and shells, so the guard never flags them anyway.
+_EXTRA_CLASS_NDF_OK: dict[str, "frozenset[int]"] = {
+    "ASDShellT3": frozenset({6}),
+}
+
 
 def element_class_ndf_ok(class_name: str) -> "frozenset[int] | None":
     """Return the set of per-node ``ndf`` values an ``Element`` subclass
-    accepts, or ``None`` when the class is not in :data:`_ELEM_REGISTRY`.
+    accepts, or ``None`` when the class is unclassifiable (no
+    :data:`_ELEM_REGISTRY` entry and no :data:`_EXTRA_CLASS_NDF_OK`
+    fallback).
 
     Used by the build-time shell-on-solid node-sharing guard
     (:func:`apeGmsh.opensees._internal.build.validate_node_ndf_element_compat`):
@@ -331,12 +345,14 @@ def element_class_ndf_ok(class_name: str) -> "frozenset[int] | None":
 
     ``None`` is the conservative "unknown — do not constrain" answer:
     the guard never fires on an element type it cannot classify, so a
-    missing registry entry yields a false negative (silent), never a
-    false positive (spurious raise).
+    missing entry yields a false negative (silent), never a false
+    positive (spurious raise).
     """
     token = _CLASS_TOKEN_ALIASES.get(class_name, class_name)
     spec = _ELEM_REGISTRY.get(token)
-    return spec.ndf_ok if spec is not None else None
+    if spec is not None:
+        return spec.ndf_ok
+    return _EXTRA_CLASS_NDF_OK.get(class_name)
 
 
 # ---------------------------------------------------------------------------
