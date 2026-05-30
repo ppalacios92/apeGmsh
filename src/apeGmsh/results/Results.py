@@ -878,6 +878,52 @@ class Results:
             render_mode=render_mode,
         )
 
+    def serve_web(
+        self,
+        *,
+        stage: "Optional[str]" = None,
+        render_mode: str = "client",
+        port: "Optional[int]" = None,
+        open_browser: bool = True,
+        title: str = "apeGmsh",
+        **start_kwargs,
+    ):
+        """Serve the results as a standalone trame web app (ADR 0042 R-C).
+
+        The non-Jupyter counterpart of :meth:`show_web`: builds a vuetify3
+        single-page app (the FEM view plus a step slider and per-layer
+        switches) and serves it at a local URL, opening a browser tab and
+        blocking until stopped (Ctrl-C). In a notebook use :meth:`show_web`
+        instead.
+
+        Parameters
+        ----------
+        stage
+            Stage id or name to activate; defaults to the first stage.
+        render_mode
+            ``"client"`` (default), ``"server"``, or ``"hybrid"`` — see
+            :meth:`show_web`.
+        port
+            Port to serve on; ``None`` lets trame pick one.
+        open_browser
+            Open a browser tab at the served URL.
+        title
+            App title shown in the toolbar.
+        **start_kwargs
+            Passed through to the trame ``server.start`` (e.g.
+            ``exec_mode``).
+
+        Returns
+        -------
+        WebViewer
+            The viewer handle.
+        """
+        from ..viewers.web_viewer import serve_web as _serve_web
+        return _serve_web(
+            self, stage=stage, render_mode=render_mode, port=port,
+            open_browser=open_browser, title=title, **start_kwargs,
+        )
+
     def _build_viewer_argv(
         self,
         *,

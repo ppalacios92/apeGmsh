@@ -263,6 +263,94 @@ def test_show_web_threads_render_mode(cube_results, monkeypatch):
 
 
 # ---------------------------------------------------------------------
+# Standalone trame web app (R-C) — vuetify3 build is headless-testable;
+# server.start() is eyeball-only. We test construction + state wiring.
+# ---------------------------------------------------------------------
+
+def test_build_app_constructs_server_with_step_state(cube_results_2steps):
+    pytest.importorskip("trame.ui.vuetify3")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
+    server = wv.build_app(server_name="test_build_app_steps")
+    assert server.state.step == 0
+    assert hasattr(server, "start")  # a real trame server object
+
+
+def _fire_state_change(server, key, **values):
+    """Invoke the @state.change handlers registered for ``key``.
+
+    trame only runs change listeners inside a live server loop (``flush``
+    early-returns while ``skip_flushing`` is set), so to test our wiring
+    headlessly we call the registered callbacks directly. This verifies the
+    handler is bound to ``key`` and that it drives the viewer — trame's own
+    state→listener plumbing is exercised at runtime / by trame's own tests.
+    """
+    for fn, _translator in server.state._change_callbacks[key]:
+        fn(**values)
+
+
+def test_build_app_step_state_drives_set_step(cube_results_2steps, monkeypatch):
+    """The step state's change handler must call set_step (slider wiring)."""
+    pytest.importorskip("trame.ui.vuetify3")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
+    seen: list[int] = []
+    monkeypatch.setattr(wv, "set_step", lambda i: seen.append(int(i)))
+    server = wv.build_app(server_name="test_build_app_drive_step")
+
+    _fire_state_change(server, "step", step=1)
+    assert seen == [1]
+
+
+def test_build_app_layer_state_drives_set_visible(cube_results, monkeypatch):
+    """Each layer's switch state drives set_layer_visible."""
+    pytest.importorskip("trame.ui.vuetify3")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
+    diagram = _StubDiagram("Loads")
+    monkeypatch.setattr(wv, "layer_diagrams", lambda: [diagram])
+    seen: list = []
+    monkeypatch.setattr(
+        wv, "set_layer_visible", lambda d, v: seen.append((d, v))
+    )
+    server = wv.build_app(server_name="test_build_app_drive_vis")
+    assert server.state["layer_0_visible"] is True
+
+    server.state["layer_0_visible"] = False
+    _fire_state_change(server, "layer_0_visible")
+    assert seen == [(diagram, False)]
+
+
+def test_build_app_unknown_render_mode_raises(cube_results):
+    pytest.importorskip("trame.ui.vuetify3")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
+    with pytest.raises(ValueError, match="Unknown render_mode"):
+        wv.build_app(render_mode="turbo", server_name="test_build_app_bad_mode")
+
+
+def test_serve_honours_skip_env(cube_results, monkeypatch):
+    """APEGMSH_SKIP_VIEWER → serve builds but does NOT start (no blocking)."""
+    pytest.importorskip("trame.ui.vuetify3")
+    from apeGmsh.viewers.web_viewer import WebViewer
+
+    monkeypatch.setenv("APEGMSH_SKIP_VIEWER", "1")
+    wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
+    started = {"v": False}
+    monkeypatch.setattr(
+        WebViewer, "build_app",
+        lambda self, **kw: type("S", (), {"start": lambda *a, **k: started.update(v=True)})(),
+    )
+    out = wv.serve()
+    assert started["v"] is False
+    assert out is not None
+
+
+# ---------------------------------------------------------------------
 # ipywidgets controls (R-C slice 2) — wiring verified headlessly via
 # traitlets' synchronous .observe; the visual push is eyeballed.
 # ---------------------------------------------------------------------
