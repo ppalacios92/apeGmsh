@@ -365,17 +365,20 @@ rename(old, new)   delete(label)   fragment_all()   fuse_group(label, ...)
 ## `g.constraints` — solver-agnostic MP constraints
 
 Every method returns a `ConstraintDef`; resolution happens in
-`get_fem_data(...)`. Master/slave are **label names**. These now EMIT
-(see note below), so declare them once — don't hand-write the deck.
+`get_fem_data(...)`. The first two args are **label names**; their kwarg
+names are `master_label`/`slave_label` (and `host_label`/`embedded_label`
+for `embedded`) — **except** `node_to_surface*`, which take bare
+`master`/`slave`. These now EMIT (see note below), so declare them once —
+don't hand-write the deck.
 
 ```
-equal_dof(master, slave, *, master_entities=None, slave_entities=None, dofs=None)
-rigid_link(master, slave, *, link_type="beam"|"bar"|"rotBeam")
-rigid_diaphragm(master, slave, *, perp_dirn=3)        penalty(master, slave, *, stiffness=1e10, dofs=None)
-rigid_body / kinematic_coupling(master, slave, *, dofs=None)
-tie(master, slave, *, master_entities=None, slave_entities=None, tolerance=1e-6)
-embedded(host, embedded, *, tolerance=1.0)            tied_contact / mortar / distributing_coupling(...)
-node_to_surface / node_to_surface_spring(master, slave, *, ...)   # phantom nodes
+equal_dof(master_label, slave_label, *, master_entities=None, slave_entities=None, dofs=None)
+rigid_link(master_label, slave_label, *, link_type="beam"|"bar"|"rotBeam")
+rigid_diaphragm(master_label, slave_label, *, perp_dirn=3)   penalty(master_label, slave_label, *, stiffness=1e10, dofs=None)
+rigid_body / kinematic_coupling(master_label, slave_label, *, dofs=None)
+tie(master_label, slave_label, *, master_entities=None, slave_entities=None, tolerance=1.0)
+embedded(host_label, embedded_label, *, tolerance=1.0)       tied_contact / mortar / distributing_coupling(master_label, slave_label, ...)
+node_to_surface / node_to_surface_spring(master, slave, *, ...)   # phantom nodes — bare master/slave
 list_defs() / list_records() / clear()
 ```
 
