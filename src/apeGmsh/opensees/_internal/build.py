@@ -37,6 +37,7 @@ Three deferred contracts are resolved here:
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterable
 
@@ -770,6 +771,9 @@ def emit_element_spec(
     if not elements:
         return
 
+    # ADR 0044: warn if any ASDConcrete element exceeds the crack-band ceiling.
+    sweep_asdconcrete_element_size(spec, elements, fem)
+
     transf_spec = _element_transf(spec)
 
     for eid, node_tags in elements:
@@ -1014,6 +1018,69 @@ def _node_coord(fem: "FEMData", node_id: int) -> np.ndarray:
     """Return the 3-D coordinates of ``node_id`` from the FEM snapshot."""
     idx = fem.nodes.index(node_id)
     return np.asarray(fem.nodes.coords[idx], dtype=float)
+
+
+def sweep_asdconcrete_element_size(
+    spec: "Element",
+    elements: "list[tuple[int, tuple[int, ...]]]",
+    fem: "FEMData",
+) -> None:
+    """Warn (once, aggregated) when ASDConcrete elements exceed ``l_max`` (ADR 0044).
+
+    For elements whose ``spec.material`` is an ``ASDConcrete3D``/``ASDConcrete1D``
+    *directly* (solids and 2-node members), compares the element's
+    characteristic length — the minimum inter-node distance, matching
+    OpenSees' ``Element::getCharacteristicLength`` — against the material's
+    crack-band snapback ceiling ``l_max = 2 E Gf / ft^2``. Elements over the
+    ceiling have their softening fracture energy floored by the binary, so the
+    response is over-brittle and no longer mesh-objective.
+
+    Minimal cut: section-nested ASDConcrete (fiber beams / shells, where the
+    material lives inside a section rather than ``spec.material``) is skipped —
+    its per-class characteristic-length mapping is a documented follow-up. The
+    pass is read-only and never blocks emit; the warning is CI-promotable via
+    ``-W error::...ASDRegularizationWarning``.
+    """
+    mat = getattr(spec, "material", None)
+    if mat is None:
+        return
+    # Deferred import: avoids an _internal -> material import cycle at load.
+    from ..material.nd import ASDConcrete3D, ASDRegularizationWarning
+    from ..material.uniaxial import ASDConcrete1D
+
+    if not isinstance(mat, (ASDConcrete3D, ASDConcrete1D)):
+        return
+    lmax = mat.l_max()
+    if lmax is None:  # raw-constructed without ft/Gf provenance — no ceiling
+        return
+
+    worst = 0.0
+    over = 0
+    for _eid, node_tags in elements:
+        coords = [_node_coord(fem, int(t)) for t in node_tags]
+        n = len(coords)
+        if n < 2:
+            continue
+        lch = min(
+            float(np.linalg.norm(coords[i] - coords[j]))
+            for i in range(n)
+            for j in range(i + 1, n)
+        )
+        if lch > lmax:
+            over += 1
+            worst = max(worst, lch)
+    if over:
+        pg = getattr(spec, "pg", None)
+        where = f" in PG {pg!r}" if pg is not None else ""
+        warnings.warn(
+            f"ASDConcrete: {over}/{len(elements)} elements{where} exceed the "
+            f"crack-band snapback ceiling l_max=2*E*Gf/ft^2={lmax:g} "
+            f"(worst lch={worst:g}, ratio {worst / lmax:.2f}). Their softening "
+            f"fracture energy is floored, so the response is over-brittle and "
+            f"not mesh-objective; refine the mesh or increase Gf.",
+            ASDRegularizationWarning,
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2452,6 +2519,17 @@ def emit_element_spec_partitioned(
     """
     if not pre_allocated:
         return
+
+    # ADR 0044: sweep only this rank's owned elements (avoids cross-rank
+    # duplicate warnings — each rank reports its own over-ceiling elements).
+    owned = [
+        (eid, node_tags)
+        for eid, node_tags, _ in pre_allocated
+        if element_owner.get(int(eid)) == partition_rank
+    ]
+    if owned:
+        sweep_asdconcrete_element_size(spec, owned, fem)
+
     transf_spec = _element_transf(spec)
 
     for eid, node_tags, ele_tag in pre_allocated:
