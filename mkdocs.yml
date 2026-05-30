@@ -119,6 +119,9 @@ nav:
   - Tutorials:
       - Overview: tutorials/index.md
       - Your first model in 10 minutes: tutorials/first-model.md
+      - A plate in tension: tutorials/plate-in-tension.md
+      - A simply-supported beam, the apeGmsh way: tutorials/beam-and-composites.md
+      - Save, reload, view: tutorials/save-reload-view.md
 
   - How-to (Recipes):
       - Overview: how-to/index.md
@@ -153,15 +156,16 @@ nav:
           - Reading & filtering: internal_docs/guide_results_filtering.md
   - Examples:
       - Overview: examples/index.md
-      - Getting started:
+      - Worked examples:
+          - "Portal frame (2D)": examples/portal-frame.md
+          - "Modal analysis (cantilever)": examples/modal-analysis.md
+      - Notebook gallery (legacy):
           - "Hello plate": examples/notebooks/01_hello_plate.ipynb
           - "Cantilever beam (2D)": examples/notebooks/02_cantilever_beam_2D.ipynb
-      - Building richer models:
           - "Portal frame (2D)": examples/notebooks/04_portal_frame_2D.ipynb
           - "Labels & physical groups": examples/notebooks/05_labels_and_pgs.ipynb
           - "Part assembly": examples/notebooks/10b_part_assembly.ipynb
           - "Interface tie": examples/notebooks/12_interface_tie.ipynb
-      - Analysis types:
           - "Modal analysis": examples/notebooks/17_modal_analysis.ipynb
           - "Pushover (elastoplastic)": examples/notebooks/19_pushover_elastoplastic.ipynb
   - Internals & Design:

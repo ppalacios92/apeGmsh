@@ -1,7 +1,29 @@
 # Examples
 
-A curated, in-progress gallery — a working tour through the apeGmsh
-API by example. Every notebook follows the same modernised template:
+Recognizable structural problems, built end to end through the **typed
+`apeSees` bridge** and checked against a known answer.
+
+<div class="grid cards" markdown>
+
+-   __[Portal frame (2D)](portal-frame.md)__ — two columns + a beam under
+    gravity and lateral load; multiple element groups, drift, and a base
+    shear that checks to exactly the applied load.
+
+-   __[Modal analysis (cantilever)](modal-analysis.md)__ — `g.masses` +
+    `ops.eigen`, the first three natural frequencies read back through
+    `Results` and matched to the Euler–Bernoulli closed form.
+
+</div>
+
+More rungs (fiber sections, STEP import, mesh ties, compose, pushover,
+staged SSI) are landing wave by wave.
+
+## Legacy notebook gallery
+
+The notebooks below predate the typed-bridge curriculum — they drive OpenSees
+with vanilla `openseespy` and split the `spec.capture` / `spec.emit_recorders`
+strategies across the gallery. They still run, but the worked examples above
+are the recommended starting point. Each notebook follows the same template:
 
 * Build geometry / mesh / FEM with apeGmsh.
 * Drive OpenSees with **vanilla `openseespy`** calls.

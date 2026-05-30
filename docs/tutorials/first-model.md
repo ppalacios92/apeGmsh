@@ -265,11 +265,13 @@ The remaining lines (`constraints`, `numberer`, `system`, `test`, `algorithm`,
 solver recipe. For a single linear step this is boilerplate; later tutorials
 explain when you'd reach for something other than `Linear`/`Static`.
 
-!!! tip "What the bridge does and doesn't carry over"
-    The bridge auto-emits multi-point constraints you declared on the session.
-    Loads, masses, and fixities are *re-declared here on `ops`* (as we did with
-    `ops.fix` and `pat.load`) — that's by design, so the runnable deck is
-    explicit about its boundary conditions.
+!!! tip "What the bridge carries over for you"
+    Two things you declare on the *session* reach the solver automatically:
+    **multi-point constraints** and **loads declared via `g.loads`**. Here we
+    declared the load the other way — directly on `ops` with `pat.load` —
+    which is equally fine; just don't declare the *same* load both ways or
+    you'll apply it twice. **Masses and supports** are always set on `ops`
+    (`ops.mass`, `ops.fix`), so the runnable deck is explicit about them.
 
 ## Step 3 — Solve and capture
 
@@ -368,13 +370,13 @@ And the model *checks out* — 6.75 mm, exactly `PL³/3EI`.
 
 ## Where next
 
-- **[A plate in tension](#)** — the same typed bridge on a 2-D *solid*:
-  `nDMaterial`, a face load, and a stress field you read back by physical
-  group.
-- **[The SS beam, the apeGmsh way](#)** — meet the loads/masses/sections
-  *composites*: declare a distributed load once and let apeGmsh resolve the
-  tributary work for you.
-- **[Save, reload, view](#)** — persist a model to disk and reopen it, and the
-  full notebook-safe results loop.
+- **[A plate in tension](plate-in-tension.md)** — the same typed bridge on a
+  2-D *solid*: `nDMaterial`, a tension field, and stresses you read back by
+  physical group.
+- **[The SS beam, the apeGmsh way](beam-and-composites.md)** — meet the
+  loads/masses/sections *composites*: declare a distributed load once and let
+  apeGmsh resolve the tributary work for you.
+- **[Save, reload, view](save-reload-view.md)** — persist a model to disk and
+  reopen it, and the full notebook-safe results loop.
 - **[Core mental model](../concepts/mental-model.md)** — the six ideas behind
   everything you just did, on one page.

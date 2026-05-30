@@ -36,9 +36,9 @@ strategy forks — just the spine, working.
 | Tutorial | What you'll learn | You check |
 |---|---|---|
 | **[T1 · Your first model in 10 minutes](first-model.md)** | The whole apeGmsh → OpenSees spine on a line-element cantilever, in one unbroken path. | δ = PL³/3EI |
-| **T2 · A plate in tension** *(coming)* | The same typed bridge on a 2D **solid**: `nDMaterial`, a pressure-loaded element set, reading a field back by physical group, and contouring it. | u = σL/E |
-| **T3 · A simply-supported beam, the apeGmsh way** *(coming)* | The **composites** that make apeGmsh declarative: `g.loads.line` and load patterns, `g.masses`, `ops.section` — declare-then-resolve, no hand-written tributary loops. | δ = 5wL⁴/384EI, M = wL²/8 |
-| **T4 · Save, reload, view** *(coming)* | Native persistence (`save_to` / `from_h5`) and the notebook-safe results loop — why `Results` needs `model=`, and why `show_web` is the viewer that doesn't crash your kernel. | Reloaded model reproduces δ |
+| **[T2 · A plate in tension](plate-in-tension.md)** | The same typed bridge on a 2D **solid**: `nDMaterial`, an edge tension, reading a field back by physical group, and contouring it. | u = σL/E |
+| **[T3 · A simply-supported beam, the apeGmsh way](beam-and-composites.md)** | The **composites** that make apeGmsh declarative: `g.loads.line` and load patterns, `g.masses`, `ops.section` — declare-then-resolve, no hand-written tributary loops. | δ = 5wL⁴/384EI, M = wL²/8 |
+| **[T4 · Save, reload, view](save-reload-view.md)** | Native persistence (`save_to` / `from_h5`) and the notebook-safe results loop — why `Results` needs `model=`, and why `show_web` is the viewer that doesn't crash your kernel. | Reloaded model reproduces δ |
 
 Work them in order. T1 stands alone; T2–T4 each build on the muscle memory
 of the one before. When you've finished T4 you'll have the full
