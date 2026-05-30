@@ -324,11 +324,9 @@ class MeshTangentNormalOverlay:
     def _entity_arrow_length(self, dim: int, tag: int) -> float:
         """Per-entity arrow length: bbox diag * 0.5, capped by global scale."""
         global_len = self.model_diagonal * self.scale
+        from ..scene.bbox_source import gmsh_bbox
         try:
-            bb = gmsh.model.getBoundingBox(dim, tag)
-            ent_diag = float(np.linalg.norm(
-                [bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]
-            ))
+            ent_diag = gmsh_bbox(dim, tag).diagonal
             if ent_diag > 0:
                 return min(global_len, ent_diag * 0.5)
         except Exception:

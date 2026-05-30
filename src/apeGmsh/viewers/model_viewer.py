@@ -169,6 +169,7 @@ class ModelViewer:
         from .core.visibility import VisibilityManager
         from .core.selection import SelectionState
         from .scene.brep_scene import build_brep_scene
+        from .scene.bbox_source import gmsh_bbox, gmsh_model_bbox
         from .ui.viewer_window import ViewerWindow
         from .ui.preferences import PreferencesTab
         from .ui.model_tabs import (
@@ -494,11 +495,8 @@ class ModelViewer:
                         points.append(c)
                     else:
                         try:
-                            bb = gmsh.model.getBoundingBox(dim, tag)
-                            cx = (bb[0] + bb[3]) * 0.5 - registry.origin_shift[0]
-                            cy = (bb[1] + bb[4]) * 0.5 - registry.origin_shift[1]
-                            cz = (bb[2] + bb[5]) * 0.5 - registry.origin_shift[2]
-                            points.append([cx, cy, cz])
+                            ctr = gmsh_bbox(dim, tag).center - registry.origin_shift
+                            points.append(ctr.tolist())
                         except Exception:
                             continue
                     if use_names:
@@ -608,11 +606,8 @@ class ModelViewer:
                             label_points.append(c)
                         else:
                             try:
-                                bb = gmsh.model.getBoundingBox(pg_dim, int(tag))
-                                cx = (bb[0] + bb[3]) * 0.5 - registry.origin_shift[0]
-                                cy = (bb[1] + bb[4]) * 0.5 - registry.origin_shift[1]
-                                cz = (bb[2] + bb[5]) * 0.5 - registry.origin_shift[2]
-                                label_points.append([cx, cy, cz])
+                                ctr = gmsh_bbox(pg_dim, int(tag)).center - registry.origin_shift
+                                label_points.append(ctr.tolist())
                             except Exception:
                                 continue
                         label_texts.append(display_name)
@@ -726,10 +721,7 @@ class ModelViewer:
 
         def _compute_model_diagonal() -> float:
             try:
-                bb = gmsh.model.getBoundingBox(-1, -1)
-                return float(np.linalg.norm(
-                    [bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]
-                )) or 1.0
+                return gmsh_model_bbox().diagonal or 1.0
             except Exception:
                 return 1.0
 
@@ -774,7 +766,8 @@ class ModelViewer:
 
         def _world_bbox() -> tuple[float, float, float, float, float, float]:
             try:
-                return tuple(gmsh.model.getBoundingBox(-1, -1))
+                box = gmsh_model_bbox()
+                return (*box.min, *box.max)
             except Exception:
                 return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 

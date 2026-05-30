@@ -95,13 +95,13 @@ class ModelInfoPanel:
         """Re-query Gmsh and update every label."""
         # Bounding box — gmsh raises if the model is empty.
         try:
-            bb = gmsh.model.getBoundingBox(-1, -1)
-            self._lbl_min.setText(_fmt_xyz(bb[0], bb[1], bb[2]))
-            self._lbl_max.setText(_fmt_xyz(bb[3], bb[4], bb[5]))
-            dx, dy, dz = bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]
-            self._lbl_size.setText(_fmt_xyz(dx, dy, dz))
-            diag = (dx * dx + dy * dy + dz * dz) ** 0.5
-            self._lbl_diag.setText(f"{diag:.6g}")
+            from ..scene.bbox_source import gmsh_model_bbox
+            box = gmsh_model_bbox()
+            self._lbl_min.setText(_fmt_xyz(*box.min))
+            self._lbl_max.setText(_fmt_xyz(*box.max))
+            size = box.max - box.min
+            self._lbl_size.setText(_fmt_xyz(*size))
+            self._lbl_diag.setText(f"{box.diagonal:.6g}")
         except Exception:
             for lbl in (self._lbl_min, self._lbl_max,
                         self._lbl_size, self._lbl_diag):

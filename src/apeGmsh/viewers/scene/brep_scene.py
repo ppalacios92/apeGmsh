@@ -204,17 +204,12 @@ def build_brep_scene(
 
     # ── model bounding box + origin shift ───────────────────────────
     try:
-        bb = gmsh.model.getBoundingBox(-1, -1)
-        diag = float(np.linalg.norm(
-            [bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]
-        ))
+        from .bbox_source import gmsh_model_bbox
+        box = gmsh_model_bbox()
+        diag = box.diagonal
         if diag <= 0.0:
             diag = 1.0
-        origin = np.array([
-            (bb[0] + bb[3]) * 0.5,
-            (bb[1] + bb[4]) * 0.5,
-            (bb[2] + bb[5]) * 0.5,
-        ])
+        origin = box.center
     except Exception:
         diag = 1.0
         origin = np.zeros(3)
