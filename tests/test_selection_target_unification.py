@@ -102,6 +102,6 @@ def test_staged_groups_hold_targets() -> None:
     sel = SelectionState()
     sel.pick((3, 1))
     sel.pick((3, 2))
-    # Mirrors model_viewer _on_new_group staging current picks directly.
-    sel._staged_groups["Foo"] = list(sel._picks)
-    assert all(isinstance(t, SelectionTarget) for t in sel._staged_groups["Foo"])
+    # Mirrors model_viewer _on_new_group staging current picks.
+    sel.stage_group("Foo", sel.targets)
+    assert all(isinstance(t, SelectionTarget) for t in sel.staged_groups["Foo"])

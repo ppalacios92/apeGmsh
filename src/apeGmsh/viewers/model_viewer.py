@@ -150,7 +150,7 @@ class ModelViewer:
         # ModelViewer has no pick-mode concept — only the
         # ``selectionChanged`` bridge is wired today. The legacy
         # ``sel.on_changed`` cascade (recolor → tree → browser →
-        # parts_tree → commit_active_group) stays untouched per the
+        # parts_tree) stays untouched per the
         # plan doc's one-release compatibility shim policy; the bridge
         # gives future panels a Qt-signal entry point without forcing
         # them through ``SelectionState``'s internal callback list.
@@ -276,9 +276,9 @@ class ModelViewer:
             )
             if ok and name.strip():
                 n = name.strip()
-                # Stage current picks as the new group directly
-                sel._staged_groups[n] = current_picks
-                # Switch to the new group (loads picks from staged)
+                # Stage current picks as the new group (replayable op),
+                # then switch to it (loads picks from staging).
+                sel.stage_group(n, current_picks)
                 sel.set_active_group(n)
                 outline.refresh()
                 if current_picks:
@@ -1420,8 +1420,9 @@ class ModelViewer:
                 lambda: parts_tree.highlight_part_for_entity(sel.picks[-1])
                 if sel.picks else None
             )
-        # Write active group to Gmsh on every pick change
-        sel.on_changed.append(lambda: sel.commit_active_group())
+        # ADR 0045 S3c-2: the active group's members are auto-materialised
+        # into staging by the log reducer, so no per-pick commit is needed
+        # (the old on_changed -> commit_active_group hook is gone).
         # Plan 04 step 4 — selection bridge into ActiveObjects.
         # Same pattern as mesh.viewer: emit a fresh tuple of picks on
         # every mutation so ``ActiveObjects``' identity short-circuit
@@ -1655,7 +1656,20 @@ class ModelViewer:
         plotter.add_key_event("h", _act_hide)
         plotter.add_key_event("i", _act_isolate)
         plotter.add_key_event("r", _act_reveal_all)
-        plotter.add_key_event("u", lambda: sel.undo())
+
+        # Undo / redo. ADR 0045 S3c-2: group activate/create/rename/delete
+        # are replayable, so undo/redo can change the active group + the
+        # group tree — rebuild the outline (not just restyle) after each.
+        def _undo():
+            if sel.undo():
+                outline.refresh()
+
+        def _redo():
+            if sel.redo():
+                outline.refresh()
+
+        plotter.add_key_event("u", _undo)
+        plotter.add_key_event("y", _redo)
 
         # Dim filters: 0=points, 1=curves, 2=surfaces, 3=volumes.
         # Ratified multi-select semantics (ADR 0045): a bare key TOGGLES
