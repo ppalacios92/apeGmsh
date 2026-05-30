@@ -446,17 +446,22 @@ class ModelViewer:
         # are two front-ends writing it (INV-4).
         def _apply_filter(active_dims):
             pick_engine.set_pickable_dims(set(active_dims))
-            # Dim non-pickable dimension actors
+            # Ghost inactive dims (still visible) AND make their actors
+            # non-pickable so a vtkCellPicker ray passes THROUGH them to
+            # the active dim's actor underneath — the volume-click
+            # pass-through (ADR 0045 S5): with only volumes active, a
+            # click on a volume's (coincident, ghosted) boundary surface
+            # resolves to the volume, not the surface.
             for dim in registry.dims:
+                in_active = dim in active_dims
+                registry.set_dim_pickable(dim, in_active)
                 actor = registry.dim_actors.get(dim)
                 if actor is None:
                     continue
-                if dim in active_dims:
-                    actor.GetProperty().SetOpacity(
-                        self._surface_opacity if dim >= 2 else 1.0
-                    )
-                else:
-                    actor.GetProperty().SetOpacity(0.1)
+                actor.GetProperty().SetOpacity(
+                    (self._surface_opacity if dim >= 2 else 1.0)
+                    if in_active else 0.1
+                )
             plotter.render()
             filter_tab.sync_active(active_dims)  # key→panel two-way sync
 

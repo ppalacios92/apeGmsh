@@ -240,6 +240,33 @@ class EntityRegistry:
             inv.setdefault(dt, []).append(ci)
         self._dt_to_cells.update(inv)
 
+    def set_dim_pickable(self, dim: int, pickable: bool) -> None:
+        """Set VTK pickability for every actor of *dim* (fill, wire, node
+        cloud, silhouette).
+
+        ADR 0045 S5 — the volume-click pass-through. A volume's visible
+        boundary is a dim=2 surface actor coincident with the dim=3
+        volume actor; with both pickable, a ``vtkCellPicker`` ray hits the
+        surface on top, and when dim=2 is filtered out the click resolves
+        to nothing. Making the inactive dim's actors **non-pickable** lets
+        the ray pass *through* to the active dim's actor underneath, so a
+        volumes-only filter resolves the click to the volume (whose
+        boundary-cell → volume-tag map already exists in the registry).
+        """
+        for store in (
+            self.dim_actors,
+            self.dim_wire_actors,
+            self.dim_node_actors,
+            self.dim_silhouette_actors,
+        ):
+            actor = store.get(dim)
+            if actor is None:
+                continue
+            try:
+                actor.SetPickable(bool(pickable))
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Pick resolution
     # ------------------------------------------------------------------
