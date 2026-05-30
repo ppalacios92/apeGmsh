@@ -268,7 +268,7 @@ def test_show_web_threads_render_mode(cube_results, monkeypatch):
 # ---------------------------------------------------------------------
 
 def test_build_app_constructs_server_with_step_state(cube_results_2steps):
-    pytest.importorskip("trame")
+    pytest.importorskip("trame.ui.vuetify3")
     from apeGmsh.viewers.web_viewer import WebViewer
 
     wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
@@ -292,7 +292,7 @@ def _fire_state_change(server, key, **values):
 
 def test_build_app_step_state_drives_set_step(cube_results_2steps, monkeypatch):
     """The step state's change handler must call set_step (slider wiring)."""
-    pytest.importorskip("trame")
+    pytest.importorskip("trame.ui.vuetify3")
     from apeGmsh.viewers.web_viewer import WebViewer
 
     wv = WebViewer(cube_results_2steps, plotter=pv.Plotter(off_screen=True))
@@ -306,7 +306,7 @@ def test_build_app_step_state_drives_set_step(cube_results_2steps, monkeypatch):
 
 def test_build_app_layer_state_drives_set_visible(cube_results, monkeypatch):
     """Each layer's switch state drives set_layer_visible."""
-    pytest.importorskip("trame")
+    pytest.importorskip("trame.ui.vuetify3")
     from apeGmsh.viewers.web_viewer import WebViewer
 
     wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
@@ -325,7 +325,7 @@ def test_build_app_layer_state_drives_set_visible(cube_results, monkeypatch):
 
 
 def test_build_app_unknown_render_mode_raises(cube_results):
-    pytest.importorskip("trame")
+    pytest.importorskip("trame.ui.vuetify3")
     from apeGmsh.viewers.web_viewer import WebViewer
 
     wv = WebViewer(cube_results, plotter=pv.Plotter(off_screen=True))
@@ -335,7 +335,7 @@ def test_build_app_unknown_render_mode_raises(cube_results):
 
 def test_serve_honours_skip_env(cube_results, monkeypatch):
     """APEGMSH_SKIP_VIEWER → serve builds but does NOT start (no blocking)."""
-    pytest.importorskip("trame")
+    pytest.importorskip("trame.ui.vuetify3")
     from apeGmsh.viewers.web_viewer import WebViewer
 
     monkeypatch.setenv("APEGMSH_SKIP_VIEWER", "1")
