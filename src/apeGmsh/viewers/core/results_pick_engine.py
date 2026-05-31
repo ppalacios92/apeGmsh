@@ -105,6 +105,30 @@ class PickInventory:
         entry = self._actors.get(id(actor))
         return entry[0] if entry is not None else None
 
+    # -- prop_id-keyed lookups (ADR 0047 R-D.2b-ii) -------------------
+    # A PickBackend hit carries ``prop_id`` (``id(actor)``), not the actor
+    # object, so the controller resolves overlay hits through these.
+
+    def resolve(self, prop_id: Optional[int], cell_id: int) -> Optional[tuple]:
+        """Like :meth:`resolve_pick` but keyed by ``prop_id`` (``id(actor)``)."""
+        if prop_id is None:
+            return None
+        entry = self._actors.get(int(prop_id))
+        if entry is None:
+            return None
+        _kind, reverse_map_fn, _actor = entry
+        try:
+            return reverse_map_fn(int(cell_id))
+        except Exception:
+            return None
+
+    def kind_of(self, prop_id: Optional[int]) -> Optional[str]:
+        """Return the registered ``kind`` for ``prop_id`` or ``None``."""
+        if prop_id is None:
+            return None
+        entry = self._actors.get(int(prop_id))
+        return entry[0] if entry is not None else None
+
     def registered_actors(self) -> list[tuple[str, Any]]:
         """Snapshot ``(kind, actor)`` for every registered entry."""
         return [(k, a) for (k, _r, a) in self._actors.values()]
