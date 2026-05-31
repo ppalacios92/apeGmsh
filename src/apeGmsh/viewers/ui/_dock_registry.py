@@ -75,6 +75,19 @@ class DockSpec:
         ``dock_id`` of a previously-registered dock to tabify with.
         Forward references are rejected; register the parent dock
         first.
+    sanitize
+        Opt-in to per-launch degenerate-placement healing via
+        :func:`sanitize_dock_placement`. Set ``True`` for primary
+        navigation docks (Outline / Selection) so a corrupt persisted
+        layout can never trap them floating, in the Top/Bottom area, or
+        crushed below the size floors. Right-side tool docks leave this
+        ``False`` so their own size policy is untouched. When ``True``,
+        supply ``min_width`` / ``min_height`` (the sticky floors) and
+        ``initial_width`` / ``initial_height`` (applied only when the
+        dock had to be re-docked).
+    min_width, min_height, initial_width, initial_height
+        Size floors + initial extents used by the sanitizer. Only read
+        when ``sanitize`` is ``True``; ``None`` skips that axis.
     """
     dock_id: str
     title: str
@@ -83,6 +96,11 @@ class DockSpec:
     default_visible: bool = True
     default_floating: bool = False
     tabify_with: Optional[str] = None
+    sanitize: bool = False
+    min_width: Optional[int] = None
+    min_height: Optional[int] = None
+    initial_width: Optional[int] = None
+    initial_height: Optional[int] = None
 
     def __post_init__(self) -> None:
         if not self.dock_id:
@@ -250,6 +268,106 @@ def mount_dock_spec(
     dock.setFloating(spec.default_floating)
     dock.setVisible(spec.default_visible)
     return dock
+
+
+def sanitize_dock_placement(
+    window: Any,
+    dock: Any,
+    *,
+    min_width: Optional[int] = None,
+    min_height: Optional[int] = None,
+    initial_width: Optional[int] = None,
+    initial_height: Optional[int] = None,
+) -> None:
+    """Idempotent per-launch heal for a *degenerate* dock placement.
+
+    Run on every launch for opt-in navigation docks (``DockSpec.sanitize``)
+    so a corrupt persisted layout can never trap them. The design is
+    deliberately conservative — it heals only genuinely-degenerate
+    states and leaves every healthy user choice (Left/Right area,
+    persisted size, tabification) untouched, so this composes with the
+    Plan-08 ``saveState`` / ``restoreState`` persistence rather than
+    overriding it.
+
+    Two independent mechanisms:
+
+    1. **Sticky size floors.** ``setMinimumWidth`` / ``setMinimumHeight``
+       are *properties* Qt enforces at layout time (including after the
+       window is shown — these run before ``show()``). The **height**
+       floor is the load-bearing fix for the recurring bug: the dock
+       was collapsing to a title-bar-height sliver on the window's upper
+       edge, which a width-only floor never caught. ``setMinimumHeight``
+       reclaims the crushed space from the *sibling* dock without
+       tearing this dock out of its split — verified headless.
+
+    2. **Re-dock on true area-degeneracy only.** If the dock came back
+       *floating* or pinned into the *Top/Bottom* area (where a vertical
+       tree is useless), pull it back into the Left area and apply the
+       initial extents. We intentionally do **not** key off
+       ``dock.width()`` / ``dock.height()`` here: before ``show()`` those
+       read 0, which would re-dock everything every launch and tear
+       splits apart. Size-crush is the floors' job (mechanism 1); this
+       branch is purely about a lost/nonsensical area.
+
+    The one deliberate policy call: a dock the user *floated* that then
+    loses its area on restore is snapped back to Left — that state is
+    indistinguishable from the historical floating corruption, and a
+    navigation dock floating-by-default isn't worth preserving. Left /
+    Right docking and tabification ARE preserved.
+
+    Parameters
+    ----------
+    window
+        The host ``QMainWindow``.
+    dock
+        The ``QDockWidget`` to heal (already created + added).
+    min_width, min_height
+        Sticky size floors. ``None`` skips that axis.
+    initial_width, initial_height
+        Extents applied via ``resizeDocks`` only when the dock had to be
+        re-docked. ``None`` skips that axis.
+    """
+    from qtpy import QtCore, QtWidgets
+
+    Q = QtCore.Qt
+    # Re-assert the standard feature set so no stale state can strip the
+    # drag handles (the "can't move it" half of the bug).
+    try:
+        dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetClosable
+            | QtWidgets.QDockWidget.DockWidgetMovable
+            | QtWidgets.QDockWidget.DockWidgetFloatable
+        )
+    except Exception:
+        pass
+
+    # Mechanism 1 — sticky floors (heal size-crush, incl. the upper-edge
+    # height sliver) without disturbing area or split.
+    if min_width is not None:
+        dock.setMinimumWidth(min_width)
+    if min_height is not None:
+        dock.setMinimumHeight(min_height)
+
+    # Mechanism 2 — re-dock only on a lost / nonsensical area.
+    area = window.dockWidgetArea(dock)
+    area_degenerate = (
+        dock.isFloating()
+        or area == Q.TopDockWidgetArea
+        or area == Q.BottomDockWidgetArea
+    )
+    if area_degenerate:
+        dock.setFloating(False)
+        window.addDockWidget(Q.LeftDockWidgetArea, dock)
+        if initial_width is not None:
+            try:
+                window.resizeDocks([dock], [initial_width], Q.Horizontal)
+            except Exception:
+                pass
+        if initial_height is not None:
+            try:
+                window.resizeDocks([dock], [initial_height], Q.Vertical)
+            except Exception:
+                pass
 
 
 def build_view_menu(

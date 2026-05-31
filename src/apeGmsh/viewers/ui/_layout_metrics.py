@@ -43,6 +43,13 @@ class LayoutMetrics:
     # Outline (left) dock — separate min and initial so users can shrink.
     outline_min_width: int = 180
     outline_initial_width: int = 260
+    # Height floor + initial for the outline / nav docks. The min HEIGHT
+    # is load-bearing: the recurring "stuck on the upper edge" bug was a
+    # vertical collapse to a title-bar sliver that a width-only floor
+    # never caught. ``setMinimumHeight`` reclaims the crushed space from
+    # the sibling dock without tearing it out of its split.
+    outline_min_height: int = 120
+    outline_initial_height: int = 400
 
     # Right-side docks (Plots, Details, Session).
     right_min_width: int = 240

@@ -43,6 +43,7 @@ def _make_stub(qapp, *, window_key=None):
     stub._default_layout_state = None
     stub._default_layout_geometry = None
     stub._extension_docks = {}
+    stub._extension_specs = []
     stub._tabs_dock = None
     stub._console_dock = None
     # ``_LAYOUT_SCHEMA_VERSION`` is read on save / restore.
@@ -53,7 +54,8 @@ def _make_stub(qapp, *, window_key=None):
 
     for name in (
         "_layout_settings", "_save_layout", "_restore_layout",
-        "reset_layout",
+        "reset_layout", "set_extension_dock_widget",
+        "_sanitize_one", "_sanitize_extension_docks",
     ):
         method = getattr(ViewerWindow, name)
         setattr(stub, name, method.__get__(stub))
@@ -221,3 +223,95 @@ def test_reset_layout_noop_when_no_default_captured(qapp):
     stub = _make_stub(qapp, window_key="TestViewerNoDefault")
     # _default_layout_state stays None — reset_layout must not raise.
     stub.reset_layout()
+
+
+# =====================================================================
+# Construction-time nav docks: content swap + opt-in sanitize
+# (the permanent fix for the recurring "stuck Outline" bug)
+# =====================================================================
+
+
+def _register_extension_dock(stub, dock_id, *, area, spec=None):
+    """Mount a bare QDockWidget on the stub the way the real
+    ViewerWindow extension-dock path would, recording its spec."""
+    from qtpy import QtCore, QtWidgets
+    dock = QtWidgets.QDockWidget(dock_id, stub._window)
+    dock.setObjectName(dock_id)
+    dock.setWidget(QtWidgets.QWidget(stub._window))  # placeholder
+    area_map = {
+        "left": QtCore.Qt.LeftDockWidgetArea,
+        "right": QtCore.Qt.RightDockWidgetArea,
+        "top": QtCore.Qt.TopDockWidgetArea,
+        "bottom": QtCore.Qt.BottomDockWidgetArea,
+    }
+    stub._window.addDockWidget(area_map[area], dock)
+    stub._extension_docks[dock_id] = dock
+    if spec is not None:
+        stub._extension_specs.append(spec)
+    return dock
+
+
+def test_set_extension_dock_widget_swaps_and_keeps_area(qapp):
+    from qtpy import QtCore, QtWidgets
+    stub = _make_stub(qapp, window_key="TestViewerSwap")
+    dock = _register_extension_dock(stub, "dock_mesh_outline", area="left")
+    before = stub._window.dockWidgetArea(dock)
+    placeholder = dock.widget()
+
+    real = QtWidgets.QLabel("real outline tree", stub._window)
+    stub.set_extension_dock_widget("dock_mesh_outline", real)
+
+    assert dock.widget() is real
+    assert dock.widget() is not placeholder
+    # setWidget must not move the dock.
+    assert stub._window.dockWidgetArea(dock) == before == QtCore.Qt.LeftDockWidgetArea
+
+
+def test_set_extension_dock_widget_unknown_id_raises(qapp):
+    stub = _make_stub(qapp, window_key="TestViewerSwapKey")
+    from qtpy import QtWidgets
+    with pytest.raises(KeyError):
+        stub.set_extension_dock_widget(
+            "nope", QtWidgets.QWidget(stub._window),
+        )
+
+
+def test_sanitize_extension_docks_only_touches_optin(qapp):
+    """The per-launch heal moves a degenerate sanitize=True dock back to
+    Left, and leaves a non-opt-in dock (sanitize=False) exactly where it
+    is — so right-side tool docks keep their own placement + size policy."""
+    from qtpy import QtCore
+    from apeGmsh.viewers.ui._dock_registry import DockSpec
+
+    stub = _make_stub(qapp, window_key="TestViewerSanitize")
+
+    nav_spec = DockSpec(
+        dock_id="dock_mesh_outline", title="Outline",
+        factory=lambda p: None, default_area="left",
+        sanitize=True, min_width=180, initial_width=260,
+        min_height=120, initial_height=400,
+    )
+    tool_spec = DockSpec(
+        dock_id="dock_tool", title="Tool",
+        factory=lambda p: None, default_area="right",
+        sanitize=False,
+    )
+    # Nav dock comes back degenerate (Top); tool dock is healthy Right.
+    nav = _register_extension_dock(stub, "dock_mesh_outline", area="top", spec=nav_spec)
+    tool = _register_extension_dock(stub, "dock_tool", area="right", spec=tool_spec)
+
+    stub._sanitize_extension_docks()
+
+    assert stub._window.dockWidgetArea(nav) == QtCore.Qt.LeftDockWidgetArea
+    assert nav.isFloating() is False
+    assert nav.minimumWidth() == 180 and nav.minimumHeight() == 120
+    # Non-opt-in tool dock untouched: still Right, no imposed floors.
+    assert stub._window.dockWidgetArea(tool) == QtCore.Qt.RightDockWidgetArea
+    assert tool.minimumWidth() != 180  # outline floor NOT applied
+
+
+def test_schema_version_is_current_and_bumped_past_v4(qapp):
+    """v5 is the root-fix schema; v4 (late-add era) blobs are discarded
+    once on the next launch."""
+    from apeGmsh.viewers.ui.viewer_window import ViewerWindow
+    assert ViewerWindow._LAYOUT_SCHEMA_VERSION >= 5

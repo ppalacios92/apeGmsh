@@ -230,10 +230,50 @@ class ModelViewer:
         # Create window FIRST so QApplication exists for Qt widgets.
         # ``window_key`` opts into layout persistence under
         # ``QSettings("apeGmsh", "ModelViewer")`` (plan 08 follow-up).
+        # The left-column nav docks (Outline + Selection) are registered
+        # HERE as construction-time placeholder extension docks so they
+        # are present at saveState / restoreState time — the same path
+        # the built-in docks use, which is why they never get stuck. The
+        # real trees (which need scene / selection state built later) are
+        # swapped in via ``win.set_extension_dock_widget`` once ready.
+        # ``sanitize=True`` opts them into the per-launch heal.
+        from qtpy import QtWidgets as _QtW_nav
+        from .ui._dock_registry import DockSpec as _NavDockSpec
+        from .ui._layout_metrics import LAYOUT as _NAV_LAYOUT
+        _nav_floors = dict(
+            sanitize=True,
+            min_width=_NAV_LAYOUT.outline_min_width,
+            initial_width=_NAV_LAYOUT.outline_initial_width,
+            min_height=_NAV_LAYOUT.outline_min_height,
+            initial_height=_NAV_LAYOUT.outline_initial_height,
+        )
         win = ViewerWindow(
             title=title or default_title,
             on_close=_on_close,
             window_key="ModelViewer",
+            extension_docks=[
+                _NavDockSpec(
+                    dock_id="dock_model_outline", title="Outline",
+                    factory=lambda p: _QtW_nav.QWidget(p),
+                    default_area="left", **_nav_floors,
+                ),
+                _NavDockSpec(
+                    dock_id="dock_model_selection", title="Selection",
+                    factory=lambda p: _QtW_nav.QWidget(p),
+                    default_area="left", **_nav_floors,
+                ),
+            ],
+        )
+        # Stack Selection under the Outline in the left column. Done here
+        # (docks already exist from the constructor) so the default
+        # arrangement is set; restoreState re-applies the user's saved
+        # layout on top, and the per-launch sanitize heals any degenerate
+        # restored share.
+        from qtpy import QtCore as _QtC_split
+        win.window.splitDockWidget(
+            win.extension_dock("dock_model_outline"),
+            win.extension_dock("dock_model_selection"),
+            _QtC_split.Qt.Vertical,
         )
 
         # ── Plan 04 step 4 — ActiveObjects coordinator ──────────────
@@ -936,23 +976,12 @@ class ModelViewer:
             on_delete_group=_on_delete_group,
             on_row_focused=_on_outline_focus,
         )
-        outline_dock = win.add_extension_dock(DockSpec(
-            dock_id="dock_model_outline",
-            title="Outline",
-            factory=lambda _p: outline.widget,
-            default_area="left",
-        ))
-        sel_dock = win.add_extension_dock(DockSpec(
-            dock_id="dock_model_selection",
-            title="Selection",
-            factory=lambda _p: sel_tree.widget,
-            default_area="left",
-        ))
-        # Stack Selection under the Outline in the left column.
-        from qtpy import QtCore as _QtC_split
-        win.window.splitDockWidget(
-            outline_dock, sel_dock, _QtC_split.Qt.Vertical,
-        )
+        # Swap the real trees into the placeholder nav docks registered
+        # at construction (see the ViewerWindow call above). The docks +
+        # their Outline-over-Selection split + persistence + per-launch
+        # heal are already wired; this installs the content.
+        win.set_extension_dock_widget("dock_model_outline", outline.widget)
+        win.set_extension_dock_widget("dock_model_selection", sel_tree.widget)
 
         # ── Info menu — model diagnostics as a standalone window ────
         # Replaces the old "Info" dock tab. Lazily builds one

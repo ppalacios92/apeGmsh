@@ -247,9 +247,31 @@ class MeshViewer:
         # ── Window (creates QApplication) ───────────────────────────
         # ``window_key`` opts into layout persistence under
         # ``QSettings("apeGmsh", "MeshViewer")`` (plan 08 follow-up).
+        # The Outline nav dock is registered HERE as a construction-time
+        # extension dock with a cheap placeholder widget, so it is
+        # present at saveState / restoreState time and participates in
+        # layout persistence exactly like the built-in docks (which have
+        # never gotten stuck). The real MeshOutlineTree — which needs
+        # scene / selection state that doesn't exist yet — is swapped in
+        # later via ``win.set_extension_dock_widget``. ``sanitize=True``
+        # opts it into the per-launch degenerate-placement heal.
+        from qtpy import QtWidgets as _QtW_outline
+        from .ui._dock_registry import DockSpec
+        from .ui._layout_metrics import LAYOUT
         default_title = f"MeshViewer — {self._parent.name}"
         win = ViewerWindow(
             title=title or default_title, window_key="MeshViewer",
+            extension_docks=[DockSpec(
+                dock_id="dock_mesh_outline",
+                title="Outline",
+                factory=lambda p: _QtW_outline.QWidget(p),
+                default_area="left",
+                sanitize=True,
+                min_width=LAYOUT.outline_min_width,
+                initial_width=LAYOUT.outline_initial_width,
+                min_height=LAYOUT.outline_min_height,
+                initial_height=LAYOUT.outline_initial_height,
+            )],
         )
         self._win = win
 
@@ -477,7 +499,6 @@ class MeshViewer:
         # so the overlay updates the same way regardless of which
         # surface drove it.
         from .ui._mesh_outline_tree import MeshOutlineTree
-        from .ui._dock_registry import DockSpec
         parts_reg = getattr(self._parent, 'parts', None)
         loads_comp = getattr(self._parent, 'loads', None)
         mass_comp = getattr(self._parent, 'masses', None)
@@ -528,61 +549,13 @@ class MeshViewer:
             # or carries no partition labelling.
             view=self._view,
         )
-        outline_dock = win.add_extension_dock(DockSpec(
-            dock_id="dock_mesh_outline",
-            title="Outline",
-            factory=lambda _p: self._outline_tree.widget,
-            default_area="left",
-        ))
-        # The outline dock is added here, *after* ViewerWindow.__init__
-        # already ran _restore_layout(). A QDockWidget created after
-        # QMainWindow.restoreState() is not placed by the restored
-        # layout (documented Qt behaviour) and Qt leaves it floating —
-        # which a stale persisted MeshViewer layout then re-saves every
-        # launch. restoreDockWidget() is Qt's remedy for a late-added
-        # dock; if there is no valid saved placement (or it was saved
-        # floating from this bug) force it back into the left area.
-        # Mirrors the explicit post-add re-dock model.viewer performs
-        # via splitDockWidget().
-        from qtpy import QtCore as _QtC_dock
-        from .ui._layout_metrics import LAYOUT
-        # Enforce a sensible minimum width so the dock can never be
-        # clamped down to its title-bar (~30 px) by a stale persisted
-        # state. Even when ``restoreDockWidget`` re-applies a previously
-        # saved tiny width, Qt clamps up to ``minimumWidth`` on layout.
-        # Users can still freely resize the dock above this floor.
-        outline_dock.setMinimumWidth(LAYOUT.outline_min_width)
-        # Make sure the user can always close + redock + drag the
-        # outline panel.  A previous bug had a corrupt persisted state
-        # that left the dock unmovable in the upper-right corner; force
-        # the standard feature set so a future stale state can't trap
-        # it again.
-        try:
-            from qtpy.QtWidgets import QDockWidget as _QDW
-            outline_dock.setFeatures(
-                _QDW.DockWidgetClosable
-                | _QDW.DockWidgetMovable
-                | _QDW.DockWidgetFloatable
-            )
-        except Exception:
-            pass
-        restored = win.window.restoreDockWidget(outline_dock)
-        if outline_dock.isFloating():
-            outline_dock.setFloating(False)
-            win.window.addDockWidget(
-                _QtC_dock.Qt.LeftDockWidgetArea, outline_dock,
-            )
-        if not restored:
-            # No persisted placement — give the dock a sensible initial
-            # width (mirrors ``ResultsWindow``'s built-in left dock).
-            try:
-                win.window.resizeDocks(
-                    [outline_dock],
-                    [LAYOUT.outline_initial_width],
-                    _QtC_dock.Qt.Horizontal,
-                )
-            except Exception:
-                pass
+        # Swap the real outline tree into the placeholder dock that was
+        # registered at construction (see the ViewerWindow call above).
+        # The dock already participates in layout persistence + the
+        # per-launch sanitize heal; this just installs its content.
+        win.set_extension_dock_widget(
+            "dock_mesh_outline", self._outline_tree.widget,
+        )
 
         # ── Clipping tab ────────────────────────────────────────────
         from .core.clipping_controller import ClippingController

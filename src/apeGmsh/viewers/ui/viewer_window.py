@@ -152,7 +152,15 @@ class ViewerWindow:
     # so the healthy default layout (this time with explicit min /
     # initial widths and a guaranteed LeftDockWidgetArea placement on
     # the mesh.viewer side) is captured and re-saved.
-    _LAYOUT_SCHEMA_VERSION = 4
+    # v5 (2026-05-31): root fix. The Outline / Selection nav docks are
+    # now CONSTRUCTION-TIME extension docks (present at saveState /
+    # restoreState time, like the built-in docks that never broke),
+    # restoreDockWidget is gone entirely, and an idempotent per-launch
+    # ``sanitize_dock_placement`` heals any degenerate restored state
+    # (floating / Top-Bottom / size-crushed). Discard v4 blobs once
+    # (they lack the nav docks present-at-restore); the sanitizer makes
+    # this self-healing, so this is the LAST bump this bug class needs.
+    _LAYOUT_SCHEMA_VERSION = 5
 
     def __init__(
         self,
@@ -514,6 +522,14 @@ class ViewerWindow:
                 self._default_layout_geometry = None
             self._restore_layout()
 
+        # ── Per-launch degenerate-placement heal (opt-in nav docks) ──
+        # Runs AFTER _restore_layout on EVERY launch — the durable
+        # self-heal that replaces the old one-shot schema-bump resets.
+        # Only docks whose DockSpec set ``sanitize=True`` are touched;
+        # right-side tool docks keep their own size policy. The height
+        # floor here is what kills the "stuck upper-edge sliver" class.
+        self._sanitize_extension_docks()
+
         # ── Status bar ──────────────────────────────────────────────
         self._statusbar = self._window.statusBar()
 
@@ -627,7 +643,55 @@ class ViewerWindow:
             self._view_menu_reset_separator,
             dock,
         )
+        # A runtime-added nav dock (sanitize=True) is healed immediately
+        # so it can't appear degenerate even before the next launch's
+        # ``_sanitize_extension_docks`` pass.
+        if spec.sanitize:
+            self._sanitize_one(spec, dock)
         return dock
+
+    def set_extension_dock_widget(self, dock_id: str, widget: Any) -> None:
+        """Swap the content widget of an already-mounted extension dock.
+
+        The contract that makes the Outline / Selection nav docks
+        present-at-restore: they are registered at construction with a
+        cheap placeholder widget (so they participate in
+        ``saveState`` / ``restoreState`` like the built-in docks), then
+        the real tree widget — which needs scene / selection state that
+        doesn't exist at ``ViewerWindow`` construction — is swapped in
+        here once built. ``setWidget`` does not move the dock, so the
+        restored placement is preserved (verified).
+
+        Raises ``KeyError`` if no extension is registered under
+        ``dock_id`` — a swap against an unknown id is a wiring bug, not
+        a silent no-op.
+        """
+        self._extension_docks[dock_id].setWidget(widget)
+
+    def _sanitize_one(self, spec: DockSpec, dock: Any) -> None:
+        """Apply :func:`sanitize_dock_placement` to one dock from its spec."""
+        from ._dock_registry import sanitize_dock_placement
+        sanitize_dock_placement(
+            self._window,
+            dock,
+            min_width=spec.min_width,
+            min_height=spec.min_height,
+            initial_width=spec.initial_width,
+            initial_height=spec.initial_height,
+        )
+
+    def _sanitize_extension_docks(self) -> None:
+        """Heal every opt-in (``sanitize=True``) extension dock once.
+
+        Called after ``_restore_layout`` on each launch. Non-opt-in
+        docks (right-side tool panels) are left untouched.
+        """
+        for spec in self._extension_specs:
+            if not spec.sanitize:
+                continue
+            dock = self._extension_docks.get(spec.dock_id)
+            if dock is not None:
+                self._sanitize_one(spec, dock)
 
     def _mount_extension_dock_inner(self, spec: DockSpec) -> Any:
         """Build a ``QDockWidget`` from ``spec`` and dock it on the window.
