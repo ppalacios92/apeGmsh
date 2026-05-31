@@ -70,12 +70,12 @@ def test_no_names_writes_no_group(tmp_path: Path) -> None:
         assert "names" not in f["opensees"]
 
 
-def test_schema_stamped_2_13_0(tmp_path: Path) -> None:
+def test_schema_stamped_current(tmp_path: Path) -> None:
     p = tmp_path / "model.h5"
     _build(named=True).h5(str(p))
     with h5py.File(str(p), "r") as f:
         assert f["meta"].attrs["opensees_schema_version"] == SCHEMA_VERSION
-        assert SCHEMA_VERSION == "2.13.0"
+        assert SCHEMA_VERSION == "2.14.0"
 
 
 def test_opensees_model_resolves_names(tmp_path: Path) -> None:

@@ -260,7 +260,17 @@ __all__ = ["H5Emitter", "SCHEMA_VERSION"]
 #:     name-free files stay byte-identical to 2.12.x.  Additive — old
 #:     2.12.x readers ignore the group.  Per ADR 0023 two-version
 #:     reader window, both 2.12.x and 2.13.x files are accepted.
-SCHEMA_VERSION: str = "2.13.0"
+#:   * 2.14.0 — ADR 0048/0049 (PR-2): new optional ``/opensees/nodes_ndf``
+#:     group (``tags`` int64 + ``ndf`` int8, aligned to the broker node
+#:     order) persisting the *effective* per-node ndf the deck emits
+#:     (``fem.nodes.ndf_for`` override else the ``ops.model`` envelope).
+#:     The one bridge-owned ndf store that the read-side and ADR 0049
+#:     ``ops.ndf`` will write/read through; folds into ``model_hash`` (the
+#:     opensees zone walks every dataset), never ``fem_hash``.  Written for
+#:     broker-backed files only; absent on bridge-only stubs.  Additive —
+#:     old 2.13.x readers ignore it.  Per ADR 0023 two-version reader
+#:     window, both 2.13.x and 2.14.x files are accepted.
+SCHEMA_VERSION: str = "2.14.0"
 
 
 # Map known time-series type tokens to "is path-bearing": for a Path

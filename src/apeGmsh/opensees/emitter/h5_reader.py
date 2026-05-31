@@ -445,6 +445,25 @@ class H5Model:
             out["args_str"] = sub["args_str"][:]
         return out
 
+    def nodes_ndf(self) -> "dict[int, int] | None":
+        """Return ``{node_tag: effective_ndf}`` from ``/opensees/nodes_ndf``
+        (schema 2.14.0, ADR 0048/0049 PR-2), or ``None`` when the archive
+        carries no such group.
+
+        The *effective* ndf is what the deck emitted per node (the
+        ``fem.nodes.ndf_for`` override else the ``ops.model`` envelope) — the
+        one bridge-owned per-node ndf store. ``None`` (not an empty dict) marks
+        a pre-2.13.0 or bridge-only archive, so callers fall back to the
+        neutral-zone path. Uses ``name in group`` (H5Lexists) per the
+        optional-child hazard, never ``Group.get``.
+        """
+        if "opensees" not in self._f or "nodes_ndf" not in self._f["opensees"]:
+            return None
+        grp = self._f["opensees/nodes_ndf"]
+        tags = grp["tags"][:]
+        ndf = grp["ndf"][:]
+        return {int(t): int(n) for t, n in zip(tags, ndf)}
+
     def element_local_axes_vecxz(self) -> dict[int, Any]:
         """Return ``{fem_element_id: vecxz}`` for every beam-column element.
 
