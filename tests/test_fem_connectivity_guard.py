@@ -77,7 +77,10 @@ def test_global_3d_recombine_corruption_fails_loud(g):
     g.mesh.sizing.set_global_size(0.5)
     g.mesh.structured.set_recombine(2, dim=3)   # flag the wall volume
     g.mesh.generation.generate(3)
-    g.mesh.structured.recombine()               # global 3-D recombine: corrupts
+    # Global 3-D recombine corrupts the volume mesh; recombine() warns
+    # at the source that this is a 2-D op run with 3-D elements present.
+    with pytest.warns(UserWarning, match="(?i)recombine.*3-D|3-D.*recombine"):
+        g.mesh.structured.recombine()
 
     # Sanity: the raw Gmsh mesh really is corrupt (node-0 tets present).
     _, _, enodes_l = gmsh.model.mesh.getElements(dim=3, tag=-1)
@@ -87,9 +90,9 @@ def test_global_3d_recombine_corruption_fails_loud(g):
     with pytest.raises(ValueError) as exc:
         g.mesh.queries.get_fem_data(dim=3)
 
-    msg = str(exc.value)
-    assert "node tag" in msg.lower()
-    assert "recombine" in msg.lower()
+    msg = str(exc.value).lower()
+    assert "node tag 0" in msg
+    assert "recombine" in msg
 
 
 def test_guard_fires_in_renumber_before_extraction(g):
@@ -100,7 +103,8 @@ def test_guard_fires_in_renumber_before_extraction(g):
 
     g.mesh.sizing.set_global_size(0.5)
     g.mesh.generation.generate(3)
-    g.mesh.structured.recombine()
+    with pytest.warns(UserWarning):           # recombine() warns on 3-D mesh
+        g.mesh.structured.recombine()
 
     with pytest.raises(ValueError, match="(?i)recombine"):
         g.mesh.partitioning.renumber(dim=3, method="simple", base=1)
