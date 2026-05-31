@@ -92,6 +92,19 @@ def _hash_nodes(h: "hashlib._Hash", fem: "FEMData") -> None:
             # digest.
             h.update(ndf_arr[sort_idx].tobytes())
 
+    # Per-node provenance (decoupled nodes — ADR 0049).  Same
+    # empty-channel gate as ndf: skip the fold when ``_provenance is
+    # None`` (no decoupled nodes — every import path + the common case)
+    # OR all-mesh (all-zero), so a model with no decoupled nodes hashes
+    # identically to a pre-2.11.0 broker.  Sorted by the same node-id
+    # order so a row permutation produces the same digest.
+    prov = getattr(fem.nodes, "_provenance", None)
+    if prov is not None:
+        prov_arr = np.asarray(prov, dtype=np.int8)
+        if np.any(prov_arr != 0):
+            h.update(b"PROVENANCE|")
+            h.update(prov_arr[sort_idx].tobytes())
+
 
 # ---------------------------------------------------------------------
 # Section: elements

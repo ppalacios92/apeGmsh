@@ -93,6 +93,11 @@ PKGS = {"core", "mesh", "viz", "results", "_kernel", "fem"}
 BASELINE = {
     ("_kernel", "fem", "_kernel/resolvers/_mass_resolver.py"),
     ("core", "_kernel", "core/ConstraintsComposite.py"),
+    # ADR 0049 PR-4: DecoupledNodesComposite eagerly imports
+    # ``DecoupledNodeDef`` from ``_kernel.defs.decoupled`` — the same
+    # downward leaf edge already established for the loads / masses /
+    # node_ndf composites.
+    ("core", "_kernel", "core/DecoupledNodesComposite.py"),
     # ADR 0050 P2: g.displacements composite — the same downward
     # core→_kernel leaf edge as its loads / masses / constraints
     # siblings (eager import of defs/records/resolvers at module load).

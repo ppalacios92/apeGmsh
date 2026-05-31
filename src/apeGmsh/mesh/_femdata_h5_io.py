@@ -148,7 +148,7 @@ __all__ = [
 #: Broker-only files (no `/opensees/...`) still stamp the current
 #: minor — the field is additive and old readers tolerate its
 #: absence.
-NEUTRAL_SCHEMA_VERSION: str = "2.10.0"
+NEUTRAL_SCHEMA_VERSION: str = "2.11.0"
 
 #: Inner schema-version stamp written on the ``/composed_from/`` group
 #: when ``fem.composed_from`` is non-empty.  Independent of the
@@ -398,6 +398,17 @@ def _write_nodes(fem: "FEMData", f: Any) -> None:
     if ndf is not None:
         nodes_grp.create_dataset(
             "ndf", data=np.asarray(ndf, dtype=np.int8),
+        )
+
+    # Per-node provenance (decoupled nodes — ADR 0049; neutral schema
+    # 2.11.0).  int8 (0=mesh, 1=decoupled).  Written only when the
+    # broker carries decoupled nodes (``_provenance is not None``); the
+    # common no-decoupled case omits the dataset so the file stays
+    # byte-identical to a pre-2.11.0 write.  2.10.x readers ignore it.
+    prov = getattr(fem.nodes, "_provenance", None)
+    if prov is not None:
+        nodes_grp.create_dataset(
+            "provenance", data=np.asarray(prov, dtype=np.int8),
         )
 
     # ADR 0038 — per-node ``module_label`` parallel dataset (neutral
@@ -1461,6 +1472,22 @@ def read_neutral_zone_from_group(
         else:
             node_ndf = None
 
+    # Per-node provenance (decoupled nodes — ADR 0049; neutral schema
+    # 2.11.0).  Absent in pre-2.11.0 files and in any 2.11.0+ file with
+    # no decoupled nodes — both decode to ``_provenance=None`` (the
+    # all-mesh case), which the hash gate treats identically.  Probe
+    # with ``in`` not ``Group.get`` per the h5py optional-child hazard.
+    node_provenance: "np.ndarray | None" = None
+    if "provenance" in nodes_grp:
+        node_provenance = np.asarray(
+            nodes_grp["provenance"][...], dtype=np.int8)
+        if node_provenance.shape != node_ids.shape:
+            raise MalformedH5Error(
+                f"{label}: /nodes/provenance shape "
+                f"{node_provenance.shape} does not match /nodes/ids "
+                f"shape {node_ids.shape}."
+            )
+
     # ADR 0038 — per-node module_label parallel dataset (2.9.0).  Only
     # carry it when at least one entry is non-empty (uncomposed case
     # keeps ``_module_label=None`` so the snapshot_id hash + repr
@@ -1598,6 +1625,7 @@ def read_neutral_zone_from_group(
         part_node_map=part_node_map or None,
         ndf=node_ndf,
         module_label=node_module_label,
+        provenance=node_provenance,
     )
     elements = ElementComposite(
         groups=element_groups,

@@ -181,6 +181,16 @@ class MeshInfo:
 # NodeComposite
 # =====================================================================
 
+#: Per-node provenance codes (ADR 0049).  Stored as ``int8`` aligned
+#: 1:1 with ``NodeComposite.ids``.  ``MESH`` is an ordinary Gmsh-vertex
+#: node; ``DECOUPLED`` is an auxiliary node declared via
+#: ``g.decouple_node(...)``.  The all-``MESH`` case is encoded as a
+#: ``None`` provenance array so it stays hash- and byte-identical to a
+#: model with no decoupled nodes.
+PROVENANCE_MESH: int = 0
+PROVENANCE_DECOUPLED: int = 1
+
+
 class NodeComposite:
     """Access and query nodes from the FEM mesh.
 
@@ -216,6 +226,7 @@ class NodeComposite:
         part_node_map: dict | None = None,
         ndf: ndarray | None = None,
         module_label: ndarray | None = None,
+        provenance: ndarray | None = None,
     ) -> None:
         self._ids    = _to_object(node_ids)
         self._coords = np.asarray(node_coords, dtype=np.float64)
@@ -275,6 +286,29 @@ class NodeComposite:
                 )
             self._module_label = mlbl
 
+        # Per-node ``provenance`` (decoupled nodes — ADR 0049) — int8
+        # array aligned 1:1 with ``self._ids``.  ``PROVENANCE_MESH`` (0)
+        # = an ordinary Gmsh-vertex node; ``PROVENANCE_DECOUPLED`` (1) =
+        # an auxiliary node declared via ``g.decouple_node(...)`` and
+        # appended by the FEM factory above every mesh tag (dedup-immune
+        # by construction).  ``None`` means the broker carries no
+        # decoupled nodes (the common case + every import path that has
+        # no notion of them); the all-mesh case is encoded as ``None``
+        # so the snapshot_id hash + H5 bytes stay identical to a model
+        # with no decoupled nodes at all (see ``_femdata_hash``).
+        self._provenance: ndarray | None
+        if provenance is None:
+            self._provenance = None
+        else:
+            prov = np.asarray(provenance, dtype=np.int8)
+            if prov.shape != self._ids.shape:
+                raise ValueError(
+                    f"NodeComposite: provenance array shape "
+                    f"{prov.shape} does not match node_ids shape "
+                    f"{self._ids.shape}."
+                )
+            self._provenance = prov
+
     # ── Public properties ───────────────────────────────────
 
     @property
@@ -298,6 +332,28 @@ class NodeComposite:
         of the underlying array; consumers must not mutate it.
         """
         return self._module_label
+
+    @property
+    def provenance(self) -> ndarray | None:
+        """Per-node provenance aligned 1:1 with :attr:`ids` (ADR 0049).
+
+        ``int8`` array where ``PROVENANCE_MESH`` (0) marks an ordinary
+        Gmsh-vertex node and ``PROVENANCE_DECOUPLED`` (1) marks an
+        auxiliary node declared via ``g.decouple_node(...)``.  ``None``
+        when the broker carries no decoupled nodes (the common case).
+        Read-only view; consumers must not mutate it.
+        """
+        return self._provenance
+
+    @property
+    def decoupled_ids(self) -> ndarray:
+        """Node IDs whose provenance is ``decoupled`` (ADR 0049).
+
+        Empty ``ndarray`` when the broker carries no decoupled nodes.
+        """
+        if self._provenance is None:
+            return np.array([], dtype=self._ids.dtype)
+        return self._ids[self._provenance == PROVENANCE_DECOUPLED]
 
     @property
     def partitions(self) -> list[int]:

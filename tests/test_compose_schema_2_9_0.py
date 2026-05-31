@@ -96,15 +96,15 @@ def _make_simple_fem(
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_2_10_0(tmp_path: Path) -> None:
-    """Fresh save stamps the current neutral schema version (B2 bump 2.9 → 2.10)."""
+def test_schema_version_is_2_11_0(tmp_path: Path) -> None:
+    """Fresh save stamps the current neutral schema version (ADR 0049 PR-4 bump 2.10 → 2.11)."""
     fem = _make_simple_fem()
     out = tmp_path / "model.h5"
     fem.to_h5(str(out))
     with h5py.File(out, "r") as f:
-        assert NEUTRAL_SCHEMA_VERSION == "2.10.0"
-        assert f["meta"].attrs["neutral_schema_version"] == "2.10.0"
-        assert f["meta"].attrs["schema_version"] == "2.10.0"
+        assert NEUTRAL_SCHEMA_VERSION == "2.11.0"
+        assert f["meta"].attrs["neutral_schema_version"] == "2.11.0"
+        assert f["meta"].attrs["schema_version"] == "2.11.0"
 
 
 def test_tag_span_max_written_on_save(tmp_path: Path) -> None:

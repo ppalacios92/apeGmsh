@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .core.LoadsComposite import LoadsComposite
     from .core.DisplacementsComposite import DisplacementsComposite
     from .core.MassesComposite import MassesComposite
+    from .core.DecoupledNodesComposite import DecoupledNodesComposite
     from .core.NodeNDFComposite import NodeNDFComposite
     from .core._parts_registry import PartsRegistry
     from .sections._builder import SectionsBuilder
@@ -48,6 +49,7 @@ class apeGmsh(_SessionBase):
         ("loads",           ".core.LoadsComposite",        "LoadsComposite",        False),
         ("displacements",   ".core.DisplacementsComposite", "DisplacementsComposite", False),
         ("masses",          ".core.MassesComposite",       "MassesComposite",       False),
+        ("decoupled_nodes", ".core.DecoupledNodesComposite", "DecoupledNodesComposite", False),
         ("node_ndf",        ".core.NodeNDFComposite",      "NodeNDFComposite",      False),
         ("mesh",            ".mesh.Mesh",                  "Mesh",                  False),
         ("loader",          ".mesh.MshLoader",             "MshLoader",             False),
@@ -74,6 +76,7 @@ class apeGmsh(_SessionBase):
     loads: LoadsComposite
     displacements: DisplacementsComposite
     masses: MassesComposite
+    decoupled_nodes: DecoupledNodesComposite
     node_ndf: NodeNDFComposite
     mesh: Mesh
     loader: MshLoader
@@ -246,6 +249,38 @@ class apeGmsh(_SessionBase):
         successful extraction populates :attr:`_fem`.
         """
         self._fem_counter_at_build = self._fem_counter
+
+    # ------------------------------------------------------------------
+    # Decoupled nodes (ADR 0049)
+    # ------------------------------------------------------------------
+
+    def decouple_node(
+        self,
+        *,
+        coords: "tuple[float, float, float] | None" = None,
+        point: "str | None" = None,
+        label: "str | None" = None,
+    ) -> Any:
+        """Declare a decoupled node — an auxiliary node that is **not**
+        a Gmsh mesh vertex (spring/dashpot ground, ``rigidDiaphragm``
+        master, control node, load/mass anchor).
+
+        Exactly one of ``coords=(x, y, z)`` or ``point="label"`` locates
+        it; ``point=`` is snapshotted to coordinates at mesh-extraction
+        time.  ``label`` is an optional friendly name.
+
+        The node is appended to ``fem.nodes`` at extraction with a
+        deterministic tag above every mesh node (dedup-immune by
+        construction) and ``provenance == "decoupled"``.  It carries
+        **no** ``ndf`` — DOF count is a bridge concern (``ops.ndf``).
+
+        Returns the :class:`~apeGmsh._kernel.defs.decoupled.DecoupledNodeDef`
+        handle; its ``tag`` is populated after
+        ``g.mesh.queries.get_fem_data(...)``.
+        """
+        return self.decoupled_nodes.add(
+            coords=coords, point=point, label=label,
+        )
 
     # ------------------------------------------------------------------
     # Persistence

@@ -7,5 +7,5 @@ is a one-file edit.  Per ADR 0023's two-version reader window,
 """
 OPENSEES_CURRENT     = "2.14.0"  # ADR 0048/0049 PR-2 (/opensees/nodes_ndf store)
 OPENSEES_PRIOR_MINOR = "2.13.0"  # bridge-side name-alias sidecar (/opensees/names)
-NEUTRAL_CURRENT      = "2.10.0"  # B2: physical_groups/labels split into node_side/element_side sub-trees; snapshot_id hash widened
-NEUTRAL_PRIOR_MINOR  = "2.9.0"   # ADR 0038 / Phase 3A.1: composed_from + tag_span_max + module_label
+NEUTRAL_CURRENT      = "2.11.0"  # ADR 0049 PR-4: /nodes/provenance (decoupled nodes); snapshot_id hash folds provenance
+NEUTRAL_PRIOR_MINOR  = "2.10.0"  # B2: physical_groups/labels split into node_side/element_side sub-trees; snapshot_id hash widened

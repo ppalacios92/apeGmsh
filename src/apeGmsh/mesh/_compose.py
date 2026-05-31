@@ -611,6 +611,9 @@ class _RewrittenBundle:
     # ``{label}{sep}{inner}`` for rows that came from a prior compose.
     node_module_label_joined: "np.ndarray | None" = None
     element_module_label_joined: "dict[int, np.ndarray] | None" = None
+    # Per-node provenance (decoupled nodes — ADR 0049), aligned to
+    # ``node_ids``.  ``None`` when the source has no decoupled nodes.
+    node_provenance: "np.ndarray | None" = None
 
 
 # ── Helper: schema-version + tag-span reader ───────────────────────
@@ -1189,6 +1192,12 @@ def _rewrite_source_for_compose(
         if src_node_ndf is not None
         else None
     )
+    src_node_prov = getattr(source.nodes, "_provenance", None)
+    new_node_provenance = (
+        np.asarray(src_node_prov, dtype=np.int8)
+        if src_node_prov is not None
+        else None
+    )
 
     # 2. Elements — offset ids + connectivity per type.
     new_element_groups: dict = {}
@@ -1315,6 +1324,7 @@ def _rewrite_source_for_compose(
         node_ids=new_node_ids,
         node_coords=new_node_coords,
         node_ndf=new_node_ndf,
+        node_provenance=new_node_provenance,
         element_groups=new_element_groups,
         node_physical=new_node_physical,
         elem_physical=new_elem_physical,
@@ -2243,6 +2253,25 @@ def _merge_bundle_into_fem(
         )
         new_ndf = np.concatenate([host_part, bundle_part])
 
+    # ── 2b. Node provenance — decoupled nodes (ADR 0049).  Same
+    #      concatenate-when-either-side-declares pattern as ndf.
+    host_prov = getattr(fem.nodes, "_provenance", None)
+    bundle_prov = bundle.node_provenance
+    if host_prov is None and bundle_prov is None:
+        new_provenance: "np.ndarray | None" = None
+    else:
+        host_prov_part = (
+            np.asarray(host_prov, dtype=np.int8)
+            if host_prov is not None
+            else np.zeros(host_node_ids.shape, dtype=np.int8)
+        )
+        bundle_prov_part = (
+            np.asarray(bundle_prov, dtype=np.int8)
+            if bundle_prov is not None
+            else np.zeros(bundle_node_ids.shape, dtype=np.int8)
+        )
+        new_provenance = np.concatenate([host_prov_part, bundle_prov_part])
+
     # ── 3. Node module_label — host rows keep their label; bundle
     #      rows are stamped with the bundle's label.  Always allocate
     #      so the writer + ``ComposedModule.pgs()`` introspection
@@ -2372,6 +2401,7 @@ def _merge_bundle_into_fem(
         part_node_map=new_part_node_map or None,
         ndf=new_ndf,
         module_label=new_node_module_label,
+        provenance=new_provenance,
     )
     new_elements = ElementComposite(
         groups=new_element_groups,

@@ -416,7 +416,31 @@ def _from_gmsh(
      used_tags, physical, labels, partitions) = _extract_mesh_core(dim)
 
     node_ids = np.asarray(node_tags, dtype=int)
-    node_coords_all = node_coords
+    node_coords_all = np.asarray(node_coords, dtype=float)
+
+    # ── 1b. Inject decoupled nodes (ADR 0049) ─────────────────
+    # Auxiliary nodes declared via ``g.decouple_node(...)`` are NOT
+    # Gmsh vertices.  Append them to the node pool *here* — before
+    # constraint resolution — so the constraint resolver's phantom-tag
+    # base (``max(node_ids) + 1``) lands strictly above every decoupled
+    # tag, making the two synthetic ranges disjoint by construction.
+    # Their tags come from ``getMaxNodeTag() + i`` (rank-invariant, so
+    # MP-deterministic) and they fold into the snapshot_id via _ids +
+    # _coords for free.
+    decoupled_tags, decoupled_coords = _resolve_decoupled_nodes(session)
+    decoupled_set: set[int] = set(int(t) for t in decoupled_tags)
+    if decoupled_tags:
+        dt = np.asarray(decoupled_tags, dtype=int)
+        dc = np.asarray(decoupled_coords, dtype=float).reshape(-1, 3)
+        node_ids = np.concatenate([node_ids, dt])
+        node_coords_all = (
+            np.vstack([node_coords_all, dc])
+            if node_coords_all.size else dc
+        )
+        # Keep the raw orphan-filter pool in lockstep with the broker
+        # pool (orphan filtering rebuilds node_ids from node_tags).
+        node_tags = node_ids
+        node_coords = node_coords_all
 
     # ── 2. Resolve BCs ────────────────────────────────────────
     node_constraints: list = []
@@ -506,6 +530,9 @@ def _from_gmsh(
             node_constraints, surface_constraints,
             nodal_loads, sp_records, mass_records,
         )
+        # Decoupled nodes are intentional and never element-attached;
+        # protect them so orphan filtering can't drop them (ADR 0049).
+        protected.update(decoupled_set)
         node_ids, node_coords_all = _filter_orphans(
             node_tags, node_coords, used_tags, protected)
 
@@ -569,6 +596,13 @@ def _from_gmsh(
     # dimensional resolution contract (test_resolution_contract.py).
     node_ndf = _populate_node_ndf(node_ids, session, node_map=part_node_map)
 
+    # Per-node provenance (ADR 0049) — computed from the *final*
+    # node_ids (post orphan-filter, which may have reordered/dropped
+    # rows) by membership test, so it's robust to any reshuffle.
+    # ``None`` when there are no decoupled nodes keeps the snapshot_id
+    # + H5 bytes identical to a model without the feature.
+    node_provenance = _build_provenance(node_ids, decoupled_set)
+
     nodes = NodeComposite(
         node_ids=node_ids,
         node_coords=node_coords_all,
@@ -581,6 +615,7 @@ def _from_gmsh(
         partitions=partitions or None,
         part_node_map=part_node_map or None,
         ndf=node_ndf,
+        provenance=node_provenance,
     )
     elements = ElementComposite(
         groups=groups,
@@ -655,6 +690,85 @@ def _filter_orphans(
     node_ids = np.asarray(node_tags[keep], dtype=int)
     node_coords_filtered = node_coords[keep]
     return node_ids, node_coords_filtered
+
+
+# =====================================================================
+# Decoupled nodes (ADR 0049)
+# =====================================================================
+
+def _resolve_decoupled_nodes(session) -> tuple[list[int], list[tuple]]:
+    """Resolve the session's decoupled-node defs to (tags, coords).
+
+    Assigns each def a deterministic tag ``getMaxNodeTag() + i + 1``
+    (rank-invariant → MP-deterministic) and snapshots any ``point=``
+    label to its coordinates.  Writes the resolved tag back onto each
+    def so the handle returned by ``g.decouple_node(...)`` exposes it.
+
+    Returns ``([], [])`` when the session has no decoupled nodes.
+    """
+    if session is None:
+        return [], []
+    comp = getattr(session, "decoupled_nodes", None)
+    defs = getattr(comp, "node_defs", None) if comp is not None else None
+    if not defs:
+        return [], []
+
+    import gmsh
+    base = int(gmsh.model.mesh.getMaxNodeTag())
+
+    tags: list[int] = []
+    coords: list[tuple] = []
+    for i, defn in enumerate(defs):
+        xyz = defn.coords
+        if xyz is None:
+            xyz = _snapshot_point_coords(session, defn.point)
+        tag = base + i + 1
+        defn.tag = tag
+        tags.append(tag)
+        coords.append((float(xyz[0]), float(xyz[1]), float(xyz[2])))
+    return tags, coords
+
+
+def _snapshot_point_coords(session, point_label: str) -> tuple:
+    """Resolve a geometry point label to its (x, y, z) coordinates.
+
+    Snapshotted at mesh-extraction time (not tracked through later
+    transforms).  Fails loud if the label doesn't resolve to exactly
+    one dim-0 entity.
+    """
+    from apeGmsh.core._resolution import resolve_target
+    import gmsh
+
+    dts = resolve_target(
+        session, point_label, "auto",
+        expected_dim=0,
+        not_found_prefix="Decoupled-node point",
+        noun="decoupled node",
+    )
+    pts = [(int(d), int(t)) for d, t in dts if int(d) == 0]
+    if len(pts) != 1:
+        raise ValueError(
+            f"g.decouple_node(point={point_label!r}) must resolve to "
+            f"exactly one geometry point; resolved to {len(pts)} dim-0 "
+            f"entit{'y' if len(pts) == 1 else 'ies'} ({pts})."
+        )
+    return tuple(gmsh.model.getValue(0, pts[0][1], []))
+
+
+def _build_provenance(node_ids: np.ndarray, decoupled_set: set[int]):
+    """Build the int8 provenance array, or ``None`` if no decoupled nodes.
+
+    ``None`` (the no-decoupled-nodes case) keeps the snapshot_id hash
+    and the persisted H5 bytes identical to a model without the feature.
+    """
+    if not decoupled_set:
+        return None
+    from .FEMData import PROVENANCE_DECOUPLED, PROVENANCE_MESH
+    prov = np.where(
+        np.isin(np.asarray(node_ids, dtype=int), list(decoupled_set)),
+        np.int8(PROVENANCE_DECOUPLED), np.int8(PROVENANCE_MESH),
+    ).astype(np.int8)
+    return prov
 
 
 # =====================================================================

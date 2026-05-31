@@ -79,8 +79,9 @@ def test_schema_version_pin():
     and module_label parallel datasets at 2.9.0; B2 split
     /physical_groups/ + /labels/ into node_side/element_side sub-trees
     and widened snapshot_id to fold element-side PGs + labels at
-    2.10.0)."""
-    assert NEUTRAL_SCHEMA_VERSION == "2.10.0"
+    2.10.0; ADR 0049 PR-4 added /nodes/provenance + folded it into
+    snapshot_id at 2.11.0)."""
+    assert NEUTRAL_SCHEMA_VERSION == "2.11.0"
 
 
 # =====================================================================
