@@ -44,8 +44,7 @@ def test_browser_tab_renders_staged_target_group(qapp, gmsh_session):
     sel.pick((3, 2))
     # Mirror _on_new_group: stage current picks (SelectionTargets) and
     # register the group, WITHOUT flushing to Gmsh first.
-    sel._staged_groups["Foo"] = list(sel._picks)
-    sel._group_order.append("Foo")
+    sel.stage_group("Foo", sel.targets)
 
     # __init__ calls refresh() — this used to raise on the unpack.
     tab = BrowserTab(sel)

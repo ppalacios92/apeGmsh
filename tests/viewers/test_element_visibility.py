@@ -17,6 +17,9 @@ import pytest
 from apeGmsh.viewers.core.element_visibility import (
     ElementVisibility,
     HIDDENCELL,
+    LAYER_DIM,
+    LAYER_MANUAL,
+    apply_dim_filter,
 )
 
 
@@ -200,6 +203,163 @@ def test_show_all_fires_with_none_payload(small_grid):
     # Two events: hide(payload=[0]), show_all(payload=None)
     assert len(fires) == 2
     assert fires[-1][1] is None
+
+
+# ---------------------------------------------------------------------
+# Layered model — dim filter composes with manual hide (ADR 0045)
+# ---------------------------------------------------------------------
+
+def test_layers_union_into_hidden(small_grid):
+    """Manual hide + a dim layer OR together into the hidden set."""
+    ev = ElementVisibility(small_grid)
+    ev.hide([0, 1])                                   # manual layer
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [1, 2, 3]))  # dim layer
+    mask = ev.hidden_mask()
+    # Union of {0,1} and {1,2,3} = {0,1,2,3}.
+    assert set(np.nonzero(mask)[0].tolist()) == {0, 1, 2, 3}
+    assert ev.n_hidden() == 4
+
+
+def test_show_all_keeps_dim_layer(small_grid):
+    """`show_all` reveals only manual hides; the dim filter persists."""
+    ev = ElementVisibility(small_grid)
+    ev.hide([0, 1])
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [4, 5]))
+    ev.show_all()
+    # Manual hides gone, dim layer still hiding 4 and 5.
+    assert ev.is_hidden(0) is False
+    assert ev.is_hidden(1) is False
+    assert ev.is_hidden(4) is True
+    assert ev.is_hidden(5) is True
+    assert ev.n_hidden() == 2
+
+
+def test_manual_show_keeps_dim_layer(small_grid):
+    """A manual `show` doesn't un-hide a cell the dim filter hides."""
+    ev = ElementVisibility(small_grid)
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [3]))
+    ev.show([3])                       # manual show on a dim-hidden cell
+    assert ev.is_hidden(3) is True     # dim layer still hides it
+
+
+def test_clear_layer_removes_dim_hide(small_grid):
+    ev = ElementVisibility(small_grid)
+    ev.hide([0])
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [2, 3]))
+    ev.clear_layer(LAYER_DIM)
+    assert ev.is_hidden(0) is True     # manual layer preserved
+    assert ev.is_hidden(2) is False
+    assert ev.is_hidden(3) is False
+    assert ev.n_hidden() == 1
+
+
+def test_clear_absent_layer_is_noop(small_grid):
+    ev = ElementVisibility(small_grid)
+    ev.hide([0])
+    ev.clear_layer("never-set")        # no such layer
+    assert ev.n_hidden() == 1
+
+
+def test_set_layer_wrong_length_raises(small_grid):
+    ev = ElementVisibility(small_grid)
+    with pytest.raises(ValueError):
+        ev.set_layer(LAYER_DIM, np.zeros(small_grid.n_cells + 1, dtype=bool))
+
+
+def test_set_layer_replaces_not_accumulates(small_grid):
+    """A second set_layer on the same name replaces the prior mask."""
+    ev = ElementVisibility(small_grid)
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [0, 1]))
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [5]))
+    assert ev.is_hidden(0) is False
+    assert ev.is_hidden(5) is True
+    assert ev.n_hidden() == 1
+
+
+def test_layer_ops_mutate_in_place_no_rebuild(small_grid):
+    """set_layer / clear_layer must recompose in place (no rebind),
+    same invariant as hide/show — VTK's backing buffer stays put."""
+    ev = ElementVisibility(small_grid)
+    addr0 = small_grid.cell_data["vtkGhostType"].__array_interface__["data"][0]
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [1, 2]))
+    ev.hide([0])
+    ev.clear_layer(LAYER_DIM)
+    addr1 = small_grid.cell_data["vtkGhostType"].__array_interface__["data"][0]
+    assert addr1 == addr0
+
+
+def test_dim_layer_excluded_from_box_pick(small_grid):
+    """Cells hidden by the dim layer drop out of the box-pick mask, just
+    like manual hides (the box path reads the composite ghost array)."""
+    ev = ElementVisibility(small_grid)
+    ev.set_layer(LAYER_DIM, _mask(small_grid, [2, 3]))
+    ghosts = np.asarray(small_grid.cell_data["vtkGhostType"])
+    inside = np.ones(small_grid.n_cells, dtype=bool)
+    final = inside & ~(ghosts & 0x01).astype(bool)
+    cells = set(np.nonzero(final)[0].tolist())
+    assert 2 not in cells and 3 not in cells
+
+
+def _mask(grid, ids):
+    m = np.zeros(grid.n_cells, dtype=bool)
+    m[ids] = True
+    return m
+
+
+# ---------------------------------------------------------------------
+# apply_dim_filter — the results-viewer filter callback's pure core
+# ---------------------------------------------------------------------
+
+def _dim_grid():
+    """6-cell grid with a mixed cell_dim: dims [1,1,2,2,3,3]."""
+    grid = pv.ImageData(dimensions=(7, 2, 2)).cast_to_unstructured_grid()
+    assert grid.n_cells == 6
+    return grid
+
+
+def test_apply_dim_filter_hides_inactive_dims():
+    grid = _dim_grid()
+    cell_dim = np.array([1, 1, 2, 2, 3, 3], dtype=np.int8)
+    ev = ElementVisibility(grid)
+    apply_dim_filter(ev, cell_dim, active=[3], all_dims=[1, 2, 3])
+    # Only dim-3 cells (4, 5) survive.
+    assert ev.is_hidden(0) and ev.is_hidden(1)   # dim 1
+    assert ev.is_hidden(2) and ev.is_hidden(3)   # dim 2
+    assert not ev.is_hidden(4) and not ev.is_hidden(5)
+
+
+def test_apply_dim_filter_all_active_clears_layer():
+    grid = _dim_grid()
+    cell_dim = np.array([1, 1, 2, 2, 3, 3], dtype=np.int8)
+    ev = ElementVisibility(grid)
+    apply_dim_filter(ev, cell_dim, active=[1], all_dims=[1, 2, 3])
+    assert ev.n_hidden() == 4
+    # Re-activate all dims → dim layer dropped, nothing dim-hidden.
+    apply_dim_filter(ev, cell_dim, active=[1, 2, 3], all_dims=[1, 2, 3])
+    assert ev.n_hidden() == 0
+
+
+def test_apply_dim_filter_empty_active_hides_all():
+    grid = _dim_grid()
+    cell_dim = np.array([1, 1, 2, 2, 3, 3], dtype=np.int8)
+    ev = ElementVisibility(grid)
+    apply_dim_filter(ev, cell_dim, active=[], all_dims=[1, 2, 3])
+    assert ev.n_hidden() == grid.n_cells
+
+
+def test_apply_dim_filter_composes_with_manual_hide():
+    """The crux of the layered model: a manual hide survives dim-filter
+    changes, and a dim-filter all-active clear doesn't reveal it."""
+    grid = _dim_grid()
+    cell_dim = np.array([1, 1, 2, 2, 3, 3], dtype=np.int8)
+    ev = ElementVisibility(grid)
+    ev.hide([4])                       # user isolates a dim-3 cell's neighbour
+    apply_dim_filter(ev, cell_dim, active=[3], all_dims=[1, 2, 3])
+    assert ev.is_hidden(4) is True     # manual hide intact under dim filter
+    # All dims active again: dim layer cleared, but cell 4 stays hidden.
+    apply_dim_filter(ev, cell_dim, active=[1, 2, 3], all_dims=[1, 2, 3])
+    assert ev.is_hidden(4) is True
+    assert ev.n_hidden() == 1
 
 
 # ---------------------------------------------------------------------

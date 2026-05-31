@@ -39,10 +39,16 @@ Recognizable structural problems, built end to end through the **typed
     it, and `g.compose` it into two bays; PGs come back label-prefixed
     (`bay2.Columns`) and each uncoupled bay drifts the exact E1 8.39 mm.
 
+-   __[Pushover of a steel moment frame](pushover-steel-frame.md)__ — a
+    `W14×90` **fibre** section (from **apeSteel**) in a `forceBeamColumn`
+    pushed to a column-sway mechanism; the $V\!-\!\Delta$ capacity curve
+    matches $K=2\cdot12EI_c/H^3$ to 2.7 % and $V_p=4M_p/H$ to 1.9 % at
+    mechanism.
+
 </div>
 
-More rungs (shell-on-solid, pushover, staged SSI) are
-landing wave by wave.
+More rungs (shell-on-solid, transient, staged SSI) are landing wave by
+wave.
 
 ## Legacy notebook gallery
 
@@ -171,19 +177,6 @@ are the recommended starting point. Each notebook follows the same template:
     scoped properties. First three bending modes verified against
     Euler-Bernoulli to <0.3% error. **Modal is capture-only** — the
     classic recorder path can't drive `ops.eigen()`.
-
--   :material-chart-bell-curve:{ .lg .middle } &nbsp; __[Pushover (elastoplastic)](notebooks/19_pushover_elastoplastic.ipynb)__
-
-    ---
-
-    *Strategy: `spec.capture`*
-
-    The first **multi-step nonlinear** notebook — a Steel01 bar
-    pushed to 4× yield via `DisplacementControl`. The recorder fires
-    at every converged step; the capacity curve drops out of two
-    `Results.nodes.get(...)` calls without any manual `nodeDisp` /
-    `nodeReaction` accumulation. Three closed-form checks (slope,
-    plateau, yield onset) all match to round-off.
 
 </div>
 

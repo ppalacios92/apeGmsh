@@ -1232,16 +1232,18 @@ class ResultsViewer:
             "g", lambda: self._set_pick_mode(MODE_GP),
         )
 
-        # ── Dimensional pick filter (ADR 0045 S4b) ──────────────────
+        # ── Dimensional pick filter (ADR 0045 S4b + visual dim-hide) ─
         # 0/1/2/3/4 gate which element dims respond to picks, via the
         # shared FilterController (multi-select toggle, same semantics as
-        # the model/mesh viewers). PICK-GATING ONLY for now: inactive
-        # dims become non-pickable. The visual ghost-hide is deferred —
-        # it would clobber other ElementVisibility hide sources on the
-        # single shared substrate actor (no per-dim actors here, unlike
-        # the model viewer), so composing it needs a layered visibility
-        # model. Status-bar text gives the feedback meanwhile.
+        # the model/mesh viewers). Inactive dims are also ghost-HIDDEN on
+        # the single shared substrate actor: the dim filter owns the
+        # LAYER_DIM layer of ElementVisibility, which ORs it with the
+        # manual hide/isolate layer (LAYER_MANUAL) — so the filter and a
+        # user isolate compose instead of clobbering each other. Hidden
+        # cells are non-pickable for free (VTK skips HIDDENCELL), so the
+        # active_dims gate and the visual hide stay consistent.
         from .core.filter_controller import FilterController
+        from .core.element_visibility import apply_dim_filter
         _dim_vals = (
             sorted({int(d) for d in scene.cell_dim.tolist()})
             if scene.cell_dim.size else []
@@ -1249,6 +1251,15 @@ class ResultsViewer:
 
         def _apply_results_filter(active) -> None:
             self._pick_controller.active_dims = frozenset(active)
+            # Visual ghost-hide: hide cells whose dim is inactive via the
+            # dedicated dim layer (composes with manual/isolate hides).
+            ev = scene.element_visibility
+            if ev is not None:
+                apply_dim_filter(ev, scene.cell_dim, active, _dim_vals)
+                try:
+                    plotter.render()
+                except Exception:
+                    pass
             # A filter change can leave a stale element highlight on cells
             # the new filter excludes; clear it so the on-screen selection
             # never contradicts the active filter (review nit).

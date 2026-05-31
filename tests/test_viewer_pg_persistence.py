@@ -132,7 +132,7 @@ def test_reported_repro_create_then_query(pg_gmsh_session):
     sel.pick((3, 1))
     sel.pick((3, 2))
     # Simulates _on_new_group in model_viewer.py
-    sel._staged_groups["Foo"] = list(sel._picks)
+    sel.stage_group("Foo", sel.targets)
     sel.set_active_group("Foo")
     # Simulates close
     sel.flush_to_gmsh()

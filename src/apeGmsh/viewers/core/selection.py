@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable
 import gmsh
 import numpy as np
 
-from .selection_log import OpKind, SelectionOp, SelectionLog
+from .selection_log import OpKind, SelectionOp, SelectionLog, GroupSnapshot
 from ..scene_ir import SelectionTarget
 
 if TYPE_CHECKING:
@@ -138,13 +138,14 @@ class SelectionState:
         # per-entity ``_history`` LIFO. ``_picks`` is always == the
         # log's replay of its active op prefix.
         self._log: SelectionLog = SelectionLog()
+        # ADR 0045 S3c-2: the group fields below are CACHES of the log's
+        # snapshot (``replay_state()``), refreshed by ``_sync`` after every
+        # gesture — the log is the single source of truth. Group edits
+        # (activate/apply/stage/rename/delete) record replayable ops, so
+        # undo/redo cross a group switch. gmsh is written exactly once, at
+        # ``flush_to_gmsh`` (the freeze boundary); deleted / renamed-away
+        # names are tombstoned in the snapshot's ``pending`` set.
         self._active_group: str | None = None
-        # ADR 0045 S3c: staging is the single source of truth. Group
-        # edits (create/commit/rename/delete) mutate ``_staged_groups``
-        # in memory ONLY; gmsh is written exactly once, at
-        # ``flush_to_gmsh`` (the single freeze boundary). Names that must
-        # be removed from gmsh at flush (deletes + renamed-away originals)
-        # are tombstoned here.
         self._staged_groups: dict[str, list[SelectionTarget]] = {}
         self._group_order: list[str] = []  # creation order
         self._pending_deletes: set[str] = set()
@@ -171,9 +172,17 @@ class SelectionState:
         return list(self._picks)
 
     def _sync(self) -> None:
-        """Re-materialise ``_picks`` from the log (the single source of
-        truth). Keeps the legacy ``picks`` reads O(1) without drift."""
-        self._picks = self._log.replay()
+        """Re-materialise the cached state from the log — the single
+        source of truth (ADR 0045 S3c-2). ``_picks`` and the group fields
+        (``_active_group`` / ``_staged_groups`` / ``_group_order`` /
+        ``_pending_deletes``) are all caches of ``replay_state()`` kept
+        O(1) for reads, refreshed after every gesture."""
+        st = self._log.replay_state()
+        self._picks = st.working
+        self._active_group = st.active
+        self._staged_groups = st.staged
+        self._group_order = st.order
+        self._pending_deletes = st.pending
 
     def pick(self, dt: "DimTag | SelectionTarget") -> None:
         t = _as_target(dt)
@@ -197,12 +206,20 @@ class SelectionState:
             self.pick(t)
 
     def clear(self) -> None:
-        """Clear picks without affecting the active group's stored members."""
-        if self._picks:
+        """Clear the working selection — a replayable gesture (ADR 0045
+        S3c-2; no direct cache mutation).
+
+        With an active group, deactivating it (``GROUP_ACTIVATE`` None)
+        stages its current members and empties the working set, so the
+        group's stored members survive. With no active group, just empty
+        the loose picks."""
+        if self._active_group is not None:
+            self._log.record(SelectionOp(OpKind.GROUP_ACTIVATE, name=None))
+            self._sync()
+            self._fire()
+        elif self._picks:
             self._log.record(SelectionOp(OpKind.CLEAR))
             self._sync()
-            # Deactivate group so commit doesn't overwrite with empty
-            self._active_group = None
             self._fire()
 
     def undo(self) -> bool:
@@ -324,13 +341,14 @@ class SelectionState:
         return list(self._group_order)
 
     def seed_from_gmsh(self) -> None:
-        """Load existing user-facing physical groups into staging.
-
-        ADR 0045 S3c: staging is authoritative, so every group the viewer
-        shows must live in ``_staged_groups``. Call once at viewer init to
-        pull pre-existing PGs in (skipping internal ``_label:`` PGs, which
-        the viewer never manages as groups)."""
+        """Load existing user-facing physical groups into staging as the
+        log BASELINE (ADR 0045 S3c-2). Staging is authoritative, so the
+        seeded snapshot is the replay floor; later group gestures replay
+        on top of it (undo cannot cross the seed). Skips internal
+        ``_label:`` PGs, which the viewer never manages as groups."""
         from apeGmsh.core.Labels import is_label_pg
+        staged: dict[str, list[SelectionTarget]] = {}
+        order: list[str] = []
         for pg_dim, pg_tag in sorted(
             gmsh.model.getPhysicalGroups(), key=lambda x: x[1]
         ):
@@ -338,116 +356,68 @@ class SelectionState:
                 name = gmsh.model.getPhysicalName(pg_dim, pg_tag)
             except Exception:
                 continue
-            if not name or is_label_pg(name) or name in self._staged_groups:
+            if not name or is_label_pg(name) or name in staged:
                 continue
-            self._staged_groups[name] = _load_targets(name)
-            if name not in self._group_order:
-                self._group_order.append(name)
-
-    def _picks_for_group(self, name: str) -> list[SelectionTarget]:
-        """Load a group's working set. Staging is authoritative (ADR 0045
-        S3c): a tombstoned (deleted) name resolves to empty rather than
-        resurrecting its stale gmsh PG, which lingers only until flush."""
-        if name in self._staged_groups:
-            return list(self._staged_groups[name])
-        if name in self._pending_deletes:
-            return []
-        return _load_targets(name)
+            staged[name] = _load_targets(name)
+            order.append(name)
+        self._log.reset(GroupSnapshot(staged=staged, order=order))
+        self._sync()
+        self._fire()
 
     def set_active_group(self, name: str | None) -> None:
-        """Switch active group. Pure in-memory staging — no gmsh write
-        (writes are deferred to :meth:`flush_to_gmsh`, ADR 0045 S3c).
-
-        If *name* is the same as the current active group, reloads from
-        staging without re-staging the working set.
-        """
-        # Reload same group -> just reload its staged members. (Resolve
-        # picks BEFORE clearing the tombstone, so a tombstoned name loads
-        # empty rather than from its stale gmsh PG.)
-        if name is not None and name == self._active_group:
-            self._picks = self._picks_for_group(name)
-            self._pending_deletes.discard(name)
-            self._log.reset(self._picks)
-            self._fire()
-            return
-
-        # Stage the outgoing group's working set in memory.
-        if self._active_group is not None:
-            self._staged_groups[self._active_group] = list(self._picks)
-
-        self._active_group = name
-        if name is not None and name not in self._group_order:
-            self._group_order.append(name)
-        if name is None:
-            self._picks = []
-        else:
-            self._picks = self._picks_for_group(name)
-            # Activating a name makes it live again — drop any stale
-            # tombstone so it is not deleted at the next flush.
-            self._pending_deletes.discard(name)
-        # Group load is the new undo floor — undo does not cross a switch.
-        self._log.reset(self._picks)
+        """Switch active group — records a replayable ``GROUP_ACTIVATE``
+        gesture so undo crosses the switch (ADR 0045 S3c-2). No gmsh
+        write; staging is flushed at :meth:`flush_to_gmsh`."""
+        if name == self._active_group:
+            return  # already active — no-op (state stays log-consistent)
+        self._log.record(SelectionOp(OpKind.GROUP_ACTIVATE, name=name))
+        self._sync()
         self._fire()
 
     def commit_active_group(self) -> None:
-        """Stage the current active group's working set (in memory).
+        """No-op, kept for API compatibility (ADR 0045 S3c-2).
 
-        ADR 0045 S3c: no gmsh write — the staged state is flushed at
-        :meth:`flush_to_gmsh`. An empty active group stays staged as an
-        empty list and is deleted from gmsh at flush."""
-        if self._active_group is None:
-            return
-        self._staged_groups[self._active_group] = list(self._picks)
+        The reducer auto-materialises the active group's working set into
+        staging on every replay, so an explicit commit gesture is no
+        longer needed — the active group's members are always live."""
+        return
 
     def apply_group(self, name: str) -> None:
-        """Stage current picks as group *name* (in memory).
+        """Stage the current working set under *name* without activating
+        — records a replayable ``GROUP_APPLY`` gesture. No gmsh write;
+        ``model_viewer``'s apply path flushes right after."""
+        self._log.record(SelectionOp(OpKind.GROUP_APPLY, name=name))
+        self._sync()
+        self._fire()
 
-        ADR 0045 S3c: no gmsh write here — call :meth:`flush_to_gmsh` to
-        persist. ``model_viewer``'s apply path flushes right after."""
-        self._staged_groups[name] = list(self._picks)
-        if name not in self._group_order:
-            self._group_order.append(name)
-        self._pending_deletes.discard(name)
+    def stage_group(self, name: str, members: list) -> None:
+        """Stage an explicit member set under *name* (the new-group flow)
+        — records a replayable ``GROUP_STAGE`` gesture. No gmsh write."""
+        targets = tuple(_as_target(m) for m in members)
+        self._log.record(
+            SelectionOp(OpKind.GROUP_STAGE, targets=targets, name=name)
+        )
+        self._sync()
+        self._fire()
 
     def rename_group(self, old: str, new: str) -> None:
-        """Rename a staged group. In-memory only; the old name is
-        tombstoned so its gmsh PG is removed at the next flush (ADR 0045
-        S3c)."""
+        """Rename a staged group — records a replayable ``GROUP_RENAME``
+        gesture (old name tombstoned for flush). No gmsh write."""
         if old == new:
             return
-
-        if old in self._staged_groups:
-            self._staged_groups[new] = self._staged_groups.pop(old)
-
-        if self._active_group == old:
-            self._active_group = new
-
-        try:
-            idx = self._group_order.index(old)
-            self._group_order[idx] = new
-        except ValueError:
-            if new not in self._group_order:
-                self._group_order.append(new)
-
-        # Tombstone the old name (drop gmsh PG at flush); the new name is
-        # live again, so clear any stale tombstone on it.
-        self._pending_deletes.add(old)
-        self._pending_deletes.discard(new)
+        self._log.record(
+            SelectionOp(OpKind.GROUP_RENAME, name=old, name2=new)
+        )
+        self._sync()
+        self._fire()
 
     def delete_group(self, name: str) -> None:
-        """Remove a group from staging and tombstone it for flush
-        (ADR 0045 S3c — the gmsh PG is dropped at :meth:`flush_to_gmsh`)."""
-        self._staged_groups.pop(name, None)
-        try:
-            self._group_order.remove(name)
-        except ValueError:
-            pass
-        self._pending_deletes.add(name)
-        if self._active_group == name:
-            self._active_group = None
-            self._log.reset(())
-            self._sync()
-            self._fire()
+        """Remove a group from staging and tombstone it for flush —
+        records a replayable ``GROUP_DELETE`` gesture (undoable; the gmsh
+        PG is dropped at :meth:`flush_to_gmsh`)."""
+        self._log.record(SelectionOp(OpKind.GROUP_DELETE, name=name))
+        self._sync()
+        self._fire()
 
     def group_exists(self, name: str) -> bool:
         # Staging is authoritative (ADR 0045 S3c): a tombstoned name no
@@ -475,17 +445,16 @@ class SelectionState:
         simply have no gmsh PG. Returns the count of groups *written*
         (deletions not counted).
         """
-        # Stage current active group's working set.
-        if self._active_group is not None:
-            self._staged_groups[self._active_group] = list(self._picks)
+        # Read the authoritative snapshot from the log (the active
+        # group's live working set is already materialised into staging).
+        st = self._log.replay_state()
         # Remove tombstoned names, except any name reborn in staging (a
         # rename A->B->A, or delete-then-recreate, leaves the live group).
-        for name in self._pending_deletes:
-            if name not in self._staged_groups:
+        for name in st.pending:
+            if name not in st.staged:
                 _delete_group_by_name(name)
-        self._pending_deletes.clear()
         n = 0
-        for name, members in self._staged_groups.items():
+        for name, members in st.staged.items():
             if members:
                 _write_group(name, members)
                 n += 1
