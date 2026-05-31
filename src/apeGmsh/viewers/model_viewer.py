@@ -1367,15 +1367,26 @@ class ModelViewer:
         # ── Wire callbacks ──────────────────────────────────────────
 
         # Pick -> selection (or measure overlay when measure mode is on)
+        from .core.pick_tiebreak import coincident_stack
+
         def _on_pick(dt: DimTag, ctrl: bool):
             if measure_panel.is_active():
+                # Measure wants the literal entity hit, not the volume.
                 measure_overlay.add_entity(dt)
                 _push_measure_status()
                 return
+            # ADR 0045 S5-tiebreak: a boundary click is coincident with its
+            # owning volume. Select the highest active dim (the volume) so a
+            # click on a solid's face picks the solid, not the face. Degrades
+            # to the hit entity when there is no active owning volume.
+            stack = coincident_stack(
+                dt, self._filter.active, registry.volumes_of_face,
+            )
+            chosen = stack[0] if stack else dt
             if ctrl:
-                sel.unpick(dt)
+                sel.unpick(chosen)
             else:
-                sel.toggle(dt)
+                sel.toggle(chosen)
 
         pick_engine.on_pick = _on_pick
         pick_engine.set_hidden_check(vis_mgr.is_hidden)

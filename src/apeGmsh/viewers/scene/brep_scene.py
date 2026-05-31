@@ -463,6 +463,8 @@ def build_brep_scene(
         etags = []
         dt_cells = {}
         centroids_d3: dict[DimTag, np.ndarray] = {}
+        # ADR 0045 S5-tiebreak: boundary face (2, btag) -> owning volume(s).
+        face_to_volume: dict[DimTag, list[DimTag]] = {}
         cell_off = 0
         pt_off = 0
         vol_alpha = max(0.05, surface_opacity * 0.6)
@@ -479,6 +481,9 @@ def build_brep_scene(
                 for bd, btag in boundary:
                     if bd != 2:
                         continue
+                    face_to_volume.setdefault(
+                        (2, int(btag)), [],
+                    ).append((3, int(vtag)))
                     ets, _, enl = gmsh.model.mesh.getElements(2, btag)
                     lpts, entity_faces, n_cells_e = (
                         _surface_polydata_from_global_mesh(
@@ -554,6 +559,7 @@ def build_brep_scene(
                 registry.set_silhouette(3, _sil, _d3_sil)
             except Exception:
                 pass
+            registry.set_face_to_volume(face_to_volume)
     t_d3 = time.perf_counter() - t_dim
     n_entities += n_d3
 

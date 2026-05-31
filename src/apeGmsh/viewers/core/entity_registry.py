@@ -58,6 +58,11 @@ class EntityRegistry:
         "_node_coords",
         "dim_node_entity_pairs",
         "_node_cloud_kwargs",
+        # ADR 0045 S5-tiebreak: boundary face -> owning volume(s), built
+        # from gmsh.model.getBoundary at scene-build. Lets a face click
+        # route up to its volume (highest-active-dim-wins) + seed the
+        # Tab-cycle stack.
+        "_face_to_volume",
     )
 
     def __init__(self) -> None:
@@ -100,6 +105,7 @@ class EntityRegistry:
         self._node_coords: np.ndarray | None = None
         self.dim_node_entity_pairs: dict[int, np.ndarray] = {}
         self._node_cloud_kwargs: dict = {}
+        self._face_to_volume: dict[DimTag, list[DimTag]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -161,6 +167,22 @@ class EntityRegistry:
         # box-select already falls back to representative mesh points and
         # then the centroid (see PickEngine._do_box), so the effective
         # result is unchanged for those entities, without a fake box.
+
+    def set_face_to_volume(
+        self, mapping: dict[DimTag, list[DimTag]],
+    ) -> None:
+        """Record boundary-face → owning-volume(s) adjacency (ADR 0045 S5).
+
+        Built once at scene-build from ``gmsh.model.getBoundary``. A face
+        shared by two volumes maps to both."""
+        self._face_to_volume = mapping
+
+    def volumes_of_face(self, dt: DimTag) -> list[DimTag]:
+        """Owning volume DimTag(s) for a boundary face ``(2, tag)``.
+
+        Empty for a free surface or any non-face dim. The callable the
+        BREP tiebreak (``pick_tiebreak.coincident_stack``) consumes."""
+        return list(self._face_to_volume.get((int(dt[0]), int(dt[1])), ()))
 
     def register_wire(self, dim: int, mesh: Any, actor: Any) -> None:
         """Register the wireframe (corner-edge) layer for *dim*.
