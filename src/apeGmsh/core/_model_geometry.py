@@ -811,6 +811,134 @@ class _Geometry:
             f"end={end}) -> tag {tag}")
         return self._model._register(1, tag, label, 'arc')
 
+    def add_arch(
+        self,
+        start: EntityRef,
+        apex : EntityRef,
+        end  : EntityRef,
+        *,
+        label: str | None = None,
+        sync : bool       = True,
+    ) -> list[Tag]:
+        """
+        Add a circular arch through three points as **two** arcs that
+        share the apex as a topological vertex.
+
+        Unlike :meth:`add_arc` with ``through_point=True`` — which fits
+        a *single* circular arc through ``start``/``apex``/``end`` and
+        leaves the apex as a floating construction point that the mesher
+        discards (so a physical group placed on the apex resolves to a
+        node that never makes it into the mesh) — ``add_arch`` builds the
+        arch as two arcs ``start -> apex`` and ``apex -> end`` of the
+        *same* circle.  The apex is then a real vertex, guaranteeing a
+        conforming mesh node exactly at the crown — the node you want for
+        a crown load, a monitoring point, or a midspan physical group.
+
+        Both halves lie on one circle, so they are tangent-continuous at
+        the apex (no geometric kink).  The circle centre is computed from
+        the three points, used to construct the arcs, then removed so it
+        leaves no stray node at the centre of curvature.
+
+        Parameters
+        ----------
+        start, apex, end : point references — raw tag, label name,
+            physical group, part label, or ``(dim, tag)``.  Each must
+            resolve to exactly one point.  ``apex`` is a point **on** the
+            arch (the crown), not the circle centre.
+        label : str, optional
+            Label applied to **both** arc halves, so
+            ``g.labels.entities(label)`` (and any physical group promoted
+            from it) covers the whole arch.
+        sync : bool
+            Whether to synchronise the OCC kernel after creation.
+
+        Returns
+        -------
+        list[Tag]
+            ``[arc_start_apex, arc_apex_end]`` in geometric order.  Pass
+            the list directly to ``g.physical.add_curve``.
+
+        Raises
+        ------
+        ValueError
+            If the three points are collinear or coincident (no circle
+            is defined).
+
+        Note
+        ----
+        Like :meth:`add_arc`, when the arch joins straight lines to form
+        a closed wire, OCC may create duplicate endpoint vertices at the
+        arc-line junctions.  Call
+        ``g.model.queries.make_conformal(dims=[1])`` after assembling the
+        wire to weld the topology.
+
+        See Also
+        --------
+        :meth:`add_arc` — single-curve circular arc (apex *not* preserved
+        as a vertex).
+        """
+        start_t = self._resolve_entity_tag(start, dim=0, what="point")
+        apex_t  = self._resolve_entity_tag(apex,  dim=0, what="point")
+        end_t   = self._resolve_entity_tag(end,   dim=0, what="point")
+
+        a = np.asarray(gmsh.model.getValue(0, int(start_t), []), dtype=float)
+        b = np.asarray(gmsh.model.getValue(0, int(apex_t),  []), dtype=float)
+        c = np.asarray(gmsh.model.getValue(0, int(end_t),   []), dtype=float)
+
+        # Circumcentre of the three points (centre of the unique circle
+        # through start/apex/end).
+        ab  = b - a
+        ac  = c - a
+        ab2 = float(np.dot(ab, ab))
+        ac2 = float(np.dot(ac, ac))
+        n   = np.cross(ab, ac)
+        n2  = float(np.dot(n, n))
+        if ab2 <= 0.0 or ac2 <= 0.0 or n2 <= 1e-18 * ab2 * ac2:
+            raise ValueError(
+                f"add_arch: points {tuple(a)}, {tuple(b)}, {tuple(c)} are "
+                f"collinear or coincident — no circular arch is defined. "
+                f"Use add_line / add_polyline for a straight member.")
+        to_centre = (
+            np.cross(n, ab) * ac2 + np.cross(ac, n) * ab2
+        ) / (2.0 * n2)
+        centre = a + to_centre
+
+        centre_t = gmsh.model.occ.addPoint(
+            float(centre[0]), float(centre[1]), float(centre[2]))
+        arc1 = gmsh.model.occ.addCircleArc(
+            int(start_t), centre_t, int(apex_t), center=True)
+        arc2 = gmsh.model.occ.addCircleArc(
+            int(apex_t), centre_t, int(end_t), center=True)
+        # The centre is a pure construction point — drop it so it does
+        # not become a stray mesh node at the centre of curvature.
+        gmsh.model.occ.remove([(0, centre_t)], recursive=False)
+        if sync:
+            gmsh.model.occ.synchronize()
+
+        self._model._log(
+            f"add_arch(start={start_t}, apex={apex_t}, end={end_t}) "
+            f"-> arcs {arc1}, {arc2} (apex kept as vertex)")
+
+        arc_tags: list[Tag] = [arc1, arc2]
+        # Register both halves with no label, then batch-label under one
+        # name (mirrors add_imperfect_line) so the label PG holds both
+        # arcs from the start and we avoid a duplicate-label warning.
+        for t in arc_tags:
+            self._model._register(1, t, None, 'arc')
+        if label and getattr(self._model._parent, '_auto_pg_from_label', False):
+            labels_comp = getattr(self._model._parent, 'labels', None)
+            if labels_comp is not None:
+                try:
+                    labels_comp.add(1, list(arc_tags), name=label)
+                except Exception as exc:
+                    import warnings as _warn
+                    _warn.warn(
+                        f"Label {label!r} (dim=1, tags={arc_tags}) could "
+                        f"not be created: {exc}",
+                        stacklevel=2,
+                    )
+        return arc_tags
+
     def add_circle(
         self,
         cx: float, cy: float, cz: float,

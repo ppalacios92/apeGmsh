@@ -114,6 +114,48 @@ def test_add_arc_through_point_vs_center(g):
     assert sz0 < H1                                  # dips down
 
 
+def test_add_arch_two_arcs_share_apex_vertex(g):
+    """add_arch builds two tangent arcs that share the apex as a real
+    vertex, so the crown survives meshing as a conforming node."""
+    gm = g.model.geometry
+    L, H1, H2 = 10.0, 4.0, 2.0          # apex at z = H1 + H2 = 6
+    gm.add_point(0,   0, H1,      label="sl")
+    gm.add_point(L/2, 0, H1 + H2, label="apex")
+    gm.add_point(L,   0, H1,      label="sr")
+
+    arcs = gm.add_arch("sl", "apex", "sr", label="arch")
+
+    # two arc halves, both registered as 'arc'
+    assert isinstance(arcs, list) and len(arcs) == 2
+    for t in arcs:
+        assert g.model._metadata[(1, t)]['kind'] == 'arc'
+
+    # both halves carry the single label
+    assert g.labels.has("arch")
+    assert set(arcs) == set(g.labels.entities("arch"))
+
+    # the apex is a shared boundary vertex of both arcs (-> conforming)
+    apex_t = g.labels.entities("apex")[0]
+    b0 = {t for (_, t) in gmsh.model.getBoundary([(1, arcs[0])], oriented=False)}
+    b1 = {t for (_, t) in gmsh.model.getBoundary([(1, arcs[1])], oriented=False)}
+    assert apex_t in b0 and apex_t in b1
+
+    # the full arch still rises to the apex; no stray centre-of-curvature
+    # point was left behind (only the 3 declared points remain)
+    z1 = max(_bb(1, t)[5] for t in arcs)
+    assert z1 == pytest.approx(H1 + H2, abs=1e-6)
+    assert len(gmsh.model.getEntities(0)) == 3
+
+
+def test_add_arch_collinear_fails_loud(g):
+    gm = g.model.geometry
+    gm.add_point(0, 0, 0, label="a")
+    gm.add_point(1, 0, 0, label="b")
+    gm.add_point(2, 0, 0, label="c")
+    with pytest.raises(ValueError, match="collinear"):
+        gm.add_arch("a", "b", "c")
+
+
 # =====================================================================
 # Circle  (dim = 1)
 # =====================================================================

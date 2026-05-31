@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — shell-on-solid conformity (S1a + S1b + S2 + S5) · Phase SSI-2.D stage-bound BCs and recorders · embedded-element pipeline hardening (#329 / #331) · ASDEmbeddedNodeElement option exposure (ADR 0035) · stage-bound constraints + `s.initial_stress` PUSH (Phase SSI-2.D extension) · **Phase SSI-2.E between-stage Domain mutators** · topology safety nets (P1/P3) + arc-line wire docs · embedded-host decomposition (ADR 0036) · **higher-order line broker split (ADR 0037)** · RecorderDeclaration element fan-out fix · **orphan-geometry sweep unification + `g.model.geometry` validation API** · **split-sweep auto-validation (closed-world / open-world)** · **raw-PG channel for `_user_intentional`**
+## Unreleased — shell-on-solid conformity (S1a + S1b + S2 + S5) · Phase SSI-2.D stage-bound BCs and recorders · embedded-element pipeline hardening (#329 / #331) · ASDEmbeddedNodeElement option exposure (ADR 0035) · stage-bound constraints + `s.initial_stress` PUSH (Phase SSI-2.D extension) · **Phase SSI-2.E between-stage Domain mutators** · topology safety nets (P1/P3) + arc-line wire docs · embedded-host decomposition (ADR 0036) · **higher-order line broker split (ADR 0037)** · RecorderDeclaration element fan-out fix · **orphan-geometry sweep unification + `g.model.geometry` validation API** · **split-sweep auto-validation (closed-world / open-world)** · **raw-PG channel for `_user_intentional`** · **`g.model.geometry.add_arch` (apex-as-vertex two-arc arch)**
+
+### ADDED — `g.model.geometry.add_arch(start, apex, end, *, label=)`
+
+A circular arch built as **two tangent arcs that share the apex as a topological vertex**, so the crown survives meshing as a conforming node.
+
+`add_arc(..., through_point=True)` fits a *single* arc through `start`/`apex`/`end` and leaves the apex as a floating construction point that the mesher discards — a physical group placed on the apex then resolves to a node that never lands in the mesh (a gmsh quirk). `add_arch` instead computes the circle centre, emits two `addCircleArc` halves (`start→apex`, `apex→end`) of the *same* circle, then removes the construction centre so it leaves no stray node at the centre of curvature. Both halves are tangent-continuous at the apex (no kink), and the apex becomes a real vertex — guaranteeing a mesh node exactly at the crown for a crown load, monitoring point, or midspan physical group.
+
+Returns `list[Tag]` = `[start→apex, apex→end]` (hand straight to `g.physical.add_curve`); `label=` is applied to **both** halves. Fails loud (`ValueError`) on collinear/coincident points. `add_arc` is unchanged.
+
+The general declarative `g.model.geometry.embed_node()` (for interior points of surfaces/volumes, where the split-into-parts trick has no clean equivalent) was designed alongside this but deferred.
 
 ### ADDED — CAD-import health diagnostics + scale-aware healing
 
