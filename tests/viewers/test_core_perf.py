@@ -4,7 +4,7 @@ Marked ``@pytest.mark.bench`` so they don't run in normal CI:
     pytest -m bench tests/viewers/test_core_perf.py -s
 
 Targets:
-1. ``results_pick._project_points_to_display`` — Python loop over
+1. ``backends._pyvista_pick._project_points_to_display`` — Python loop over
    VTK ``WorldToDisplay`` per point. Compared against a vectorised
    matrix-multiply via ``camera.GetCompositeProjectionTransformMatrix``.
 2. ``color_manager._set_cells_rgb`` per-entity write loop versus
@@ -55,7 +55,7 @@ def _make_offscreen_plotter(grid: pv.UnstructuredGrid) -> pv.Plotter:
 # ---------------------------------------------------------------------
 
 def _project_loop(points: np.ndarray, renderer) -> np.ndarray:
-    """Replicates results_pick._project_points_to_display."""
+    """Replicates backends._pyvista_pick._project_points_to_display."""
     out = np.empty((points.shape[0], 2), dtype=np.float64)
     for i in range(points.shape[0]):
         renderer.SetWorldPoint(

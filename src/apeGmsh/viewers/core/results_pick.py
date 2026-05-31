@@ -1,21 +1,24 @@
-"""Plain-LMB pick controller for ResultsViewer (Phases 2a / 2b / 2c).
+"""Plain-LMB pick controller for ResultsViewer.
 
-Installs VTK observers that intercept plain (no-modifier) left-mouse
-events on a PyVista plotter and dispatches per the controller's
-current ``mode``:
+Routes plain (no-modifier) left-mouse events — installed via the shared
+:class:`~apeGmsh.viewers.backends._pyvista_pick.PyVistaPickBackend`
+(ADR 0047 R-D) — into FEM picks, dispatching per the controller's current
+``mode``:
 
-* **Click** (no drag) — fires :func:`on_pick` with a
-  :class:`PickResult` resolving either to ``"node"`` (world coords
-  for snap-to-nearest in the consumer) or ``"element"`` (FEM element
-  id resolved via ``scene.cell_to_element_id``).
-* **Drag** — draws a yellow rectangle while LMB is held; on release
-  fires :func:`on_box_pick` with a :class:`BoxPickResult` whose
-  ``ids`` are the FEM nodes (or elements) inside the rectangle.
+* **Click** (no drag) — fires :func:`on_pick` with a :class:`PickResult`
+  resolving to ``"node"`` (world coords for snap-to-nearest in the
+  consumer), ``"element"`` (FEM element id via ``scene.cell_to_element_id``),
+  or ``"gp"`` (resolved through the scene's :class:`PickInventory`).
+* **Drag** — the backend draws a rubber-band; on release fires
+  :func:`on_box_pick` with a :class:`BoxPickResult` of the FEM nodes /
+  elements / GPs inside the rectangle.
 
-Drag is recognised and absorbed (priority-10 abort) so the trackball
-camera does **not** rotate on plain LMB. Shift+LMB stays owned by
-:func:`install_navigation` at priority 11. Ctrl+LMB falls through to
-the trackball's spin gesture untouched.
+This module owns **no VTK**: the ``vtkCellPicker``, the press/move/release
+gesture machine, the rubber-band overlay, and the screen↔world projection
+all live in the backend. Here we only interpret the geometric hit
+(``PickHit`` / ``BoxGesture``) into a FEM result (ADR 0047 INV-3). Shift+LMB
+stays owned by ``install_navigation`` (priority 11); Ctrl falls through to
+the trackball.
 """
 from __future__ import annotations
 
@@ -37,18 +40,11 @@ MODE_GP = "gp"
 _VALID_MODES = (MODE_NODE, MODE_ELEMENT, MODE_GP)
 
 
-# ``gp_resolver`` returns ``(element_id, gp_index, world_xyz)`` if the
-# picked actor + cell index belong to a GaussPointDiagram, else None.
-GpResolver = Callable[[Any, int], Optional[tuple]]
-
-# ``gp_candidates`` returns ``(centers, element_ids, gp_indices)`` —
-# all GP centers across the active GaussPointDiagrams, with the
-# matching FEM element IDs and per-diagram center indices. Empty
-# arrays (or ``None``) signal "no GP markers on screen → nothing to
-# box-pick" and the box-pick path silently returns no IDs.
-GpCandidates = Callable[
-    [], Optional[tuple],
-]
+# ``gp_candidates`` returns ``(centers, element_ids, gp_indices)`` — all
+# GP centers across the active GaussPointDiagrams, with the matching FEM
+# element IDs and per-diagram center indices. Empty arrays (or ``None``)
+# signal "no GP markers on screen → nothing to box-pick".
+GpCandidates = Callable[[], Optional[tuple]]
 
 
 @dataclass(frozen=True)
@@ -60,13 +56,14 @@ class PickResult:
     kind
         One of ``"node"``, ``"element"``, or ``"gp"``.
     world
-        World-space point hit by the cell picker (or the GP center
-        for the ``"gp"`` mode).
+        World-space point hit by the cell picker (or the GP center for
+        the ``"gp"`` mode).
     element_id
         FEM element ID — set for ``"element"`` and ``"gp"``.
     cell_id
-        VTK cell index — set for ``"element"`` (substrate cell index
-        used by the highlight overlay).
+        Substrate cell index used by the highlight overlay — set for
+        ``"element"`` (``None`` when the element was reached via a GP
+        marker, in which case the highlight uses the element id).
     gp_index
         GP row index within the diagram's slab — set for ``"gp"``.
     """
@@ -86,14 +83,14 @@ class BoxPickResult:
     kind
         One of ``"node"``, ``"element"``, or ``"gp"``.
     ids
-        FEM IDs inside the box. For ``"node"`` these are node IDs;
-        for ``"element"`` and ``"gp"`` these are element IDs.
+        FEM IDs inside the box. For ``"node"`` these are node IDs; for
+        ``"element"`` and ``"gp"`` these are element IDs.
     cell_ids
-        Substrate-grid cell indices — set for ``"element"`` (used by
-        the highlight overlay), empty otherwise.
+        Substrate-grid cell indices — set for ``"element"``, empty
+        otherwise.
     gp_indices
-        Per-diagram GP center indices — set for ``"gp"``, empty
-        otherwise. Aligned with ``ids`` row-for-row.
+        Per-diagram GP center indices — set for ``"gp"``, empty otherwise.
+        Aligned with ``ids`` row-for-row.
     box
         ``(x0, y0, x1, y1)`` in display pixels.
     crossing
@@ -111,8 +108,8 @@ class ResultsPickController:
     """Public controller returned by :func:`install_results_pick`.
 
     The host (typically :class:`ResultsViewer`) holds a reference and
-    flips :attr:`mode` from keyboard shortcuts (e.g. ``N`` / ``E``).
-    The pick observer reads :attr:`mode` at release time.
+    flips :attr:`mode` from keyboard shortcuts (e.g. ``N`` / ``E`` / ``G``).
+    The pick adapter reads :attr:`mode` at release time.
     """
 
     def __init__(self) -> None:
@@ -122,6 +119,8 @@ class ResultsPickController:
         # click/box resolution to cells of those dims. Set by the results
         # viewer's FilterController.
         self.active_dims: "Optional[frozenset]" = None
+        # The PickBackend driving the gesture machine (set by install).
+        self._backend: Any = None
 
     def set_mode(self, mode: str) -> None:
         if mode not in _VALID_MODES:
@@ -130,6 +129,11 @@ class ResultsPickController:
                 f"{_VALID_MODES}; got {mode!r}."
             )
         self.mode = mode
+
+    def uninstall(self) -> None:
+        """Remove the backend's observers + overlay. Idempotent."""
+        if self._backend is not None:
+            self._backend.uninstall()
 
 
 def _accept_cell_dim(cell_dim, cell_id: int, active_dims) -> bool:
@@ -146,81 +150,6 @@ def _accept_cell_dim(cell_dim, cell_id: int, active_dims) -> bool:
     if not (0 <= cell_id < cell_dim.size):
         return False
     return int(cell_dim[cell_id]) in active_dims
-
-
-# ======================================================================
-# Display-space projection + box-pick helpers
-# ======================================================================
-
-
-def _project_points_to_display(
-    points: "ndarray", renderer: Any,
-) -> "ndarray":
-    """Project ``(N, 3)`` world points to ``(N, 2)`` display pixels.
-
-    Vectorized via the camera's composite projection matrix — ~40x
-    faster than per-point ``WorldToDisplay`` at 100k pts, with sub-
-    pixel agreement (validated in ``test_core_perf.py``). This matters
-    for GP / fiber selection where N can be 10⁶ at solid scale.
-
-    Falls back to the per-point ``WorldToDisplay`` loop if the renderer
-    doesn't expose the camera-matrix API (test stubs, or any unusual
-    renderer wrapper).
-    """
-    n = points.shape[0]
-    if n == 0:
-        return np.empty((0, 2), dtype=np.float64)
-
-    try:
-        cam = renderer.GetActiveCamera()
-        aspect = renderer.GetTiledAspectRatio()
-        M = cam.GetCompositeProjectionTransformMatrix(aspect, 0.0, 1.0)
-        size = renderer.GetSize()
-        vp = renderer.GetViewport()
-    except AttributeError:
-        return _project_points_to_display_loop(points, renderer)
-
-    # vtkMatrix4x4 -> 4x4 numpy
-    arr = np.empty((4, 4), dtype=np.float64)
-    for i in range(4):
-        for j in range(4):
-            arr[i, j] = M.GetElement(i, j)
-
-    homog = np.empty((n, 4), dtype=np.float64)
-    homog[:, :3] = points
-    homog[:, 3] = 1.0
-    clip = homog @ arr.T  # (n, 4)
-    w = clip[:, 3:4]
-    ndc = clip[:, :3] / np.where(w == 0.0, 1.0, w)
-    # NDC ([-1,1]) -> display pixels.
-    win_w, win_h = size[0], size[1]
-    vp_x0 = vp[0] * win_w
-    vp_y0 = vp[1] * win_h
-    vp_w = (vp[2] - vp[0]) * win_w
-    vp_h = (vp[3] - vp[1]) * win_h
-    out = np.empty((n, 2), dtype=np.float64)
-    out[:, 0] = vp_x0 + (ndc[:, 0] * 0.5 + 0.5) * vp_w
-    out[:, 1] = vp_y0 + (ndc[:, 1] * 0.5 + 0.5) * vp_h
-    return out
-
-
-def _project_points_to_display_loop(
-    points: "ndarray", renderer: Any,
-) -> "ndarray":
-    """Per-point ``WorldToDisplay`` fallback. Kept for stub renderers."""
-    out = np.empty((points.shape[0], 2), dtype=np.float64)
-    for i in range(points.shape[0]):
-        renderer.SetWorldPoint(
-            float(points[i, 0]),
-            float(points[i, 1]),
-            float(points[i, 2]),
-            1.0,
-        )
-        renderer.WorldToDisplay()
-        d = renderer.GetDisplayPoint()
-        out[i, 0] = d[0]
-        out[i, 1] = d[1]
-    return out
 
 
 def _inside_box(
@@ -246,167 +175,80 @@ def install_results_pick(
     *,
     scene: "FEMSceneData",
     on_box_pick: Optional[Callable[[BoxPickResult], None]] = None,
-    gp_resolver: Optional[GpResolver] = None,
     gp_candidates: Optional[GpCandidates] = None,
     drag_threshold_px: int = 4,
+    pick_backend: Any = None,
 ) -> ResultsPickController:
-    """Install plain-LMB click + drag-pick observers on *plotter*.
+    """Install plain-LMB click + drag picking on *plotter* via a PickBackend.
 
     Parameters
     ----------
     plotter
         The PyVista plotter (or QtInteractor).
     on_pick
-        Invoked with a :class:`PickResult` on a no-drag plain-LMB
-        release that hit an actor.
+        Invoked with a :class:`PickResult` on a no-drag plain-LMB release
+        that hit an actor.
     scene
-        :class:`FEMSceneData` whose ``cell_to_element_id`` and
-        ``node_ids`` resolve VTK indices to FEM IDs. The substrate
-        ``grid`` is also used to project point coords for box-pick.
+        :class:`FEMSceneData` whose ``cell_to_element_id`` / ``node_ids``
+        resolve VTK indices to FEM IDs, whose ``grid`` projects points for
+        box-pick, and whose ``pick_engine`` (a :class:`PickInventory`)
+        resolves GP-marker hits.
     on_box_pick
-        Invoked with a :class:`BoxPickResult` on every drag release
-        whose rectangle has positive area. ``None`` disables the
-        box-pick path entirely.
-    gp_resolver
-        Callable ``(picked_actor, cell_id) -> (element_id, gp_index,
-        world_xyz) | None``. Required for the ``"gp"`` pick mode;
-        consulted only when ``controller.mode == "gp"``. The
-        ResultsViewer typically passes a closure that walks active
-        GaussPointDiagrams and calls
-        :meth:`GaussPointDiagram.resolve_picked_cell`.
+        Invoked with a :class:`BoxPickResult` on every drag release whose
+        rectangle has positive area. ``None`` disables the box-pick path.
+    gp_candidates
+        Callable returning ``(centers, element_ids, gp_indices)`` for the
+        GP box-pick. ``None`` (or empty) → no GP box result.
     drag_threshold_px
-        Pixel distance during the press required to be treated as a
-        drag rather than a click.
+        Pixel distance during the press required to be treated as a drag.
+    pick_backend
+        Injectable :class:`PickBackend` (for headless tests). Defaults to a
+        :class:`PyVistaPickBackend` over ``plotter``.
 
     Returns
     -------
     ResultsPickController
-        Live controller — flip ``ctrl.mode`` to switch dispatch
-        between node, element, and GP picks.
+        Live controller — flip ``ctrl.mode`` to switch dispatch between
+        node, element, and GP picks; call ``ctrl.uninstall()`` to tear down.
     """
-    import vtk
-
-    iren_wrap = plotter.iren
-    assert iren_wrap is not None, (
-        "plotter.iren is None; call plotter.show() before installing "
-        "the results pick observer."
-    )
-    iren = iren_wrap.interactor
-    renderer = plotter.renderer
-
-    picker = vtk.vtkCellPicker()
-    picker.SetTolerance(0.005)
-
     controller = ResultsPickController()
+    inventory = getattr(scene, "pick_engine", None)
     cell_to_element_id = scene.cell_to_element_id
     node_ids_arr = np.asarray(scene.node_ids, dtype=np.int64)
     grid = scene.grid
     # Per-cell element dims for the dim-pick gate (ADR 0045 S4b). Empty
     # when the scene carries no cell_dim (older builds) → gate is inert.
     cell_dim = np.asarray(getattr(scene, "cell_dim", np.array([], dtype=np.int8)))
-
-    # element_id -> representative substrate cell index. ADR 0047 R-D.2b:
-    # GP markers are now always pickable, so an element-mode click can land
-    # on a GP glyph (which has no substrate cell). We resolve it to the
-    # GP's owning element and highlight that element via this cell. Reuses
-    # the scene's existing inverse map.
+    # element_id -> representative substrate cell, for highlighting an
+    # element reached via a GP marker (which has no substrate cell).
     element_id_to_cell = getattr(scene, "element_id_to_cell", {}) or {}
 
-    _press_pos: list[tuple | None] = [None]
-    _dragging: list[bool] = [False]
-    _tags: dict[str, int] = {}
-
-    # Lazy-init rubber-band rectangle overlay (mirrors pick_engine.py).
-    _rubberband_pts: list[Any] = [None]
-    _rubberband_actor: list[Any] = [None]
-
-    def _abort(caller: Any, tag: int) -> None:
-        cmd = caller.GetCommand(tag)
-        if cmd is not None:
-            cmd.SetAbortFlag(1)
-
     # ------------------------------------------------------------------
-    # Rubber-band overlay
+    # Click resolution (geometric hit -> FEM result, routed by mode)
     # ------------------------------------------------------------------
 
-    def _ensure_rubberband() -> None:
-        if _rubberband_pts[0] is not None:
-            return
-        pts = vtk.vtkPoints()
-        pts.SetNumberOfPoints(4)
-        for i in range(4):
-            pts.SetPoint(i, 0.0, 0.0, 0.0)
-        lines = vtk.vtkCellArray()
-        lines.InsertNextCell(5)
-        for i in (0, 1, 2, 3, 0):
-            lines.InsertCellPoint(i)
-        poly = vtk.vtkPolyData()
-        poly.SetPoints(pts)
-        poly.SetLines(lines)
-        mapper = vtk.vtkPolyDataMapper2D()
-        mapper.SetInputData(poly)
-        actor = vtk.vtkActor2D()
-        actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(1.0, 1.0, 0.0)
-        actor.GetProperty().SetLineWidth(1.5)
-        actor.VisibilityOff()
-        renderer.AddActor2D(actor)
-        _rubberband_pts[0] = pts
-        _rubberband_actor[0] = actor
-
-    def _update_rubberband(x0: int, y0: int, x1: int, y1: int) -> None:
-        _ensure_rubberband()
-        pts = _rubberband_pts[0]
-        pts.SetPoint(0, x0, y0, 0.0)
-        pts.SetPoint(1, x1, y0, 0.0)
-        pts.SetPoint(2, x1, y1, 0.0)
-        pts.SetPoint(3, x0, y1, 0.0)
-        pts.Modified()
-        # Stippled line for crossing (R→L); solid for window (L→R).
-        prop = _rubberband_actor[0].GetProperty()
-        prop.SetLineStipplePattern(0xAAAA if x1 < x0 else 0xFFFF)
-        _rubberband_actor[0].VisibilityOn()
-        plotter.render()
-
-    def _hide_rubberband() -> None:
-        if _rubberband_actor[0] is not None:
-            _rubberband_actor[0].VisibilityOff()
-            plotter.render()
-
-    # ------------------------------------------------------------------
-    # Click resolution
-    # ------------------------------------------------------------------
-
-    def _build_result(x: int, y: int) -> Optional[PickResult]:
-        try:
-            picker.Pick(int(x), int(y), 0, renderer)
-            cell_id = picker.GetCellId()
-            if cell_id < 0:
-                return None
-            world = tuple(picker.GetPickPosition())
-        except Exception:
+    def _build_result(hit) -> Optional[PickResult]:
+        cell_id = hit.cell_id
+        if cell_id is None or cell_id < 0:
             return None
-
+        world = hit.world
+        prop_id = hit.prop_id
         mode = controller.mode
+
         if mode == MODE_NODE:
             return PickResult(kind=MODE_NODE, world=world)
+
         if mode == MODE_ELEMENT:
-            # Resolve-time routing (ADR 0047 R-D.2b): GP markers are now
-            # always pickable, so an element-mode click may land on a GP
-            # glyph instead of the substrate. If the picked actor is a
-            # registered GP marker, resolve to its owning element;
-            # otherwise treat the hit as a substrate cell.
-            try:
-                picked_actor = picker.GetActor()
-            except Exception:
-                picked_actor = None
-            gp_hit = (
-                gp_resolver(picked_actor, int(cell_id))
-                if (gp_resolver is not None and picked_actor is not None)
-                else None
+            # GP markers are always pickable (ADR 0047 R-D.2b), so an
+            # element-mode click may land on a GP glyph. A registered
+            # overlay hit resolves to its owning element; a substrate hit
+            # (prop_id not in the inventory) takes the cell→element path.
+            gp = (
+                inventory.resolve(prop_id, cell_id)
+                if inventory is not None else None
             )
-            if gp_hit is not None:
-                element_id = int(gp_hit[0])
+            if gp is not None:
+                element_id = int(gp[0])
                 hl_cell = element_id_to_cell.get(element_id)
                 return PickResult(
                     kind=MODE_ELEMENT,
@@ -414,36 +256,24 @@ def install_results_pick(
                     element_id=element_id,
                     cell_id=int(hl_cell) if hl_cell is not None else None,
                 )
-            # Substrate path — dim-pick gate then cell→element.
             if not _accept_cell_dim(cell_dim, cell_id, controller.active_dims):
                 return None
-            try:
-                if 0 <= cell_id < cell_to_element_id.size:
-                    element_id = int(cell_to_element_id[cell_id])
-                else:
-                    return None
-            except Exception:
+            if not (0 <= cell_id < cell_to_element_id.size):
                 return None
             return PickResult(
                 kind=MODE_ELEMENT,
                 world=world,
-                element_id=element_id,
+                element_id=int(cell_to_element_id[cell_id]),
                 cell_id=int(cell_id),
             )
+
         if mode == MODE_GP:
-            if gp_resolver is None:
+            if inventory is None:
                 return None
-            try:
-                actor = picker.GetActor()
-            except Exception:
-                actor = None
-            try:
-                hit = gp_resolver(actor, int(cell_id))
-            except Exception:
-                hit = None
-            if hit is None:
+            gp = inventory.resolve(prop_id, cell_id)
+            if gp is None:
                 return None
-            element_id, gp_index, gp_world = hit
+            element_id, gp_index, gp_world = gp
             try:
                 gp_world_t = tuple(float(c) for c in gp_world)
             except Exception:
@@ -457,32 +287,32 @@ def install_results_pick(
         return None
 
     # ------------------------------------------------------------------
-    # Box-pick resolution
+    # Box-pick resolution (domain candidates over backend projection)
     # ------------------------------------------------------------------
 
-    def _build_box_result(
-        x0: int, y0: int, x1: int, y1: int,
-    ) -> Optional[BoxPickResult]:
+    def _build_box_result(box) -> Optional[BoxPickResult]:
+        x0, y0, x1, y1 = box
         if x0 == x1 or y0 == y1:
             return None    # Degenerate rectangle — nothing to pick.
         crossing = x1 < x0
         mode = controller.mode
+
         if mode == MODE_NODE:
             try:
                 pts = np.asarray(grid.points, dtype=np.float64)
             except Exception:
                 return None
-            display = _project_points_to_display(pts, renderer)
+            display = pick_backend.project_points(pts)
             mask = _inside_box(display, x0, y0, x1, y1)
-            picked = node_ids_arr[mask]
             return BoxPickResult(
                 kind=MODE_NODE,
-                ids=picked,
+                ids=node_ids_arr[mask],
                 cell_ids=np.zeros(0, dtype=np.int64),
                 gp_indices=np.zeros(0, dtype=np.int64),
                 box=(x0, y0, x1, y1),
                 crossing=crossing,
             )
+
         if mode == MODE_ELEMENT:
             try:
                 centroids = np.asarray(
@@ -490,14 +320,11 @@ def install_results_pick(
                 )
             except Exception:
                 return None
-            display = _project_points_to_display(centroids, renderer)
+            display = pick_backend.project_points(centroids)
             mask = _inside_box(display, x0, y0, x1, y1)
-            # Phase 3.3 — exclude cells hidden via ElementVisibility.
-            # ``vtkGhostType`` is per-cell on the substrate grid; bit
-            # 0x01 (HIDDENCELL) means "skip this cell in render + pick".
-            # Filters like ``cell_centers`` don't carry the ghost array
-            # over to the result polydata, so we read it back from the
-            # source grid by cell index.
+            # Exclude cells hidden via ElementVisibility — ``vtkGhostType``
+            # bit 0x01 (HIDDENCELL). cell_centers() drops the ghost array,
+            # so read it back from the source grid by cell index.
             try:
                 ghosts = np.asarray(grid.cell_data["vtkGhostType"])
                 if ghosts.size == mask.size:
@@ -523,6 +350,7 @@ def install_results_pick(
                 box=(x0, y0, x1, y1),
                 crossing=crossing,
             )
+
         if mode == MODE_GP:
             if gp_candidates is None:
                 return None
@@ -554,7 +382,7 @@ def install_results_pick(
                     box=(x0, y0, x1, y1),
                     crossing=crossing,
                 )
-            display = _project_points_to_display(centers, renderer)
+            display = pick_backend.project_points(centers)
             mask = _inside_box(display, x0, y0, x1, y1)
             return BoxPickResult(
                 kind=MODE_GP,
@@ -567,82 +395,46 @@ def install_results_pick(
         return None
 
     # ------------------------------------------------------------------
-    # Observer callbacks
+    # Geometric-callback adapters (backend -> FEM resolution)
     # ------------------------------------------------------------------
 
-    def on_lmb_press(caller: Any, _event: str) -> None:
-        try:
-            if caller.GetShiftKey():
-                return
-        except Exception:
-            pass
-        _press_pos[0] = caller.GetEventPosition()
-        _dragging[0] = False
-        _abort(caller, _tags["lmb_press"])
-
-    def on_mouse_move(caller: Any, _event: str) -> None:
-        if _press_pos[0] is None:
+    def _on_geom_pick(hit, _mods) -> None:
+        if hit is None:
             return
-        px, py = caller.GetEventPosition()
-        sx, sy = _press_pos[0]
-        if not _dragging[0]:
-            if (px - sx) ** 2 + (py - sy) ** 2 > drag_threshold_px ** 2:
-                _dragging[0] = True
-        if _dragging[0] and on_box_pick is not None:
-            _update_rubberband(sx, sy, px, py)
-        _abort(caller, _tags["move"])
-
-    def on_lmb_release(caller: Any, _event: str) -> None:
-        if _press_pos[0] is None:
-            return
-        was_drag = _dragging[0]
-        sx, sy = _press_pos[0]
-        x, y = caller.GetEventPosition()
-        _press_pos[0] = None
-        _dragging[0] = False
-        _abort(caller, _tags["lmb_release"])
-        _hide_rubberband()
-
-        # ADR 0047 R-D.2b: Alt-pick-through removed. It existed only to
-        # force-enable the inventory actors that the (dead) per-mode
-        # allow-list left non-pickable — the workaround for GP picking
-        # being broken without Alt. GP markers are pickable now and the
-        # controller routes by mode at resolve time, so Alt is moot.
-        if was_drag:
-            if on_box_pick is None:
-                return
-            box_result = _build_box_result(sx, sy, x, y)
-            if box_result is None:
-                return
-            try:
-                on_box_pick(box_result)
-            except Exception as exc:
-                import sys
-                print(
-                    f"[results_pick] on_box_pick raised: {exc}",
-                    file=sys.stderr,
-                )
-            return
-        result = _build_result(x, y)
+        result = _build_result(hit)
         if result is None:
             return
         try:
             on_pick(result)
         except Exception as exc:
             import sys
-            print(
-                f"[results_pick] on_pick raised: {exc}",
-                file=sys.stderr,
-            )
+            print(f"[results_pick] on_pick raised: {exc}", file=sys.stderr)
 
-    _tags["lmb_press"]   = iren.AddObserver(
-        "LeftButtonPressEvent",   on_lmb_press,   10.0,
-    )
-    _tags["move"]        = iren.AddObserver(
-        "MouseMoveEvent",         on_mouse_move,   9.0,
-    )
-    _tags["lmb_release"] = iren.AddObserver(
-        "LeftButtonReleaseEvent", on_lmb_release, 10.0,
-    )
+    def _on_geom_box(gesture) -> None:
+        if on_box_pick is None:
+            return
+        box_result = _build_box_result(gesture.box)
+        if box_result is None:
+            return
+        try:
+            on_box_pick(box_result)
+        except Exception as exc:
+            import sys
+            print(f"[results_pick] on_box_pick raised: {exc}", file=sys.stderr)
 
+    # ------------------------------------------------------------------
+    # Install the gesture machine via the shared PickBackend.
+    # ------------------------------------------------------------------
+
+    if pick_backend is None:
+        from ..backends._pyvista_pick import PyVistaPickBackend
+
+        assert plotter.iren is not None, (
+            "plotter.iren is None; call plotter.show() before installing "
+            "the results pick observer."
+        )
+        pick_backend = PyVistaPickBackend(plotter, drag_threshold=drag_threshold_px)
+
+    controller._backend = pick_backend
+    pick_backend.install(on_pick=_on_geom_pick, on_box=_on_geom_box)
     return controller

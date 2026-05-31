@@ -1,625 +1,305 @@
-"""install_results_pick — observer install + click-pick filtering.
+"""Results pick controller — geometric hit → FEM result resolution.
 
-Same pattern as the (deleted) ShiftClickPicker tests: simulate VTK
-events with stub callers and verify the right observer paths fire.
+ADR 0047 R-D.2b-ii: the gesture machine (vtkCellPicker, observers,
+rubber-band, projection) moved to ``PyVistaPickBackend`` — covered by
+``test_pyvista_pick_backend.py``. Here we inject a stub backend and fire
+``PickHit`` / ``BoxGesture`` to test the results-specific resolution:
+mode routing (node / element / gp), the dim-pick gate, GP resolution via
+the ``PickInventory``, element-mode GP-occlusion routing, ghost masking,
+and the box projection path. Fully headless.
 """
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-
-def _stub_caller(*, shift: bool = False, x: int = 100, y: int = 100):
-    caller = MagicMock()
-    caller.GetShiftKey.return_value = 1 if shift else 0
-    caller.GetEventPosition.return_value = (x, y)
-    return caller
-
-
-def _stub_plotter():
-    iren = MagicMock()
-    iren.AddObserver.side_effect = [101, 102, 103]
-    plotter = MagicMock()
-    plotter.iren = iren
-    plotter.iren.interactor = iren
-    plotter.renderer = MagicMock()
-    return plotter, iren
+from apeGmsh.viewers.core.results_pick import (
+    ResultsPickController,
+    _inside_box,
+    install_results_pick,
+)
+from apeGmsh.viewers.core.results_pick_engine import PickInventory
+from apeGmsh.viewers.scene_ir import BoxGesture, PickHit, PickModifiers
 
 
-def _stub_scene(cell_to_element_id=None):
-    """Minimal FEMSceneData stand-in with the cell→element-id map."""
-    if cell_to_element_id is None:
-        cell_to_element_id = np.array([1001, 1002, 1003], dtype=np.int64)
-    scene = MagicMock()
-    scene.cell_to_element_id = np.asarray(cell_to_element_id, dtype=np.int64)
-    return scene
+# ── Stubs ───────────────────────────────────────────────────────────
+
+class _StubBackend:
+    """Stand-in PickBackend: records install callbacks, projects via the
+    injected function, and lets a test fire pick / box gestures."""
+
+    def __init__(self, project=None) -> None:
+        self._project = project
+        self.on_pick = None
+        self.on_box = None
+        self.uninstalled = 0
+
+    def install(self, *, on_pick, on_hover=None, on_box=None) -> None:
+        self.on_pick = on_pick
+        self.on_box = on_box
+
+    def project_points(self, pts):
+        if self._project is not None:
+            return self._project(pts)
+        return np.asarray(pts, dtype=np.float64)[:, :2]
+
+    def uninstall(self) -> None:
+        self.uninstalled += 1
+
+    # test drivers
+    def fire_pick(self, hit, mods=None) -> None:
+        self.on_pick(hit, mods or PickModifiers())
+
+    def fire_box(self, box) -> None:
+        self.on_box(BoxGesture(box=box, crossing=box[2] < box[0]))
 
 
-def _capture_handlers(iren):
-    return {
-        call.args[0]: call.args[1]
-        for call in iren.AddObserver.call_args_list
-    }
+class _Scene:
+    """Minimal FEMSceneData stand-in."""
+
+    def __init__(self, *, cell_to_element_id=None, node_ids=None, grid=None,
+                 cell_dim=None, element_id_to_cell=None, inventory=None) -> None:
+        self.cell_to_element_id = np.asarray(
+            cell_to_element_id if cell_to_element_id is not None
+            else [1001, 1002, 1003], dtype=np.int64,
+        )
+        self.node_ids = np.asarray(
+            node_ids if node_ids is not None else [10, 20, 30], dtype=np.int64,
+        )
+        self.grid = grid
+        self.cell_dim = np.asarray(
+            cell_dim if cell_dim is not None else [], dtype=np.int8,
+        )
+        self.element_id_to_cell = element_id_to_cell or {}
+        self.pick_engine = inventory
 
 
-def _install(plotter, on_pick=None, scene=None):
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    seen = []
+def _install(scene, *, on_pick=None, on_box_pick=None, gp_candidates=None,
+             backend=None):
+    seen, boxes = [], []
     cb = on_pick if on_pick is not None else (lambda r: seen.append(r))
+    boxcb = on_box_pick if on_box_pick is not None else (lambda r: boxes.append(r))
+    backend = backend or _StubBackend()
     ctrl = install_results_pick(
-        plotter, cb, scene=scene if scene is not None else _stub_scene(),
+        None, cb, scene=scene, on_box_pick=boxcb,
+        gp_candidates=gp_candidates, pick_backend=backend,
     )
-    return seen, ctrl
+    return ctrl, backend, seen, boxes
 
 
-def _patch_picker(monkeypatch, *, cell_id: int, world=(0.0, 0.0, 0.0)):
-    fake_picker = MagicMock()
-    fake_picker.GetCellId.return_value = cell_id
-    fake_picker.GetPickPosition.return_value = world
-    import vtk
-    monkeypatch.setattr(vtk, "vtkCellPicker", lambda: fake_picker)
-    return fake_picker
+def _hit(prop_id=None, cell_id=0, world=(0.0, 0.0, 0.0)):
+    return PickHit(world=world, cell_id=cell_id, prop_id=prop_id)
 
 
-def _click(handlers, x: int = 50, y: int = 60, shift: bool = False) -> None:
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=x, y=y, shift=shift), "LeftButtonPressEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=x, y=y, shift=shift), "LeftButtonReleaseEvent",
-    )
+# ── click: node ─────────────────────────────────────────────────────
 
-
-# =====================================================================
-# Default mode is node; click on hit fires a node PickResult.
-# =====================================================================
-
-def test_default_mode_is_node(monkeypatch):
-    _patch_picker(monkeypatch, cell_id=42, world=(1.0, 2.0, 3.0))
-    plotter, iren = _stub_plotter()
-    seen, ctrl = _install(plotter)
-    handlers = _capture_handlers(iren)
+def test_default_mode_is_node():
+    ctrl, backend, seen, _ = _install(_Scene())
     assert ctrl.mode == "node"
-
-    _click(handlers)
-
+    backend.fire_pick(_hit(cell_id=2, world=(1.0, 2.0, 3.0)))
     assert len(seen) == 1
-    r = seen[0]
-    assert r.kind == "node"
-    assert r.world == (1.0, 2.0, 3.0)
-    assert r.element_id is None
+    assert seen[0].kind == "node"
+    assert seen[0].world == (1.0, 2.0, 3.0)
+    assert seen[0].element_id is None
 
 
-# =====================================================================
-# Element mode resolves cell_id → FEM element_id via scene.
-# =====================================================================
+def test_miss_hit_none_fires_nothing():
+    ctrl, backend, seen, _ = _install(_Scene())
+    backend.fire_pick(None)
+    assert seen == []
 
-def test_element_mode_resolves_to_element_id(monkeypatch):
-    _patch_picker(monkeypatch, cell_id=1, world=(0.5, 0.5, 0.0))
-    plotter, iren = _stub_plotter()
-    scene = _stub_scene(cell_to_element_id=[1001, 1002, 1003])
-    seen, ctrl = _install(plotter, scene=scene)
-    handlers = _capture_handlers(iren)
+
+def test_negative_cell_id_fires_nothing():
+    ctrl, backend, seen, _ = _install(_Scene())
     ctrl.set_mode("element")
-
-    _click(handlers)
-
-    assert len(seen) == 1
-    r = seen[0]
-    assert r.kind == "element"
-    assert r.element_id == 1002
-    assert r.cell_id == 1
-    assert r.world == (0.5, 0.5, 0.0)
+    backend.fire_pick(_hit(cell_id=-1))
+    assert seen == []
 
 
-# =====================================================================
-# Element mode: out-of-range cell_id (e.g. probe-marker actor) is
-# filtered out so we don't index past the substrate map.
-# =====================================================================
+# ── click: element (substrate) ──────────────────────────────────────
 
-def test_element_mode_drops_out_of_range_cell(monkeypatch):
-    _patch_picker(monkeypatch, cell_id=999, world=(0.0, 0.0, 0.0))
-    plotter, iren = _stub_plotter()
-    scene = _stub_scene(cell_to_element_id=[1001, 1002, 1003])
-    seen, ctrl = _install(plotter, scene=scene)
-    handlers = _capture_handlers(iren)
+def test_element_substrate_resolves_cell_to_element_id():
+    ctrl, backend, seen, _ = _install(
+        _Scene(cell_to_element_id=[1001, 1002, 1003])
+    )
     ctrl.set_mode("element")
+    backend.fire_pick(_hit(prop_id=999, cell_id=1))  # prop not in inventory
+    assert seen[0].kind == "element"
+    assert seen[0].element_id == 1002
+    assert seen[0].cell_id == 1
 
-    _click(handlers)
+
+def test_element_out_of_range_cell_drops():
+    ctrl, backend, seen, _ = _install(_Scene(cell_to_element_id=[1001]))
+    ctrl.set_mode("element")
+    backend.fire_pick(_hit(prop_id=999, cell_id=5))
     assert seen == []
 
 
-# =====================================================================
-# Miss (cell_id < 0) suppresses the callback regardless of mode.
-# =====================================================================
-
-@pytest.mark.parametrize("mode", ["node", "element"])
-def test_miss_does_not_invoke_callback(monkeypatch, mode):
-    _patch_picker(monkeypatch, cell_id=-1)
-    plotter, iren = _stub_plotter()
-    seen, ctrl = _install(plotter)
-    ctrl.set_mode(mode)
-    handlers = _capture_handlers(iren)
-
-    _click(handlers)
-    assert seen == []
-
-
-# =====================================================================
-# Shift+LMB is owned by navigation — pick observer must bail.
-# =====================================================================
-
-def test_shift_lmb_press_does_not_arm_pick(monkeypatch):
-    _patch_picker(monkeypatch, cell_id=7)
-    plotter, iren = _stub_plotter()
-    seen, _ = _install(plotter)
-    handlers = _capture_handlers(iren)
-
-    _click(handlers, shift=True)
-    assert seen == []
-
-
-# =====================================================================
-# Drag releases do not pick (Phase 2c will handle box-select).
-# =====================================================================
-
-def test_drag_release_does_not_pick(monkeypatch):
-    _patch_picker(monkeypatch, cell_id=7, world=(5.0, 5.0, 5.0))
-    plotter, iren = _stub_plotter()
-    seen, _ = _install(plotter)
-    handlers = _capture_handlers(iren)
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=10, y=20), "LeftButtonPressEvent",
+def test_element_dim_gate_rejects_inactive_dim():
+    ctrl, backend, seen, _ = _install(
+        _Scene(cell_to_element_id=[1001, 1002, 1003], cell_dim=[1, 2, 3])
     )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=30, y=40), "MouseMoveEvent",
+    ctrl.set_mode("element")
+    ctrl.active_dims = frozenset({2})        # only dim-2 cells pick
+    backend.fire_pick(_hit(prop_id=999, cell_id=0))  # cell 0 is dim 1
+    assert seen == []
+    backend.fire_pick(_hit(prop_id=999, cell_id=1))  # cell 1 is dim 2
+    assert len(seen) == 1 and seen[0].element_id == 1002
+
+
+# ── click: element via GP-marker occlusion routing ──────────────────
+
+def test_element_mode_gp_marker_resolves_to_owning_element():
+    inv = PickInventory()
+    gp_actor = object()
+    inv.register_actor(gp_actor, "gp", lambda c: (1002, 4, (9.0, 9.0, 9.0)))
+    scene = _Scene(
+        cell_to_element_id=[1001, 1002, 1003],
+        element_id_to_cell={1002: 1},
+        inventory=inv,
     )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=30, y=40), "LeftButtonReleaseEvent",
-    )
+    ctrl, backend, seen, _ = _install(scene)
+    ctrl.set_mode("element")
+    # prop_id is the GP actor → resolves to its element 1002, highlight via cell 1.
+    backend.fire_pick(_hit(prop_id=id(gp_actor), cell_id=0))
+    assert seen[0].kind == "element"
+    assert seen[0].element_id == 1002
+    assert seen[0].cell_id == 1
+
+
+# ── click: gp ───────────────────────────────────────────────────────
+
+def test_gp_mode_resolves_via_inventory():
+    inv = PickInventory()
+    gp_actor = object()
+    inv.register_actor(gp_actor, "gp", lambda c: (1003, 7, (5.0, 6.0, 7.0)))
+    ctrl, backend, seen, _ = _install(_Scene(inventory=inv))
+    ctrl.set_mode("gp")
+    backend.fire_pick(_hit(prop_id=id(gp_actor), cell_id=0))
+    assert seen[0].kind == "gp"
+    assert seen[0].element_id == 1003
+    assert seen[0].gp_index == 7
+    assert seen[0].world == (5.0, 6.0, 7.0)
+
+
+def test_gp_mode_substrate_hit_drops():
+    """A substrate hit (prop not registered) in GP mode resolves to nothing."""
+    ctrl, backend, seen, _ = _install(_Scene(inventory=PickInventory()))
+    ctrl.set_mode("gp")
+    backend.fire_pick(_hit(prop_id=12345, cell_id=0))
     assert seen == []
 
 
-# =====================================================================
-# Callback exceptions are swallowed.
-# =====================================================================
-
-def test_callback_exception_is_swallowed(monkeypatch, capsys):
-    _patch_picker(monkeypatch, cell_id=1)
-    plotter, iren = _stub_plotter()
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    def _raise(_r):
-        raise RuntimeError("boom")
-    install_results_pick(plotter, _raise, scene=_stub_scene())
-    handlers = _capture_handlers(iren)
-
-    _click(handlers)
-    captured = capsys.readouterr()
-    assert "on_pick raised" in captured.err
+def test_gp_mode_no_inventory_drops():
+    ctrl, backend, seen, _ = _install(_Scene(inventory=None))
+    ctrl.set_mode("gp")
+    backend.fire_pick(_hit(prop_id=1, cell_id=0))
+    assert seen == []
 
 
-# =====================================================================
-# Controller validates mode strings.
-# =====================================================================
+# ── callback safety + mode validation ───────────────────────────────
 
-def test_controller_rejects_invalid_mode():
-    from apeGmsh.viewers.core.results_pick import ResultsPickController
+def test_on_pick_exception_swallowed(capsys):
+    def _boom(_r):
+        raise RuntimeError("kaboom")
+    ctrl, backend, _, _ = _install(_Scene(), on_pick=_boom)
+    backend.fire_pick(_hit(world=(0.0, 0.0, 0.0)))  # must not raise
+    assert "kaboom" in capsys.readouterr().err
+
+
+def test_set_mode_rejects_invalid():
     ctrl = ResultsPickController()
-    with pytest.raises(ValueError, match="mode"):
+    with pytest.raises(ValueError, match="must be one of"):
         ctrl.set_mode("bogus")
 
 
-# =====================================================================
-# Box-pick — pure projection / inside-box helpers
-# =====================================================================
+# ── uninstall delegation ────────────────────────────────────────────
 
-def test_inside_box_basic():
-    from apeGmsh.viewers.core.results_pick import _inside_box
-    pts = np.array([
-        [10.0, 10.0],
-        [50.0, 50.0],
-        [99.0, 99.0],
-        [101.0, 50.0],    # outside (x too big)
-        [50.0, -1.0],     # outside (y too small)
-    ])
-    mask = _inside_box(pts, 0.0, 0.0, 100.0, 100.0)
-    np.testing.assert_array_equal(mask, [True, True, True, False, False])
+def test_uninstall_delegates_to_backend():
+    ctrl, backend, _, _ = _install(_Scene())
+    ctrl.uninstall()
+    assert backend.uninstalled == 1
 
 
-def test_inside_box_handles_reversed_corners():
-    """A right-to-left drag should still produce the correct mask
-    (the helper sorts the corners internally before testing)."""
-    from apeGmsh.viewers.core.results_pick import _inside_box
-    pts = np.array([[50.0, 50.0]])
-    mask_lr = _inside_box(pts, 0.0, 0.0, 100.0, 100.0)
-    mask_rl = _inside_box(pts, 100.0, 100.0, 0.0, 0.0)
-    np.testing.assert_array_equal(mask_lr, mask_rl)
+# ── box pick ────────────────────────────────────────────────────────
+
+class _Grid:
+    """Minimal grid stub exposing points + cell_centers + ghost data."""
+    def __init__(self, points, centers, ghost=None):
+        self.points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        self._centers = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
+        self.cell_data = {} if ghost is None else {"vtkGhostType": np.asarray(ghost)}
+
+    def cell_centers(self):
+        return type("C", (), {"points": self._centers})()
 
 
-# =====================================================================
-# Drag release fires on_box_pick (mode=node).
-# =====================================================================
+def _proj_xy(pts):
+    """Project = take (x, y) as display coords (identity)."""
+    return np.asarray(pts, dtype=np.float64)[:, :2]
 
-def test_drag_release_node_mode_box_picks(monkeypatch):
-    # Fake the per-point projection so the test doesn't need a live
-    # renderer. We project point i to display (i*10, i*10) — first
-    # three points fall inside (0,0)-(25,25), the fourth is outside.
-    import apeGmsh.viewers.core.results_pick as mod
 
-    def fake_project(points, _renderer):
-        return np.column_stack([
-            np.arange(points.shape[0]) * 10.0,
-            np.arange(points.shape[0]) * 10.0,
-        ])
-    monkeypatch.setattr(mod, "_project_points_to_display", fake_project)
+def test_box_node_selects_inside():
+    grid = _Grid(points=[[0, 0, 0], [5, 5, 0], [100, 100, 0]], centers=[])
+    scene = _Scene(node_ids=[10, 20, 30], grid=grid)
+    ctrl, backend, _, boxes = _install(scene, backend=_StubBackend(project=_proj_xy))
+    backend.fire_box((-1, -1, 10, 10))   # box covers nodes 0,1 not 2
+    assert len(boxes) == 1
+    r = boxes[0]
+    assert r.kind == "node"
+    assert sorted(r.ids.tolist()) == [10, 20]
+    assert r.crossing is False
 
-    plotter, iren = _stub_plotter()
-    grid = MagicMock()
-    grid.points = np.zeros((4, 3), dtype=np.float64)
-    scene = MagicMock()
-    scene.grid = grid
-    scene.cell_to_element_id = np.array([1001, 1002, 1003], dtype=np.int64)
-    scene.node_ids = np.array([10, 20, 30, 40], dtype=np.int64)
 
-    box_seen: list = []
-    pick_seen: list = []
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    install_results_pick(
-        plotter,
-        on_pick=pick_seen.append,
-        on_box_pick=box_seen.append,
-        scene=scene,
+def test_box_element_selects_inside_with_ghost_mask():
+    grid = _Grid(
+        points=[], centers=[[0, 0, 0], [5, 5, 0], [100, 100, 0]],
+        ghost=[0, 1, 0],   # cell 1 hidden (HIDDENCELL bit)
     )
-    handlers = _capture_handlers(iren)
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonPressEvent",
-    )
-    # Cross drag threshold so the engine flags a drag.
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=25, y=25), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=25, y=25), "LeftButtonReleaseEvent",
-    )
-
-    assert pick_seen == []
-    assert len(box_seen) == 1
-    box = box_seen[0]
-    assert box.kind == "node"
-    np.testing.assert_array_equal(box.ids, [10, 20, 30])
-    assert box.crossing is False
-
-
-def test_drag_release_element_mode_box_picks(monkeypatch):
-    import apeGmsh.viewers.core.results_pick as mod
-
-    def fake_project(points, _renderer):
-        return np.column_stack([
-            np.arange(points.shape[0]) * 10.0,
-            np.arange(points.shape[0]) * 10.0,
-        ])
-    monkeypatch.setattr(mod, "_project_points_to_display", fake_project)
-
-    plotter, iren = _stub_plotter()
-    grid = MagicMock()
-    grid.cell_centers.return_value.points = np.zeros((4, 3), dtype=np.float64)
-    grid.points = np.zeros((4, 3), dtype=np.float64)
-    scene = MagicMock()
-    scene.grid = grid
-    scene.cell_to_element_id = np.array(
-        [1001, 1002, 1003, 1004], dtype=np.int64,
-    )
-    scene.node_ids = np.zeros(4, dtype=np.int64)
-
-    box_seen: list = []
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl = install_results_pick(
-        plotter,
-        on_pick=lambda r: None,
-        on_box_pick=box_seen.append,
-        scene=scene,
-    )
+    scene = _Scene(cell_to_element_id=[1001, 1002, 1003], grid=grid)
+    ctrl, backend, _, boxes = _install(scene, backend=_StubBackend(project=_proj_xy))
     ctrl.set_mode("element")
-    handlers = _capture_handlers(iren)
+    backend.fire_box((-1, -1, 10, 10))   # covers cells 0,1; 1 ghost-hidden
+    r = boxes[0]
+    assert r.kind == "element"
+    assert r.ids.tolist() == [1001]      # cell 1 excluded by ghost mask
+    assert r.cell_ids.tolist() == [0]
 
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=100, y=100), "LeftButtonPressEvent",
+
+def test_box_degenerate_rectangle_drops():
+    grid = _Grid(points=[[0, 0, 0]], centers=[])
+    scene = _Scene(node_ids=[10], grid=grid)
+    ctrl, backend, _, boxes = _install(scene, backend=_StubBackend(project=_proj_xy))
+    backend.fire_box((5, 5, 5, 50))      # x0 == x1 → degenerate
+    assert boxes == []
+
+
+def test_box_gp_via_candidates():
+    centers = np.array([[0, 0, 0], [100, 100, 0]], dtype=np.float64)
+    gp_eids = np.array([1001, 1002], dtype=np.int64)
+    gp_idxs = np.array([0, 1], dtype=np.int64)
+    scene = _Scene(grid=_Grid(points=[], centers=[]))
+    backend = _StubBackend(project=_proj_xy)
+    ctrl, backend, _, boxes = _install(
+        scene, gp_candidates=lambda: (centers, gp_eids, gp_idxs), backend=backend,
     )
-    # Drag right-to-left → "crossing" mode (x1 < x0).
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=0, y=0), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonReleaseEvent",
-    )
-
-    assert len(box_seen) == 1
-    box = box_seen[0]
-    assert box.kind == "element"
-    # Cells whose centroids project to (0,0)..(40,40) — all fall
-    # within the (100,100)→(0,0) box, so all four are picked.
-    np.testing.assert_array_equal(box.ids, [1001, 1002, 1003, 1004])
-    np.testing.assert_array_equal(box.cell_ids, [0, 1, 2, 3])
-    assert box.crossing is True
-
-
-def test_degenerate_drag_does_not_box_pick(monkeypatch):
-    """A drag that crosses the threshold but still ends with x0==x1
-    or y0==y1 (zero-area rectangle) should not fire on_box_pick."""
-    plotter, iren = _stub_plotter()
-    scene = _stub_scene()
-    box_seen: list = []
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    install_results_pick(
-        plotter,
-        on_pick=lambda r: None,
-        on_box_pick=box_seen.append,
-        scene=scene,
-    )
-    handlers = _capture_handlers(iren)
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=10, y=10), "LeftButtonPressEvent",
-    )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=10, y=30), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=10, y=10), "LeftButtonReleaseEvent",   # x0 == x1
-    )
-    assert box_seen == []
-
-
-# =====================================================================
-# GP mode dispatch via gp_resolver.
-# =====================================================================
-
-def test_gp_mode_dispatches_via_resolver(monkeypatch):
-    """When mode == "gp", the pick observer queries gp_resolver with
-    the picked actor + cell_id and packages the result as a
-    PickResult(kind="gp", element_id=..., gp_index=..., world=...)."""
-    fake_picker = MagicMock()
-    fake_picker.GetCellId.return_value = 5
-    fake_picker.GetPickPosition.return_value = (0.0, 0.0, 0.0)
-    fake_actor = MagicMock(name="GpDiagramActor")
-    fake_picker.GetActor.return_value = fake_actor
-    import vtk
-    monkeypatch.setattr(vtk, "vtkCellPicker", lambda: fake_picker)
-
-    plotter, iren = _stub_plotter()
-    seen, ctrl = _install(plotter)    # default scene; not used in GP path
-    handlers = _capture_handlers(iren)
-
-    resolver_calls: list = []
-    def resolver(actor, cell_id):
-        resolver_calls.append((actor, cell_id))
-        return (1042, 7, np.array([1.0, 2.0, 3.0]))
-
-    # Re-install with the resolver wired in.
-    plotter, iren = _stub_plotter()
-    seen2 = []
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl2 = install_results_pick(
-        plotter,
-        on_pick=seen2.append,
-        scene=_stub_scene(),
-        gp_resolver=resolver,
-    )
-    handlers = _capture_handlers(iren)
-    ctrl2.set_mode("gp")
-
-    _click(handlers, x=50, y=60)
-
-    assert len(resolver_calls) == 1
-    assert resolver_calls[0] == (fake_actor, 5)
-    assert len(seen2) == 1
-    r = seen2[0]
+    ctrl.set_mode("gp")
+    backend.fire_box((-1, -1, 10, 10))   # covers center 0 only
+    r = boxes[0]
     assert r.kind == "gp"
-    assert r.element_id == 1042
-    assert r.gp_index == 7
-    assert r.world == (1.0, 2.0, 3.0)
+    assert r.ids.tolist() == [1001]
+    assert r.gp_indices.tolist() == [0]
 
 
-def test_gp_mode_resolver_returning_none_skips_pick(monkeypatch):
-    """If the resolver returns None (picked actor isn't a known GP
-    diagram), the observer must not fire on_pick."""
-    fake_picker = MagicMock()
-    fake_picker.GetCellId.return_value = 0
-    fake_picker.GetPickPosition.return_value = (0.0, 0.0, 0.0)
-    fake_picker.GetActor.return_value = MagicMock()
-    import vtk
-    monkeypatch.setattr(vtk, "vtkCellPicker", lambda: fake_picker)
+# ── _inside_box helper (kept; imported by test_element_visibility too) ─
 
-    plotter, iren = _stub_plotter()
-    seen = []
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl = install_results_pick(
-        plotter,
-        on_pick=seen.append,
-        scene=_stub_scene(),
-        gp_resolver=lambda _a, _c: None,
-    )
-    handlers = _capture_handlers(iren)
-    ctrl.set_mode("gp")
-
-    _click(handlers, x=50, y=60)
-    assert seen == []
+def test_inside_box_window():
+    xy = np.array([[1.0, 1.0], [5.0, 5.0], [11.0, 11.0]])
+    mask = _inside_box(xy, 0, 0, 10, 10)
+    assert mask.tolist() == [True, True, False]
 
 
-# =====================================================================
-# GP box-pick: drag in GP mode projects candidate GP centers + masks.
-# =====================================================================
-
-def test_gp_box_pick_dispatches_via_candidates(monkeypatch):
-    import apeGmsh.viewers.core.results_pick as mod
-
-    def fake_project(points, _renderer):
-        return np.column_stack([
-            np.arange(points.shape[0]) * 10.0,
-            np.arange(points.shape[0]) * 10.0,
-        ])
-    monkeypatch.setattr(mod, "_project_points_to_display", fake_project)
-
-    plotter, iren = _stub_plotter()
-    box_seen: list = []
-
-    centers = np.array([
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [2.0, 2.0, 0.0],
-        [3.0, 3.0, 0.0],
-    ])
-    element_ids = np.array([1001, 1001, 1002, 1003], dtype=np.int64)
-    gp_indices = np.array([0, 1, 0, 0], dtype=np.int64)
-
-    def candidates():
-        return centers, element_ids, gp_indices
-
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl = install_results_pick(
-        plotter,
-        on_pick=lambda r: None,
-        on_box_pick=box_seen.append,
-        scene=_stub_scene(),
-        gp_candidates=candidates,
-    )
-    handlers = _capture_handlers(iren)
-    ctrl.set_mode("gp")
-
-    # Drag from (0,0) to (25,25) — projection puts centers at
-    # (0,0), (10,10), (20,20), (30,30); first three fall inside.
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonPressEvent",
-    )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=25, y=25), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=25, y=25), "LeftButtonReleaseEvent",
-    )
-
-    assert len(box_seen) == 1
-    box = box_seen[0]
-    assert box.kind == "gp"
-    np.testing.assert_array_equal(box.ids, [1001, 1001, 1002])
-    np.testing.assert_array_equal(box.gp_indices, [0, 1, 0])
-
-
-def test_gp_box_pick_with_no_candidates_returns_empty(monkeypatch):
-    """When ``gp_candidates`` returns an empty result (no GP markers
-    on screen), the box-pick path emits an empty BoxPickResult rather
-    than firing the callback with a stale state."""
-    plotter, iren = _stub_plotter()
-    box_seen: list = []
-
-    def candidates():
-        return (
-            np.zeros((0, 3), dtype=np.float64),
-            np.zeros(0, dtype=np.int64),
-            np.zeros(0, dtype=np.int64),
-        )
-
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl = install_results_pick(
-        plotter,
-        on_pick=lambda r: None,
-        on_box_pick=box_seen.append,
-        scene=_stub_scene(),
-        gp_candidates=candidates,
-    )
-    handlers = _capture_handlers(iren)
-    ctrl.set_mode("gp")
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonPressEvent",
-    )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=25, y=25), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=25, y=25), "LeftButtonReleaseEvent",
-    )
-
-    assert len(box_seen) == 1
-    box = box_seen[0]
-    assert box.kind == "gp"
-    assert box.ids.size == 0
-    assert box.gp_indices.size == 0
-
-
-def test_gp_box_pick_without_candidates_skips(monkeypatch):
-    """Without ``gp_candidates`` wired, drag in GP mode is a silent
-    no-op (no callback). Phase 2c default for GP."""
-    plotter, iren = _stub_plotter()
-    box_seen: list = []
-
-    from apeGmsh.viewers.core.results_pick import install_results_pick
-    ctrl = install_results_pick(
-        plotter,
-        on_pick=lambda r: None,
-        on_box_pick=box_seen.append,
-        scene=_stub_scene(),
-        # gp_candidates=None
-    )
-    handlers = _capture_handlers(iren)
-    ctrl.set_mode("gp")
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonPressEvent",
-    )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=25, y=25), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=25, y=25), "LeftButtonReleaseEvent",
-    )
-
-    assert box_seen == []
-
-
-def test_gp_mode_without_resolver_skips_pick(monkeypatch):
-    """When ``gp_resolver`` is None and the user is in GP mode, picks
-    silently no-op rather than crashing."""
-    fake_picker = MagicMock()
-    fake_picker.GetCellId.return_value = 0
-    fake_picker.GetPickPosition.return_value = (0.0, 0.0, 0.0)
-    fake_picker.GetActor.return_value = MagicMock()
-    import vtk
-    monkeypatch.setattr(vtk, "vtkCellPicker", lambda: fake_picker)
-
-    plotter, iren = _stub_plotter()
-    seen, ctrl = _install(plotter)    # gp_resolver omitted (None)
-    handlers = _capture_handlers(iren)
-    ctrl.set_mode("gp")
-
-    _click(handlers, x=50, y=60)
-    assert seen == []
-
-
-def test_box_pick_disabled_when_callback_is_none(monkeypatch):
-    """Without on_box_pick, drag should be silently absorbed (no
-    rubber-band rectangle, no callback). Phase 2a/2b behavior."""
-    _patch_picker(monkeypatch, cell_id=42, world=(0.0, 0.0, 0.0))
-    plotter, iren = _stub_plotter()
-    scene = _stub_scene()
-    seen, _ = _install(plotter, scene=scene)    # on_box_pick defaults to None
-    handlers = _capture_handlers(iren)
-
-    handlers["LeftButtonPressEvent"](
-        _stub_caller(x=0, y=0), "LeftButtonPressEvent",
-    )
-    handlers["MouseMoveEvent"](
-        _stub_caller(x=20, y=20), "MouseMoveEvent",
-    )
-    handlers["LeftButtonReleaseEvent"](
-        _stub_caller(x=20, y=20), "LeftButtonReleaseEvent",
-    )
-    assert seen == []    # No click pick (was a drag).
-    # No on_box_pick → silent no-op. The plotter's add_actor2D
-    # mock should not have been called for a rubber-band actor
-    # because we never called _ensure_rubberband.
-    assert plotter.renderer.AddActor2D.call_count == 0
+def test_inside_box_reversed_corners_normalized():
+    xy = np.array([[5.0, 5.0]])
+    assert _inside_box(xy, 10, 10, 0, 0).tolist() == [True]

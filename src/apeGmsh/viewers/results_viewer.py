@@ -1218,7 +1218,6 @@ class ResultsViewer:
             plotter,
             on_pick=self._on_results_pick,
             on_box_pick=self._on_results_box_pick,
-            gp_resolver=self._resolve_gp_pick,
             gp_candidates=self._collect_gp_candidates,
             scene=scene,
         )
@@ -2089,31 +2088,6 @@ class ResultsViewer:
                 timeout=4000,
             )
 
-    def _resolve_gp_pick(self, picked_actor, cell_id):
-        """Walk active GaussPointDiagrams and resolve the picked cell.
-
-        Returns ``(element_id, gp_index, world_xyz)`` if any active
-        :class:`GaussPointDiagram` owns the picked actor and can map
-        ``cell_id`` to a GP center. ``None`` otherwise — the pick
-        observer treats that as "miss" and silently drops it.
-        """
-        if self._director is None or picked_actor is None:
-            return None
-        from .diagrams._gauss_marker import GaussPointDiagram
-        try:
-            diagrams = list(self._director.registry.diagrams())
-        except Exception:
-            return None
-        for d in diagrams:
-            if not isinstance(d, GaussPointDiagram):
-                continue
-            if getattr(d, "_actor", None) is not picked_actor:
-                continue
-            try:
-                return d.resolve_picked_cell(cell_id)
-            except Exception:
-                return None
-        return None
 
     def _collect_gp_candidates(self):
         """Aggregate GP centers across active GaussPointDiagrams.
