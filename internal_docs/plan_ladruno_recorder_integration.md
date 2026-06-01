@@ -391,10 +391,22 @@ against committed fork fixtures (`tests/fixtures/ladruno/*.ladruno`), no factory
   runs the standalone `recorder EnergyBalance` instead of the `.ladruno` `-G energy`
   channel. Surfacing `ERR%` as a viewer/history-plot badge is also deferred (UI).
 
-### L5 — Polish / docs / parity gate
-- Pin the two-version window; document `from_ladruno` in `references/results.md`
-  + the contract row; CHANGELOG. Confirm the family basis lib is the one the
-  bezier work will import (avoid a second copy).
+### L5 — Polish / docs / parity gate — ✅ DONE
+- **Version window pinned + documented** — `schema/_versions.py` now states the
+  rolling **two-version** acceptance policy (current N + prior N-1, ADR 0023 spirit);
+  set stays `(1,)` until the writer ships v2 (then widen to `(1, 2)`, not `(2,)`).
+- **Docs** — `references/results.md` gains the `from_ladruno` constructor row (the
+  self-sufficient exception to the model-required rule), an example, a notes bullet
+  (neutral gauss/line vs token-driven elements, local_axes, energy, partition
+  auto-discovery), and the §7 quick-ref line. `references/ladruno.md` gains the
+  element-value-channels section + the `line_force` recorder-orientation note. The
+  `apegmsh-helper` mirror was regenerated (`scripts/sync_skill.py`; `--check` exit 0).
+- **CHANGELOG** — one consolidated "Ladruno `.ladruno` recorder: emit + canonical
+  read" entry covering emit (`ops.recorder.Ladruno`), read (`Results.from_ladruno`),
+  neutral/token reads, orientation, energy, and the self-describing `_basis` path.
+- **Basis-lib single-copy confirmed** — `src/apeGmsh/_basis.py` is the one neutral
+  evaluator; the bezier read path imports it (no second copy). Verified to 2.2e-16
+  against the reference elements.
 
 ---
 

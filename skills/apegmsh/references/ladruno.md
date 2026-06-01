@@ -40,8 +40,33 @@ scalar-first quaternions plus `.matrices` / `.x_axis` / `.y_axis` / `.z_axis`. T
 axes are the **rows** of each matrix (OpenSees `quatFromMat` stores the transpose), in
 global coords — verified: a beam's `.x_axis` points along node1→node2. So beam
 orientation for line/section-force diagrams comes straight from `.ladruno` (wired
-classes; ElasticBeam3d today), **not** the native `vecxz` path. Energy lands via
-**`results.energy(region=)`** → a DataFrame `KE/IE/DW/ULW/RES/ERR` (recorder `-G energy`).
+classes; ElasticBeam3d today), **not** the native `vecxz` path: `results.plot.line_force(...)`
+prefers the recorder frame (true cross-section roll) over the geometric guess. Energy
+lands via **`results.energy(region=)`** → a DataFrame `KE/IE/DW/ULW/RES/ERR` (recorder
+`-G energy`).
+
+**Element value channels** read through the same `results.elements.*` API as any
+backend, with one Ladruno-specific split (the file is self-describing, so component
+names come from the file):
+
+- `results.elements.gauss.get(component="stress_xx")` — continuum stress/strain,
+  **neutral** vocabulary (handles both `sigma11` and `sigma_xx`/`eps_xx`/`gamma_xy`
+  token forms; cross-backend).
+- `results.elements.line_stations.get(component="axial_force")` — beam internal-force
+  diagrams, **neutral** (`axial_force`/`shear_y`/…; `localForce` end forces get the
+  sign-continuity flip, `basicForce` is one station at ξ=0).
+- `results.elements.get(component="localForce")` — **token-driven**: the component is
+  the file's `ON_ELEMENTS/<token>` key (`basicForce`/`localForce`/`force`/`globalForce`)
+  and the slab is the raw `(T, E, NUM_COLUMNS)` block in the file's column order. (This
+  is the one place Ladruno's element API differs from MPCO's neutral
+  `nodal_resisting_force_*` — Ladruno is file-driven; the neutral beam view is
+  `line_stations`.)
+
+Multi-partition runs (`<stem>.part-N.ladruno`) auto-discover siblings and merge
+(node-union + element-concat), like `from_mpco`. Higher-order / Bézier elements are
+self-describing: GP world coords are reconstructed from the file's `BASIS` +
+`GP_PARAM` via the neutral `apeGmsh._basis` evaluator (shared with the Bézier read
+path), since a `.ladruno` from a Bézier element carries no `GLOBAL_GP_COORDS`.
 
 ## Contract lives in the fork repo
 
