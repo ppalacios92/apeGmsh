@@ -124,7 +124,31 @@ if TYPE_CHECKING:
     from .analysis.eigen import EigenResult
 
 
-__all__ = ["apeSees", "BuiltModel"]
+__all__ = ["apeSees", "BuiltModel", "WarnUnconsumedModelLoads"]
+
+
+class WarnUnconsumedModelLoads(UserWarning):
+    """ADR 0051 §7 reconciliation warning (BL-4).
+
+    Fires at build time when the geometry declared a load / imposed-
+    displacement **case** (via ``g.loads.case(...)`` /
+    ``g.displacements.case(...)``) that **no** bridge pattern imported
+    with ``p.from_model(case)``.  It **warns, does not fail** — a model
+    may deliberately drop a case.  Silence a deliberately-dropped case
+    with ``ops.ignore_model_loads(case)``.
+
+    Tagged subclass (mirrors :class:`OpenSeesAutoEmitWarning`) so the
+    pytest default filter ignores it across the suite — real users in
+    interactive sessions still see it, and tests that assert it via
+    ``pytest.warns(WarnUnconsumedModelLoads)`` keep working (``warns``
+    overrides the ignore filter within its context).
+
+    Scope note: the parallel reconciliation for ``g.masses`` /
+    ``g.constraints.bc`` not mirrored by ``ops.mass`` / ``ops.fix`` is
+    DEFERRED to the BRIDGE-1 masses/constraints follow-up round (ADR
+    0051 Consequences), where it ships alongside the
+    ``ops.mass.from_model`` / ``ops.fix.from_model`` import symmetry.
+    """
 
 
 class OpenSeesAutoEmitWarning(UserWarning):
@@ -484,6 +508,10 @@ class BuiltModel:
     region_records:          tuple[RegionAssignmentRecord, ...]
     initial_stress_records:  tuple[InitialStressRecord, ...] = ()
     stage_records:           tuple[StageRecord, ...] = ()
+    # ADR 0051 §7 (BL-4): load cases the user explicitly chose to drop
+    # via ``ops.ignore_model_loads(case)`` — excluded from the
+    # WarnUnconsumedModelLoads reconciliation pass.
+    ignored_model_load_cases: frozenset[str] = frozenset()
 
     def _claimed_recorder_ids(self) -> "set[int]":
         """``id(...)``-set of recorders claimed by stage builders
@@ -543,6 +571,103 @@ class BuiltModel:
             for stage in self.stage_records
             for p in stage.pattern_specs
         }
+
+    # -- ADR 0051 §5 / §7 — two-mode guard + reconciliation (BL-4) ------
+
+    def _validate_two_mode_no_mixing(self) -> None:
+        """ADR 0051 §5: a staged model may not also carry a **global**
+        load pattern.
+
+        A model is either **non-staged** (a global ``ops.pattern.*`` +
+        the analysis chain + ``ops.analyze`` / ``ops.eigen``) **or**
+        **staged** (every pattern stage-scoped via ``s.pattern(...)``,
+        run through ``ops.tcl`` / ``ops.py``).  Mixing the two is a
+        hard error: a global pattern fires in every stage's analyze
+        loop (ADR 0031), silently double-applying its loads across the
+        staged ``loadConst`` boundaries.
+
+        A "global" pattern is any :class:`Pattern` registered directly
+        on the bridge whose id is NOT claimed by a stage via
+        ``s.pattern(...)`` (those live in ``_claimed_pattern_ids``).
+        """
+        if not self.stage_records:
+            return
+        claimed = self._claimed_pattern_ids()
+        globals_ = [
+            p for p in self.primitives
+            if isinstance(p, Pattern) and id(p) not in claimed
+        ]
+        if not globals_:
+            return
+        kinds = ", ".join(sorted({type(p).__name__ for p in globals_}))
+        stage_names = ", ".join(repr(s.name) for s in self.stage_records)
+        raise BridgeError(
+            f"apeSees: cannot mix a global ops.pattern.* registration "
+            f"({kinds}) with staged analysis (stages: {stage_names}). "
+            "Per ADR 0051 §5 every pattern in a staged model must "
+            "be stage-scoped: create it inside the stage via "
+            "s.pattern(series=...), not ops.pattern.Plain(...). A model "
+            "is either non-staged (global pattern + ops.analyze) OR "
+            "staged (per-stage patterns) — never both."
+        )
+
+    def _declared_model_cases(self) -> list[str]:
+        """Distinct load / imposed-displacement **case** names declared
+        on the geometry (resolved onto ``fem.nodes``), in first-seen
+        order.  Cases come from nodal loads and prescribed (non-
+        homogeneous) SPs — the channels ``p.from_model(case)`` can
+        actually import (ADR 0051 §3 all-nodal)."""
+        cases: list[str] = []
+        nodes = getattr(self.fem, "nodes", None)
+        if nodes is None:
+            return cases
+        loads = getattr(nodes, "loads", None)
+        if loads is not None:
+            for c in loads.patterns():
+                if c not in cases:
+                    cases.append(c)
+        sp = getattr(nodes, "sp", None)
+        if sp is not None:
+            for rec in sp.prescribed():
+                if rec.pattern is not None and rec.pattern not in cases:
+                    cases.append(rec.pattern)
+        return cases
+
+    def _imported_model_cases(self) -> set[str]:
+        """All case names pulled in by ``p.from_model(case)`` across
+        every registered pattern (global + stage-scoped — both live in
+        ``self.primitives``)."""
+        out: set[str] = set()
+        for p in self.primitives:
+            if isinstance(p, Pattern):
+                out.update(getattr(p, "from_model_cases", ()))
+        return out
+
+    def _warn_unconsumed_model_loads(self) -> None:
+        """ADR 0051 §7: warn (never fail) per geometry-declared case
+        that no bridge pattern imported and the user did not silence
+        via ``ops.ignore_model_loads(case)``.
+
+        The masses / ``g.constraints.bc`` mirror reconciliation is
+        DEFERRED to the BRIDGE-1 follow-up round (ADR 0051
+        Consequences) — see :class:`WarnUnconsumedModelLoads`.
+        """
+        import warnings as _warnings
+
+        imported = self._imported_model_cases()
+        for case in self._declared_model_cases():
+            if case in imported or case in self.ignored_model_load_cases:
+                continue
+            _warnings.warn(
+                f"load case {case!r} was declared on the geometry "
+                "(g.loads / g.displacements) but no bridge pattern "
+                f"imported it. Add p.from_model({case!r}) inside an "
+                "ops.pattern.Plain / s.pattern block, or call "
+                f"ops.ignore_model_loads({case!r}) to silence "
+                "(ADR 0051 §7).",
+                WarnUnconsumedModelLoads,
+                stacklevel=2,
+            )
 
     def emit(
         self, emitter: Emitter, *, split: bool = False,
@@ -652,6 +777,13 @@ class BuiltModel:
                         "stage's records."
                     )
                 name_to_owner[rec.name] = f"stage {stage.name!r}"
+
+        # 2c. ADR 0051 (BL-4): two-mode no-mixing guard (raise) +
+        # unconsumed-model-load reconciliation (warn).  Both run on
+        # every emit path (flat / split / partitioned) before any
+        # primitive is emitted.
+        self._validate_two_mode_no_mixing()
+        self._warn_unconsumed_model_loads()
 
         # 3. Pre-bin: separate transforms, elements, the rest.
         transforms: list[GeomTransf] = []
@@ -3873,6 +4005,10 @@ class apeSees:
         # discoverable via ``tag_for[id(p)]``.  Mirrors
         # ``_stage_claimed_recorder_ids``.
         self._stage_claimed_pattern_ids: set[int] = set()
+        # ADR 0051 §7 (BL-4): load cases the user deliberately dropped
+        # via ``ops.ignore_model_loads(case)`` — excluded from the
+        # WarnUnconsumedModelLoads reconciliation at build time.
+        self._ignored_model_load_cases: set[str] = set()
         # Resolve the sentinel: unset → Cartesian() (Z-up). Explicit
         # None disables the auto-default (2D models).
         if isinstance(default_orientation, _UnsetType):
@@ -4318,10 +4454,14 @@ class apeSees:
         Returns
         -------
         Plain
-            The registered :class:`Plain` pattern.  Phase SSI-3 ships
-            the pattern as a global registration; if used inside a
-            staged deck, it fires in every stage's analyze loop
-            (gate via the time series if that's not desired).
+            The registered :class:`Plain` pattern.  This is a **global**
+            (non-staged) pattern: it is valid only in a non-staged deck
+            (global pattern + ``ops.analyze``).  Per ADR 0051 §5 a model
+            may not mix a global pattern with stages — combining this
+            with ``ops.stage(...)`` raises :class:`BridgeError` at build.
+            For prescribed motion inside a staged deck, author the ``sp``
+            on a stage pattern instead (``with s.pattern(series=...) as
+            p: p.sp(...)``).
 
         Notes
         -----
@@ -4392,6 +4532,28 @@ class apeSees:
                             continue
                         plain.sp(node=int(node), dof=dof, value=float(value))
         return plain
+
+    def ignore_model_loads(self, case: str) -> None:
+        """Silence the :class:`WarnUnconsumedModelLoads` reconciliation
+        warning for a deliberately-dropped load case (ADR 0051 §7).
+
+        By default the bridge warns at build time when the geometry
+        declared a load / imposed-displacement **case** (via
+        ``g.loads.case(...)`` / ``g.displacements.case(...)``) that no
+        bridge pattern imported with ``p.from_model(case)``.  Call this
+        for any case you intentionally do not bring into the deck so the
+        warning stays a precise signal rather than expected noise::
+
+            ops.ignore_model_loads("seismic")   # handled elsewhere
+
+        Idempotent; the same case may be ignored more than once.
+        """
+        if not isinstance(case, str) or not case:
+            raise ValueError(
+                "apeSees.ignore_model_loads: case must be a non-empty "
+                f"str (got {case!r})."
+            )
+        self._ignored_model_load_cases.add(case)
 
     def stage(self, name: str) -> "_StageBuilder":
         """Open a staged-analysis block (Phase SSI-2.A).
@@ -4960,6 +5122,7 @@ class apeSees:
             region_records=tuple(self._region_records),
             initial_stress_records=tuple(self._initial_stress_records),
             stage_records=tuple(self._stage_records),
+            ignored_model_load_cases=frozenset(self._ignored_model_load_cases),
         )
 
     # -- Internal helpers ------------------------------------------------

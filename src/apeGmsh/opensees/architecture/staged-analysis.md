@@ -504,6 +504,20 @@ non-empty). H1 / H2 / M4 land in #312; V1-V4 land in Phase SSI-2.D
 + `_render_offender_line` helpers so error messages stay
 consistent across rules.
 
+One further build-time guard, the **two-mode no-mixing rule** (ADR
+0051 §5, BL-4), is *not* part of `_run_staged_bc_validators` — it runs
+in `BuiltModel.emit` (`_validate_two_mode_no_mixing`) before any emit
+path is chosen: a staged model that also registers a **global**
+`ops.pattern.*` (one whose id is not in `_claimed_pattern_ids`, i.e.
+not created via `s.pattern(...)`) raises `BridgeError`. A global
+pattern fires in every stage's analyze loop (ADR 0031) and would
+silently double-apply its loads across the staged `loadConst`
+boundaries. Alongside it, `_warn_unconsumed_model_loads` emits a
+`WarnUnconsumedModelLoads` per geometry-declared load case that no
+pattern imported (silenceable with `ops.ignore_model_loads(case)`);
+the masses / `g.constraints.bc` mirror reconciliation is deferred to
+the BRIDGE-1 follow-up round.
+
 - **H1 — global fix/mass/region on stage-bound nodes** (PR #312,
   refactored in #323): `_validate_no_stage_bound_node_targets`
   raises `BridgeError` with an offender list naming each
