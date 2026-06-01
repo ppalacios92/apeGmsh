@@ -14,6 +14,26 @@ Fork-gated at run time: emitting deck text works on any build; the live emitter 
 
 **Reading the output** — `apeGmsh.profiler.open(path)` / `apeGmsh.profiler.show_web(path)` are a thin, fork-free-at-import bridge to the fork's out-of-tree `Ladruno_tools/profiler_viewer`: `open` re-exports its `ProfilerResults` loader (`manifest` / `rollup` / `series` / `diff`; `series` is the per-step "monitor"), `show_web` launches the one-process React UI. apeGmsh re-exports, never re-implements. The viewer dir must be importable (`viewer_dir=` kwarg, `LADRUNO_PROFILER_VIEWER` env var, or `sys.path`); otherwise a clear install-hint error fires.
 
+### ADDED — Ladruno `.ladruno` recorder: emit + canonical read (`ops.recorder.Ladruno` / `Results.from_ladruno`)
+
+apeGmsh now emits and reads the Ladruno fork's **canonical** HDF5 recorder, the self-describing sibling of STKO `.mpco`.
+
+**Emit** — `ops.recorder.Ladruno(file, nodes=…, elements=…, dt=… | nsteps=…)` produces a `recorder ladruno …` line on **any** build (the fork is required only to *run* the deck). Whole-model value channels via `-N`/`-E`/`-T`.
+
+**Read** — `Results.from_ladruno(path, *, fem=None, merge_partitions=True, model_h5=None)`. Unlike every other constructor, `model_h5=` is **optional**: a `.ladruno` is self-describing (geometry, regions, beam local axes all in-file), so the broker is built from the file itself (schema Principle 0). The reader keys on `INFO/GENERATOR="Ladruno"` + a windowed `FORMAT_VERSION` (ADR 0023 spirit) and needs only `h5py` — no fork at read time. Multi-partition runs (`<stem>.part-N.ladruno`) auto-discover siblings and merge (node-union + element-concat), like `from_mpco`.
+
+**Result reads** go through the usual `results.*` API:
+- `results.nodes.get(component="displacement_x")` — chunked nodal channels.
+- `results.elements.gauss.get(component="stress_xx")` — continuum stress/strain, **neutral** vocabulary (accepts both the `sigma11` and `sigma_xx`/`eps_xx`/`gamma_xy` token forms different element classes emit). Gauss-point natural coords come from the file's `QUADRATURE/GP_PARAM`.
+- `results.elements.line_stations.get(component="axial_force")` — beam internal-force diagrams, **neutral** (`axial_force`/`shear_y`/…); `localForce` end forces get the sign-continuity flip, `basicForce` is one station at ξ=0.
+- `results.elements.get(component="localForce")` — **token-driven**: the component is the file's `ON_ELEMENTS/<token>` key (`basicForce`/`localForce`/`force`/`globalForce`), returning the raw `(T, E, NUM_COLUMNS)` block in the file's column order. (The one place the Ladruno element API differs from MPCO's neutral `nodal_resisting_force_*` — Ladruno is file-driven; the neutral beam view is `line_stations`.)
+
+**Beam orientation** — a `.ladruno` writes `MODEL/LOCAL_AXES` (per-class quaternion frames) that `.mpco` omits. `results.elements.local_axes(...)` surfaces a `LocalAxes` (scalar-first quaternions + `.matrices`/`.x_axis`/`.y_axis`/`.z_axis`, axes are the matrix **rows**), and `results.plot.line_force(...)` now orients diagrams from the recorder frame (true cross-section roll) instead of guessing from node geometry — retiring the `.mpco` "no beam vecxz" workaround for wired classes.
+
+**Energy balance** — `results.energy(region=None)` → a pandas DataFrame `KE/IE/DW/ULW/RES/ERR` indexed by time (recorder `-G energy`; whole-domain or per-region), subsuming the standalone EnergyBalance recorder.
+
+**Self-describing geometry** — higher-order / Bézier element groups carry a `BASIS` descriptor (family/topology/order + `GP_PARAM`) instead of a per-class shape-function table; GP world coords are reconstructed via the new neutral `apeGmsh._basis` evaluator (`B(ξ; family, order, topology)` — delegates Lagrange to the existing shape-function library, adds the Bézier/Bernstein bases, validated against the reference elements). Shared with the upcoming Bézier read path.
+
 ### ADDED — `g.model.geometry.add_arch(start, apex, end, *, label=)`
 
 A circular arch built as **two tangent arcs that share the apex as a topological vertex**, so the crown survives meshing as a conforming node.

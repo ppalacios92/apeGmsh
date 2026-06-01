@@ -16,6 +16,7 @@ Every constructor needs the model broker. Omitting it raises
 |---|---|---|
 | `Results.from_native(path, *, fem=None, model=...)` | `model=OpenSeesModel` | apeGmsh native HDF5 (Composed-file: results + `/opensees/` zone in one file) |
 | `Results.from_mpco(path, *, fem=None, merge_partitions=True, model_h5=...)` | `model_h5=<path>` | STKO `.mpco` HDF5 (single or `part-N` partitions) |
+| `Results.from_ladruno(path, *, fem=None, merge_partitions=True, model_h5=None)` | *(none — self-sufficient)* | OpenSees **Ladruno fork** `.ladruno` HDF5 (single or `part-N`); `model_h5=` optional, only for richer lineage |
 | `Results.from_recorders(spec, output_dir, *, fem, model=...)` | `fem=` **and** `model=` | `.out`/`.xml` from a Tcl/Py recorder run; transcodes → native + caches |
 
 ```python
@@ -32,6 +33,11 @@ results = Results.from_mpco("run.mpco", model_h5="model.h5")
 
 # A multi-partition run: pass any one part; siblings auto-discovered.
 results = Results.from_mpco("run.part-0.mpco", model_h5="model.h5")
+
+# Ladruno fork .ladruno — SELF-SUFFICIENT: no model_h5 needed (the file
+# carries its own geometry/regions/local axes). Partitions auto-discovered.
+results = Results.from_ladruno("run.ladruno")
+results = Results.from_ladruno("run.part-0.ladruno")          # merged
 
 # Recorder .out/.xml run — needs BOTH fem= and model=.
 results = Results.from_recorders(spec, "out/", fem=fem, model=model)
@@ -56,6 +62,18 @@ Notes:
 - `from_mpco` over a **composed** model (ADR 0038/0043) auto-attaches
   an `ElementTagTranslator` so element queries speak `fem_eid`, not the
   raw OpenSees ops tag. (`tests/test_results_mpco_composed_join.py::test_query_by_offset_fem_eid_returns_the_row`)
+- `from_ladruno` is the **exception** to the model-required rule: a
+  `.ladruno` is the fork's *canonical* recorder and self-describes its
+  geometry, so the broker is built from the file (`model_h5=` optional,
+  only for richer bridge records / lineage). Reader specifics:
+  `results.elements.gauss`/`line_stations` speak the **neutral** vocabulary
+  (`stress_xx`, `axial_force`, …) and work cross-backend; `results.elements`
+  is **token-driven** — the component is the file's `ON_ELEMENTS/<token>`
+  key (`basicForce`/`localForce`/`force`/`globalForce`) returning the raw
+  block. Beam diagrams orient from the recorder's `MODEL/LOCAL_AXES`
+  (`results.elements.local_axes(...)`; `line_force` uses it for true
+  cross-section roll). Energy: `results.energy(region=)`. See
+  `references/ladruno.md` for the fork-only details.
 - Zero-setup: `Results.demo()` / `make_demo_results(...)` — see §6.
 
 ## 2. The three-broker chain — `model`, `model.fem`, `fem`
@@ -260,9 +278,10 @@ OpenSees solve runs. `n_steps<1` / `n_elements<1` raise `ValueError`.
 ## 7. Quick reference
 
 ```python
-# Construct (model= / model_h5= REQUIRED)
+# Construct (model= / model_h5= REQUIRED — except from_ladruno)
 Results.from_native(path, *, fem=None, model=OpenSeesModel.from_h5(path))
 Results.from_mpco(path, *, fem=None, merge_partitions=True, model_h5="model.h5")
+Results.from_ladruno(path, *, fem=None, merge_partitions=True, model_h5=None)  # self-sufficient
 Results.from_recorders(spec, out_dir, *, fem=fem, model=model)
 Results.demo(n_steps=6, tip_drift=2.0)              # zero-setup sample
 
