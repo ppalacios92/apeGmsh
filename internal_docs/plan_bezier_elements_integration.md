@@ -312,19 +312,31 @@ fork-dependent read work. **Direct-drive stays the documented fallback throughou
   non-fork builds; on the fork build the gate passes + caches, no false positive).
   323 live/parity/conformance/runnable-deck regression green; `live.py` mypy-clean.
 
-### B4 — Result read (GP stress/strain) via the neutral basis lib  *(fixtures; depends on recorder-plan basis lib)*
-- Read bezier GP stress/strain from a `.ladruno` (or `.mpco`) fixture: map the
-  `ELE_TAG_BezierTri6=33000` / `33001` + `Custom`/real-rule keys through
-  `_response_catalog` **for component layout / `n_gp` only**. Per-GP **coordinates**
-  come from the file's `QUADRATURE/GP_PARAM` (canonical), reconstructed to physical
-  space via the **neutral** `B(ξ; bernstein, 2)` (imported, not copied — promote the
-  recorder lib to neutral if it shipped reader-local). **Never** map GP-index →
-  catalog coords (the Tri6 GP-order caveat — the fork's index order differs).
-- **Verify:** read a committed bezier fixture (tri6 + tet10), assert GP stress
-  components match the catalog layout; **assert per-GP physical coords come from
-  `B(ξ)·X` with `ξ` read from the file and land near the fork's GP barycentric
-  positions** (this assertion catches the Tri6 index permutation). Fixture committed
-  under `tests/fixtures/…`, generated once from the fork build (no fork at test time).
+### B4 — Result read (GP stress/strain) via the neutral basis lib  *(fixtures)* — ✅ DONE
+- GP stress/strain **values** + per-GP **natural** coords (`GP_PARAM`) already read
+  in L2b-2 (`results.elements.gauss.get("stress_xx"…)`, neutral `sigma_xx`/`eps_xx`
+  tokens). B4 closes the **world**-coord half: `GaussSlab.global_coords(fem)`
+  (`results/_gauss_world_coords.py`) now routes `BezierTri6`/`BezierTet10` through the
+  neutral `apeGmsh._basis.basis_values` — `x = B(ξ; bernstein, order)·X` over **all**
+  control points, with ξ from the file's `GP_PARAM` (never a catalog GP order, so the
+  Tri6 index permutation can't bite). New `_bezier_basis_spec` (name→`(topology,
+  family)`) + `_world_via_basis` (BasisError/shape-mismatch → existing bbox fallback).
+  Every non-Bézier type keeps the linear-catalog / bbox path **unchanged**. The
+  `_response_catalog` layout/`n_gp` rows (`ELE_TAG_BezierTri6=33000`/`Tet10=33001`,
+  `Triangle_GL_2`/`Tet_GL_2` + `Custom`) shipped in B1/B2.
+- **Shipped & verified (fork-free):** new `bezier_tet10.ladruno` fixture (the fork
+  *does* write `GLOBAL_GP_COORDS` for the tet, an in-file oracle — unlike the tri6).
+  5 tests (`tests/results/test_bezier_world_coords.py`): Tri6 `global_coords` ==
+  independent affine-barycentric corner map to **2.2e-16** + differs from the old
+  bbox by ~0.5; Tet10 `global_coords` == the file's own `GLOBAL_GP_COORDS` to
+  **2.2e-16**; `_bezier_basis_spec` recognition. 62 results + 32 gauss-marker/
+  live-roundtrip regression green; `_gauss_world_coords.py` mypy-clean.
+- **Note:** the committed bezier fixtures are straight-sided (apeGmsh's Gmsh pipeline
+  emits no curved high-order geometry), so on this affine geometry Bernstein ≡ linear
+  corner map — the tests prove the *plumbing* (GP_PARAM→ξ→B(ξ)→·X) and that bbox is
+  retired; the *basis-function* correctness is the separate 2.2e-16 formula
+  cross-check (L2's `_basis` vs the Kadapa reference). Curved Bézier (`B·X`≠corner
+  map) stays unreachable until curved high-order meshing lands.
 
 ### B5 — Docs / parity / fallback note
 - Document `ops.element.BezierTri6/BezierTet10` in the **canonical** skill references

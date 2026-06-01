@@ -99,6 +99,54 @@ def _world_via_bbox(
 
 
 # --------------------------------------------------------------------- #
+# Self-describing (Bézier / Bernstein) reconstruction via the neutral    #
+# basis library                                                          #
+# --------------------------------------------------------------------- #
+
+def _bezier_basis_spec(element_type) -> "tuple[str, str] | None":
+    """``(topology, family)`` for a recognized Bézier element, else None.
+
+    The ``.ladruno`` reader's FEMData names these ``BezierTri6`` /
+    ``BezierTet10`` (negated class-tag codes), so the linear Gmsh
+    shape-function catalog can't reconstruct their Gauss-point world
+    coords — they need the Bernstein basis ``x = B(ξ)·X`` over **all**
+    control points (the file's ``GP_PARAM`` ξ, never a catalog GP order;
+    see the Bézier plan's Tri6 GP-index caveat). This routes only Bézier
+    families through :func:`apeGmsh._basis.basis_values`; every other type
+    keeps the existing linear-catalog / bbox path unchanged.
+    """
+    name = (getattr(element_type, "gmsh_name", "") or "").lower()
+    if "beziertri" in name:
+        return ("tri", "bernstein")
+    if "beziertet" in name:
+        return ("tet", "bernstein")
+    return None
+
+
+def _world_via_basis(
+    natural_coord: ndarray,
+    node_coords: ndarray,
+    *,
+    topology: str,
+    family: str,
+    order: int,
+) -> "ndarray | None":
+    """``x = B(ξ)·X`` over the element's control points, or None on a
+    basis/shape mismatch (caller falls back)."""
+    from .._basis import BasisError, basis_values
+    try:
+        r = basis_values(
+            topology=topology, family=family, order=order,
+            xi=np.asarray(natural_coord, dtype=np.float64),
+        )
+    except BasisError:
+        return None
+    if r.shape[1] != node_coords.shape[0]:
+        return None
+    return np.asarray(r[0] @ node_coords, dtype=np.float64)
+
+
+# --------------------------------------------------------------------- #
 # Top-level entry                                                       #
 # --------------------------------------------------------------------- #
 
@@ -179,7 +227,7 @@ def compute_global_coords_from_arrays(
         (3, 8): 5,   # Hex8
     }
     needed = set(int(e) for e in np.unique(eids))
-    eid_info: dict[int, tuple[int, ndarray]] = {}
+    eid_info: dict[int, tuple[int, ndarray, "tuple[str, str, int] | None"]] = {}
     for group in fem.elements:
         et = group.element_type
         raw_code = int(et.code)
@@ -188,6 +236,11 @@ def compute_global_coords_from_arrays(
             else _GMSH_CODE_BY_DIM_NPE.get(
                 (int(et.dim), int(et.npe)), raw_code,
             )
+        )
+        bezier = _bezier_basis_spec(et)
+        basis_spec = (
+            (bezier[0], bezier[1], int(et.order)) if bezier is not None
+            else None
         )
         ids = np.asarray(group.ids, dtype=np.int64)
         conn = np.asarray(group.connectivity, dtype=np.int64)
@@ -200,7 +253,7 @@ def compute_global_coords_from_arrays(
             valid = idxs >= 0
             if not valid.all():
                 continue
-            eid_info[eid] = (type_code, coords_arr[idxs])
+            eid_info[eid] = (type_code, coords_arr[idxs], basis_spec)
 
     # ── Per-GP: pick shape fn, evaluate, scatter ───────────────────
     for k in range(n_gp):
@@ -208,7 +261,20 @@ def compute_global_coords_from_arrays(
         info = eid_info.get(eid)
         if info is None:
             continue
-        type_code, node_coords = info
+        type_code, node_coords, basis_spec = info
+        # Self-describing Bézier elements: reconstruct via the Bernstein
+        # basis over all control points (the file's GP_PARAM ξ). The linear
+        # Gmsh catalog has no entry for them, so without this they would
+        # fall through to the bbox approximation.
+        if basis_spec is not None:
+            topo, fam, order = basis_spec
+            world = _world_via_basis(
+                nat[k], node_coords,
+                topology=topo, family=fam, order=order,
+            )
+            if world is not None:
+                out[k] = world
+                continue
         catalog_entry = get_shape_functions(type_code)
         if catalog_entry is None:
             # Fallback for unsupported types.

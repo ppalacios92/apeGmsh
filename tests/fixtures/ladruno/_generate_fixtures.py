@@ -25,6 +25,11 @@ deterministic. Fixtures:
                            per-GP blocks) **and** ``globalForce``
                            (element-node forces, ``P<dof>_<node>``) — the
                            L2b-2 read_gauss + read_elements baseline.
+  * ``bezier_tri6.ladruno`` / ``bezier_tet10.ladruno`` — single fork Bézier
+                           (Bernstein) elements: the self-describing
+                           ``FAMILY="bernstein"`` GP world-coord path. The tet
+                           additionally writes ``GLOBAL_GP_COORDS`` (the tri6
+                           does not), an in-file oracle for ``B(ξ)·X``.
   * ``truss2d.part-0.ladruno`` / ``.part-1.ladruno`` — the single-partition
                            ``truss2d`` hand-split into a 2-partition manifest
                            (real MPI / ``mpiexec`` is unavailable in this env)
@@ -235,6 +240,48 @@ def _bezier_tri6(path: str) -> None:
     ops.wipe()
 
 
+def _bezier_tet10(path: str) -> None:
+    """A single fork ``BezierTet10`` — the 3-D self-describing bernstein path.
+
+    The tetrahedral sibling of ``_bezier_tri6``: ``FAMILY="bernstein"``,
+    ``TOPOLOGY="tet"``, ``GP_PARAM`` as 4×3 free barycentric coords. Nodes
+    are 4 corners + 6 mid-edge control points in ``TenNodeTetrahedron``
+    order ``(1-2, 2-3, 1-3, 1-4, 3-4, 2-4)``; on this straight-sided
+    reference tet the control points coincide with the nodes. Unlike the
+    Tri6 fixture this element **does** write ``GLOBAL_GP_COORDS``, so the
+    reader's ``B(ξ)·X`` reconstruction can be checked against the file's
+    own GP world coords. Requires the Ladruno fork build (tag 33001).
+    """
+    import numpy as np
+
+    ops.wipe()
+    ops.model("basic", "-ndm", 3, "-ndf", 3)
+    corners = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+               (0.0, 0.0, 1.0)]
+    for i, (x, y, z) in enumerate(corners, start=1):
+        ops.node(i, x, y, z)
+    edges = [(1, 2), (2, 3), (1, 3), (1, 4), (3, 4), (2, 4)]
+    for j, (a, b) in enumerate(edges, start=5):
+        mid = (np.array(corners[a - 1]) + np.array(corners[b - 1])) / 2.0
+        ops.node(j, float(mid[0]), float(mid[1]), float(mid[2]))
+    for n in (1, 2, 3):
+        ops.fix(n, 1, 1, 1)
+    ops.nDMaterial("ElasticIsotropic", 1, 1000.0, 0.25)
+    ops.element("BezierTet10", 1, *range(1, 11), 1)
+    ops.timeSeries("Linear", 1)
+    ops.pattern("Plain", 1, 1)
+    ops.load(4, 0.0, 0.0, -1.0)
+    ops.recorder("ladruno", path, "-N", "displacement", "-E", "stress", "strain")
+    ops.system("BandGen")
+    ops.numberer("RCM")
+    ops.constraints("Plain")
+    ops.integrator("LoadControl", 1.0)
+    ops.algorithm("Linear")
+    ops.analysis("Static")
+    ops.analyze(1)
+    ops.wipe()
+
+
 def _synthesize_partitions(source_name: str, stem: str) -> list[str]:
     """Hand-split a single-partition ``.ladruno`` into a 2-partition set.
 
@@ -328,6 +375,7 @@ def main() -> None:
         ("energy.ladruno", _energy),
         ("quad2d.ladruno", _quad2d),
         ("bezier_tri6.ladruno", _bezier_tri6),
+        ("bezier_tet10.ladruno", _bezier_tet10),
         ("fiberbeam.ladruno", _fiberbeam),
     ):
         path = os.path.join(HERE, name)
