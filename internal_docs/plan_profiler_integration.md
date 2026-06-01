@@ -223,13 +223,22 @@ Two phases ship the whole recommended scope; P3 is deferred/optional.
   return-value test; docs cross-link the viewer, do **not** promise an apeGmsh
   reader.
 
-### P3 — *(deferred, optional)* thin `apeGmsh.profiler.open(path)` re-export
-- Only if a real user wants `profile.h5` in-notebook without leaving apeGmsh.
-  Imports the fork's `ProfilerResults` if on `sys.path`; else raises a clear
-  install-the-tools error. **Re-export, never re-implement.** Gated so it never
-  imports at apeGmsh import time.
-- **Verify:** skip-if-absent test; one tiny fixture; assert it forwards to
-  `ProfilerResults` (no duplicated diff/normalizer logic).
+### P3 — **SHIPPED 2026-06-01** (user asked → trigger met) — `apeGmsh.profiler.open` + `.show_web`
+- New top-level module `src/apeGmsh/profiler.py` (exposed via `apeGmsh/__init__.py`,
+  fork-free at import — the fork import happens inside the functions).
+  - `apeGmsh.profiler.open(path, *, viewer_dir=None)` → re-exports the fork's
+    `ProfilerResults` loader (`manifest`/`rollup`/`series`/`memory`/`diff`); `series`
+    is the per-step "monitor". **Re-export, never re-implement.**
+  - `apeGmsh.profiler.show_web(path, *, viewer_dir=None)` → locates `launch.py` beside
+    the importable `profiler_results` module and `subprocess.Popen`s it (the scripted
+    equivalent of `Profiler_Viewer.bat`; serves UI+API at `:8000`).
+  - Viewer dir importability: `viewer_dir=` kwarg → `LADRUNO_PROFILER_VIEWER` env var →
+    `sys.path`; else a clear install-hint `ImportError`.
+- **Verified (fork-free):** 7 tests in `tests/opensees/unit/test_profiler_open.py` —
+  forwarding (in-memory fake module), actionable error (`sys.modules[...] = None`),
+  `viewer_dir`/env-var sys.path wiring, `show_web` launch command (Popen monkeypatched),
+  missing-`launch.py` `FileNotFoundError`. mypy-clean. The live browser UI itself needs
+  a user eyeball (like the GPU viewers) — only the launch command is unit-covered.
 
 ---
 

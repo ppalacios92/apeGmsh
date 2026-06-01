@@ -12,6 +12,8 @@ The new `ops.profiler` namespace exposes the five shipped fork verbs 1:1 — `st
 
 Fork-gated at run time: emitting deck text works on any build; the live emitter re-raises a clear *"requires the Ladruno fork build"* error when stock openseespy lacks the `profiler` command. `ops.tcl(run=True)` is the recommended profiled path. One new `Emitter.profiler(*args)` Protocol method (Tcl/Py emit the line, live forwards + gates, h5 no-ops, recording captures).
 
+**Reading the output** — `apeGmsh.profiler.open(path)` / `apeGmsh.profiler.show_web(path)` are a thin, fork-free-at-import bridge to the fork's out-of-tree `Ladruno_tools/profiler_viewer`: `open` re-exports its `ProfilerResults` loader (`manifest` / `rollup` / `series` / `diff`; `series` is the per-step "monitor"), `show_web` launches the one-process React UI. apeGmsh re-exports, never re-implements. The viewer dir must be importable (`viewer_dir=` kwarg, `LADRUNO_PROFILER_VIEWER` env var, or `sys.path`); otherwise a clear install-hint error fires.
+
 ### ADDED — `g.model.geometry.add_arch(start, apex, end, *, label=)`
 
 A circular arch built as **two tangent arcs that share the apex as a topological vertex**, so the crown survives meshing as a conforming node.

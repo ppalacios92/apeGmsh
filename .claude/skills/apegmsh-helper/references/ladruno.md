@@ -106,6 +106,24 @@ re-raises a clear *"requires the Ladruno fork build"* error. (Whether the fork
 exposes `profiler` in the openseespy **Python** module, not only Tcl, is a
 fork-side confirmation — prefer the Tcl-deck path until confirmed.)
 
+**Reading `profile.h5`.** apeGmsh ships no profiler reader, but
+`apeGmsh.profiler` is a thin bridge to the fork's out-of-tree viewer:
+
+```python
+import apeGmsh
+with apeGmsh.profiler.open("profile.h5") as pr:   # → fork's ProfilerResults
+    pr.manifest()                                 # run picker rows
+    pr.rollup("caseA")                            # flame graph
+    pr.series("caseA")                            # per-step time history (the "monitor")
+    pr.diff("caseA", "caseB")                     # prove a fix
+apeGmsh.profiler.show_web("profile.h5")           # launch the React UI at :8000
+```
+
+It **re-exports** `Ladruno_tools/profiler_viewer` (never re-implements). The dir
+must be importable — pass `viewer_dir=` , set `LADRUNO_PROFILER_VIEWER`, or have
+it on `sys.path`; otherwise a clear install-hint error fires. The one-click
+`Profiler_Viewer.bat` / `profiler_viewer.sh` opens a browser with no setup.
+
 ## Class-tag band
 
 Fork-only class tags live in the **private `≥33000` band**. Don't hardcode
