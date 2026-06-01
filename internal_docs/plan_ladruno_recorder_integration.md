@@ -288,14 +288,18 @@ against committed fork fixtures (`tests/fixtures/ladruno/*.ladruno`), no factory
   (non-identity frame); transpose-convention fixture locked. Flip the skill §7.2
   note in the same PR.
 
-### L4 — Energy accessor `r.energy(region=...)`  *(#2)*
-- `r.energy(region=None)` → DataFrame `KE/IE/DW/ULW/RES/ERR` from
-  `ON_DOMAIN/energyBalance` + `ON_REGIONS`. Surface `ERR%` as a run-quality
-  indicator (history-plot / viewer badge — small).
-- Tiny standalone text→DataFrame reader for the `EnergyBalance` sidecar (a `text`
-  discriminator, not the HDF5 path).
-- **Verify:** `energy` fixture → DataFrame columns; text reader on a sidecar
-  sample; `ERR%` surfaced.
+### L4 — Energy accessor `r.energy(region=...)`  *(#2)* — ✅ DONE (HDF5 path)
+- `LadrunoReader.read_energy(stage_id, *, region=)` reads
+  `ON_DOMAIN/energyBalance` (region=None) / `ON_REGIONS/energyBalance` (region=tag);
+  `Results.energy(*, region=, stage=)` → pandas DataFrame `KE/IE/DW/ULW/RES/ERR`
+  indexed by time. `TypeError` on non-Ladruno results; `ValueError` on
+  absent-energy / unknown-region. Shipped on **PR #509**.
+- **Shipped:** 4 tests (whole-domain, per-region, unknown-region, energy-absent).
+  mypy-clean; results regression green.
+- **Deferred:** the standalone `EnergyBalance` **text-sidecar** → DataFrame reader
+  (a `text` discriminator, separate from the HDF5 path) — only needed when a user
+  runs the standalone `recorder EnergyBalance` instead of the `.ladruno` `-G energy`
+  channel. Surfacing `ERR%` as a viewer/history-plot badge is also deferred (UI).
 
 ### L5 — Polish / docs / parity gate
 - Pin the two-version window; document `from_ladruno` in `references/results.md`
