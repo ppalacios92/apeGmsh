@@ -246,6 +246,30 @@ def test_line_stations_element_filter() -> None:
         assert slab.values.shape == (4, 1)
 
 
+def test_line_stations_carry_beam_quaternion() -> None:
+    # L3 follow-up: line-station slabs carry the recorder's per-row beam
+    # frame so the diagram can orient by true cross-section roll.
+    with LadrunoReader(BEAM) as r:
+        slab = r.read_line_stations("stage_0", "axial_force")
+        assert slab.local_axes_quaternion is not None
+        assert slab.local_axes_quaternion.shape == (2, 4)   # 2 stations
+        la = r.read_local_axes("stage_0", element_ids=np.array([1]))
+        np.testing.assert_allclose(slab.local_axes_quaternion[0], la.quaternions[0])
+        # skew beam → non-identity frame on every station row.
+        assert not np.allclose(slab.local_axes_quaternion[0], [1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_allclose(
+            slab.local_axes_quaternion[0], slab.local_axes_quaternion[1],
+        )
+
+
+def test_line_stations_no_frame_quaternion_none() -> None:
+    # Truss has no MODEL/LOCAL_AXES → slab carries no frame (None), so the
+    # plot falls back to node geometry.
+    with LadrunoReader(TRUSS) as r:
+        slab = r.read_line_stations("stage_0", "axial_force")
+        assert slab.local_axes_quaternion is None
+
+
 def test_bezier_tri6_gauss_axis_token_naming() -> None:
     # BezierTri6 emits the axis-form continuum tokens (sigma_xx / eps_xx /
     # gamma_xy), not the digit form (sigma11) — the reader maps both.

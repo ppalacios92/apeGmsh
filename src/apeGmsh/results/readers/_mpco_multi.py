@@ -465,6 +465,19 @@ def _concat_line_station_slabs(
             station_natural_coord=np.array([], dtype=np.float64),
             time=time,
         )
+    # Stitch the per-row beam quaternion when any partition carries one
+    # (Ladruno MODEL/LOCAL_AXES); parts without a frame array contribute
+    # NaN rows so the result stays row-aligned. None when no part has one
+    # (MPCO/native carry no LOCAL_AXES → all None → None).
+    quats = None
+    if any(s.local_axes_quaternion is not None for s in nonempty):
+        parts = []
+        for s in nonempty:
+            if s.local_axes_quaternion is not None:
+                parts.append(np.asarray(s.local_axes_quaternion))
+            else:
+                parts.append(np.full((s.element_index.size, 4), np.nan))
+        quats = np.concatenate(parts, axis=0)
     return LineStationSlab(
         component=component,
         values=np.concatenate([s.values for s in nonempty], axis=1),
@@ -473,6 +486,7 @@ def _concat_line_station_slabs(
             [s.station_natural_coord for s in nonempty],
         ),
         time=time,
+        local_axes_quaternion=quats,
     )
 
 

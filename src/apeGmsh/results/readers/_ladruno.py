@@ -539,11 +539,38 @@ class LadrunoReader:
         if result is None:
             return _empty_line_station_slab(component, time, t_idx)
         values, element_index, station_coord = result
+        fem_index = self._index_to_fem(element_index)
         return LineStationSlab(
             component=component, values=values,
-            element_index=self._index_to_fem(element_index),
+            element_index=fem_index,
             station_natural_coord=station_coord, time=time[t_idx],
+            local_axes_quaternion=self._line_station_quaternions(
+                stage_id, fem_index,
+            ),
         )
+
+    def _line_station_quaternions(
+        self, stage_id: str, element_index: ndarray,
+    ) -> "Optional[ndarray]":
+        """Per-row beam quaternion for a line-station slab, or ``None``.
+
+        Maps each row's element to its ``MODEL/LOCAL_AXES`` frame. Returns
+        ``None`` when the stage records no frames at all (the diagram then
+        falls back to node geometry); otherwise a ``(sum_S, 4)`` array with
+        NaN rows for elements that have no recorded frame (per-element
+        fallback).
+        """
+        recorded = self.read_local_axes(stage_id)  # only recorded ids
+        if recorded.element_ids.size == 0:
+            return None
+        id_to_quat = {
+            int(e): recorded.quaternions[k]
+            for k, e in enumerate(recorded.element_ids)
+        }
+        nan_row = np.full(4, np.nan, dtype=np.float64)
+        return np.stack([
+            id_to_quat.get(int(e), nan_row) for e in element_index
+        ])
 
     def read_gauss(
         self, stage_id: str, component: str, *,

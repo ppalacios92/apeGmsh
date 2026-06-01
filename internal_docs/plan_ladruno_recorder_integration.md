@@ -362,10 +362,21 @@ against committed fork fixtures (`tests/fixtures/ladruno/*.ladruno`), no factory
   element filter; absent-frames empty. mypy-clean; regression green. Skill
   `ladruno.md` updated (canonical + synced mirror) — the §7.2 "no beam vecxz" stale
   note is now superseded for `.ladruno`.
-- **Deferred (needs L2b-2 line reads):** auto-populating
-  `LineStationSlab.local_axes_quaternion` so `results.plot.line_force(...)` orients
-  itself — wire `read_local_axes` into the line-station read when L2b-2 lands. The
-  frames are already exposed via the accessor; this is the plumbing into diagrams.
+- **L3 follow-up — ✅ DONE (post-L2b-2).** `LineStationSlab` gained an optional
+  per-row `local_axes_quaternion` (scalar-first, row-aligned with `element_index`;
+  `None` when no frames recorded, NaN rows for frame-less elements → per-element
+  geometry fallback). `LadrunoReader.read_line_stations` populates it from
+  `read_local_axes`; the multi-partition `_concat_line_station_slabs` stitches it.
+  `results.plot.line_force(...)` now **prefers the recorder frame** over the geometric
+  `compute_local_axes` guess (new `_beams.axes_from_quaternion`, reusing `LocalAxes`'
+  quat→matrix math), giving the true cross-section roll the `.mpco` path could not.
+  Tests: reader populates the beam quaternion (matches `read_local_axes`) / `None` for a
+  truss; `axes_from_quaternion`==`LocalAxes` rows; headless `line_force` runs the
+  quaternion branch. **NB:** beam3d's `geomTransf vecxz=(0,0,1)` equals the geometric
+  default, so recorder≈geometric there — the rewire's visible effect is on rolled
+  sections (a dedicated rolled fixture + a GPU eyeball would lock the picture). Shared
+  `LineStationSlab` change is backward-compatible (defaulted field; MPCO/native pass
+  `None`).
 
 ### L4 — Energy accessor `r.energy(region=...)`  *(#2)* — ✅ DONE (HDF5 path)
 - `LadrunoReader.read_energy(stage_id, *, region=)` reads

@@ -30,6 +30,7 @@ from numpy import ndarray
 
 from ._arrows import auto_arrow_scale, filter_significant, model_diagonal
 from ._beams import (
+    axes_from_quaternion,
     build_eid_to_endpoints,
     compute_local_axes,
     fill_axis_for,
@@ -785,6 +786,11 @@ class ResultsPlot:
         slab_eids = np.asarray(slab.element_index, dtype=np.int64)
         slab_xi = np.asarray(slab.station_natural_coord, dtype=np.float64)
         slab_vals = np.asarray(slab.values[0], dtype=np.float64)
+        # Recorder beam frame (true cross-section roll), per row, or None.
+        slab_quat = (
+            None if slab.local_axes_quaternion is None
+            else np.asarray(slab.local_axes_quaternion, dtype=np.float64)
+        )
 
         endpoints = build_eid_to_endpoints(fem)
         axis_name = fill_axis_for(component, axis)
@@ -831,6 +837,15 @@ class ResultsPlot:
                 x_local, y_local, z_local, _L = compute_local_axes(ci, cj)
             except ValueError:
                 continue
+            # Prefer the recorder's true frame over the geometric guess when
+            # the slab carries a finite quaternion for this element (gives
+            # the real cross-section roll; the .mpco path could not).
+            if slab_quat is not None:
+                qrows = np.where(slab_eids == eid_int)[0]
+                if qrows.size and np.all(np.isfinite(slab_quat[qrows[0]])):
+                    x_local, y_local, z_local = axes_from_quaternion(
+                        slab_quat[qrows[0]],
+                    )
             fill_dir = y_local if axis_name == "y" else z_local
 
             sel = np.where(slab_eids == eid_int)[0]

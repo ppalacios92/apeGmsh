@@ -113,6 +113,15 @@ class LineStationSlab:
     element_index: ndarray       # (sum_S,) — parent element per row
     station_natural_coord: ndarray  # (sum_S,) — in [-1, +1]
     time: ndarray                # (T,)
+    # Per-row beam local frame (scalar-first quaternion, global→local at
+    # reference), row-aligned with ``element_index``. Populated from
+    # ``.ladruno`` ``MODEL/LOCAL_AXES`` so a consumer can orient the diagram
+    # by the recorder's true cross-section roll instead of guessing from
+    # node geometry. ``None`` when no frames are recorded (e.g. trusses, or
+    # readers — MPCO/native — that carry no LOCAL_AXES); rows for elements
+    # without a recorded frame are filled with NaN so the consumer can fall
+    # back to geometry per element.
+    local_axes_quaternion: Optional[ndarray] = None  # (sum_S, 4) or None
 
 
 @dataclass(frozen=True)
