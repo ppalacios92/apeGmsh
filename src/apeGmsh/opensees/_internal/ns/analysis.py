@@ -47,10 +47,14 @@ from ...analysis.constraint_handler import Plain as ConstraintsPlain
 from ...analysis.integrator import (
     ArcLength,
     CentralDifference,
+    CentralDifferenceLadruno,
     DisplacementControl,
+    ExplicitBathe,
+    ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
     LoadControl,
+    Lump,
     Newmark,
 )
 from ...analysis.numberer import AMD, RCM, ParallelPlain, ParallelRCM
@@ -58,10 +62,15 @@ from ...analysis.numberer import Plain as NumbererPlain
 from ...analysis.system import (
     BandGeneral,
     BandSPD,
+    Diagonal,
     FullGeneral,
+    MPIDiagonal,
     Mumps,
+    ParallelProfileSPD,
     ProfileSPD,
     SparseGeneral,
+    SparseSYM,
+    SProfileSPD,
     UmfPack,
 )
 from ...analysis.test import (
@@ -216,6 +225,41 @@ class _SystemNS(_BridgeNamespace):
     def FullGeneral(self) -> FullGeneral:
         """``system FullGeneral`` — dense general (small systems only)."""
         return self._bridge._register(FullGeneral())
+
+    def SProfileSPD(self) -> SProfileSPD:
+        """``system SProfileSPD`` — single-precision skyline SPD."""
+        return self._bridge._register(SProfileSPD())
+
+    def SparseSYM(self) -> SparseSYM:
+        """``system SparseSYM`` — symmetric sparse direct solver."""
+        return self._bridge._register(SparseSYM())
+
+    def Diagonal(self) -> Diagonal:
+        """``system Diagonal`` — direct diagonal solver.
+
+        The system for explicit time integration (``CentralDifference``
+        / Ladruno ``ExplicitBathe`` family) — inverts a lumped diagonal
+        mass element-wise. Not valid for static / implicit analysis.
+        """
+        return self._bridge._register(Diagonal())
+
+    def MPIDiagonal(self) -> MPIDiagonal:
+        """``system MPIDiagonal`` — distributed diagonal solver.
+
+        Parallel counterpart of :meth:`Diagonal`. Only available in
+        OpenSees builds with ``_PARALLEL_INTERPRETERS`` (e.g.
+        ``OpenSeesMP``); a serial build falls back to the plain diagonal.
+        """
+        return self._bridge._register(MPIDiagonal())
+
+    def ParallelProfileSPD(self) -> ParallelProfileSPD:
+        """``system ParallelProfileSPD`` — distributed skyline SPD.
+
+        Only available in OpenSees builds with ``_PARALLEL_INTERPRETERS``
+        (e.g. ``OpenSeesMP``). Emit-only against serial ``OpenSees.exe``
+        will error at runtime.
+        """
+        return self._bridge._register(ParallelProfileSPD())
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +502,102 @@ class _IntegratorNS(_BridgeNamespace):
     def ExplicitDifference(self) -> ExplicitDifference:
         """``integrator ExplicitDifference`` — explicit difference scheme."""
         return self._bridge._register(ExplicitDifference())
+
+    def ExplicitBathe(
+        self,
+        *,
+        p: float = 0.54,
+        cfl: bool = False,
+        cfl_abort: bool = False,
+        tangent: bool = False,
+        recompute: int | None = None,
+        lump: Lump | None = None,
+        verbose: bool = False,
+        divergence: float | None = None,
+    ) -> ExplicitBathe:
+        """``integrator ExplicitBathe p [flags...]`` — **fork-only**.
+
+        Explicit Noh-Bathe two-sub-step scheme (``p`` ∈(0,1), default
+        ``0.54``). Emission works on any build; the *Ladruno fork* is
+        required only to *run* the deck. See
+        :class:`apeGmsh.opensees.analysis.integrator.ExplicitBathe` for
+        the option-flag semantics.
+        """
+        return self._bridge._register(
+            ExplicitBathe(
+                p=p,
+                cfl=cfl,
+                cfl_abort=cfl_abort,
+                tangent=tangent,
+                recompute=recompute,
+                lump=lump,
+                verbose=verbose,
+                divergence=divergence,
+            )
+        )
+
+    def ExplicitBatheLNVD(
+        self,
+        *,
+        p: float = 0.54,
+        alpha: float = 0.8,
+        cfl: bool = False,
+        cfl_abort: bool = False,
+        tangent: bool = False,
+        recompute: int | None = None,
+        lump: Lump | None = None,
+        verbose: bool = False,
+        divergence: float | None = None,
+    ) -> ExplicitBatheLNVD:
+        """``integrator ExplicitBatheLNVD p alpha [flags...]`` — **fork-only**.
+
+        :meth:`ExplicitBathe` plus FLAC local non-viscous damping
+        (``alpha`` ∈[0,1), default ``0.80``) for dynamic relaxation /
+        quasi-static solving. Fork required only to *run*.
+        """
+        return self._bridge._register(
+            ExplicitBatheLNVD(
+                p=p,
+                alpha=alpha,
+                cfl=cfl,
+                cfl_abort=cfl_abort,
+                tangent=tangent,
+                recompute=recompute,
+                lump=lump,
+                verbose=verbose,
+                divergence=divergence,
+            )
+        )
+
+    def CentralDifferenceLadruno(
+        self,
+        *,
+        cfl: bool = False,
+        cfl_abort: bool = False,
+        tangent: bool = False,
+        recompute: int | None = None,
+        lump: Lump | None = None,
+        verbose: bool = False,
+        divergence: float | None = None,
+    ) -> CentralDifferenceLadruno:
+        """``integrator CentralDifferenceLadruno [flags...]`` — **fork-only**.
+
+        The *Ladruno fork*'s robust central-difference integrator
+        (correct first-step starter, built-in ``dt_cr``, ``βK`` guard).
+        No positional parameter; ``lump`` defaults to Diagonal when
+        omitted. Fork required only to *run*.
+        """
+        return self._bridge._register(
+            CentralDifferenceLadruno(
+                cfl=cfl,
+                cfl_abort=cfl_abort,
+                tangent=tangent,
+                recompute=recompute,
+                lump=lump,
+                verbose=verbose,
+                divergence=divergence,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

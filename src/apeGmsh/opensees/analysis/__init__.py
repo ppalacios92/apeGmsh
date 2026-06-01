@@ -9,14 +9,17 @@ layout under ``SRC/analysis/``:
   Transformation, Lagrange)
 * :mod:`.numberer`            — ``numberer <Type>`` (Plain, RCM, AMD)
 * :mod:`.system`              — ``system <Type>`` (BandGeneral,
-  BandSPD, ProfileSPD, UmfPack, Mumps, SparseGeneral, FullGeneral)
+  BandSPD, ProfileSPD, SProfileSPD, UmfPack, Mumps, SparseGeneral,
+  SparseSYM, FullGeneral, Diagonal; parallel MPIDiagonal,
+  ParallelProfileSPD)
 * :mod:`.test`                — ``test <Type>`` (NormDispIncr,
   NormUnbalance, EnergyIncr, FixedNumIter, RelativeNormDispIncr)
 * :mod:`.algorithm`           — ``algorithm <Type>`` (Linear, Newton,
   ModifiedNewton, NewtonLineSearch, KrylovNewton, BFGS, Broyden)
 * :mod:`.integrator`          — ``integrator <Type>`` (LoadControl,
   DisplacementControl, ArcLength, Newmark, HHT, CentralDifference,
-  ExplicitDifference)
+  ExplicitDifference; fork-only ExplicitBathe, ExplicitBatheLNVD,
+  CentralDifferenceLadruno)
 * :mod:`.analysis`            — ``analysis <Type>`` (Static, Transient,
   VariableTransient)
 
@@ -56,7 +59,10 @@ from .constraint_handler import Plain as PlainConstraints
 from .integrator import (
     ArcLength,
     CentralDifference,
+    CentralDifferenceLadruno,
     DisplacementControl,
+    ExplicitBathe,
+    ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
     LoadControl,
@@ -67,10 +73,15 @@ from .numberer import Plain as PlainNumberer
 from .system import (
     BandGeneral,
     BandSPD,
+    Diagonal,
     FullGeneral,
+    MPIDiagonal,
     Mumps,
+    ParallelProfileSPD,
     ProfileSPD,
     SparseGeneral,
+    SparseSYM,
+    SProfileSPD,
     UmfPack,
 )
 from .test import (
@@ -96,10 +107,15 @@ __all__ = [
     "BandGeneral",
     "BandSPD",
     "ProfileSPD",
+    "SProfileSPD",
     "UmfPack",
     "Mumps",
     "SparseGeneral",
+    "SparseSYM",
     "FullGeneral",
+    "Diagonal",
+    "MPIDiagonal",
+    "ParallelProfileSPD",
     # test
     "NormDispIncr",
     "NormUnbalance",
@@ -124,6 +140,9 @@ __all__ = [
     "HHT",
     "CentralDifference",
     "ExplicitDifference",
+    "ExplicitBathe",
+    "ExplicitBatheLNVD",
+    "CentralDifferenceLadruno",
     # analysis
     "Static",
     "Transient",

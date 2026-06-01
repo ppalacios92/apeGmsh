@@ -24,11 +24,21 @@ The ``min_*`` / ``max_*`` step-bracket parameters on LoadControl and
 DisplacementControl are only meaningful in tandem with ``num_iter``;
 the dataclasses reject "min/max set but num_iter unset" at
 construction.
+
+The three *explicit* integrators :class:`ExplicitBathe`,
+:class:`ExplicitBatheLNVD` and :class:`CentralDifferenceLadruno` are
+**fork-only** — they require the OpenSees *Ladruno fork* build to
+*run*. Emission works on any build (it's just an ``integrator <Type>
+...`` line); the fork requirement bites only at ``ops.analyze(...)`` /
+``ops.run()``. They share an order-free option grammar
+(``-cfl``/``-cflAbort``/``-tangent``/``-recompute N``/``-lump
+rowsum|diagonal``/``-verbose``/``-divergence f``); see
+:func:`_render_explicit_cfl_options`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .._internal.types import Integrator, Primitive
 
@@ -44,7 +54,80 @@ __all__ = [
     "HHT",
     "CentralDifference",
     "ExplicitDifference",
+    "ExplicitBathe",
+    "ExplicitBatheLNVD",
+    "CentralDifferenceLadruno",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Shared explicit-integrator option grammar (Ladruno fork)
+# ---------------------------------------------------------------------------
+
+Lump = Literal["rowsum", "diagonal"]
+
+
+def _validate_explicit_cfl_options(
+    *,
+    who: str,
+    recompute: int | None,
+    lump: Lump | None,
+    divergence: float | None,
+) -> None:
+    """Validate the shared explicit-integrator option flags.
+
+    Enforces only what the fork C++ itself rejects / treats as an
+    authoring slip — no cross-flag coupling (the C++ parser is
+    permissive: e.g. ``-cflAbort`` without a ``dt_cr`` source is
+    silently inert, not an error).
+    """
+    if recompute is not None and recompute < 1:
+        raise ValueError(
+            f"{who}: recompute must be >= 1 (every-N committed steps), "
+            f"got {recompute}."
+        )
+    if lump is not None and lump not in ("rowsum", "diagonal"):
+        raise ValueError(
+            f"{who}: lump must be 'rowsum' or 'diagonal', got {lump!r}."
+        )
+    if divergence is not None and divergence <= 0:
+        raise ValueError(
+            f"{who}: divergence factor must be > 0, got {divergence}."
+        )
+
+
+def _render_explicit_cfl_options(
+    args: list[float | int | str],
+    *,
+    cfl: bool,
+    cfl_abort: bool,
+    tangent: bool,
+    recompute: int | None,
+    lump: Lump | None,
+    verbose: bool,
+    divergence: float | None,
+) -> None:
+    """Append the shared explicit-integrator flags to ``args`` in a
+    fixed, byte-stable canonical order.
+
+    Omitted ``lump`` is left to the fork's per-integrator default
+    (RowSum for the Bathe schemes, Diagonal for
+    ``CentralDifferenceLadruno``) — we never re-emit a default.
+    """
+    if cfl:
+        args.append("-cfl")
+    if cfl_abort:
+        args.append("-cflAbort")
+    if tangent:
+        args.append("-tangent")
+    if recompute is not None:
+        args += ["-recompute", recompute]
+    if lump is not None:
+        args += ["-lump", lump]
+    if verbose:
+        args.append("-verbose")
+    if divergence is not None:
+        args += ["-divergence", divergence]
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +371,193 @@ class ExplicitDifference(Integrator):
     def _emit(self, emitter: "Emitter", tag: int) -> None:
         _ = tag
         emitter.integrator("ExplicitDifference")
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# ExplicitBathe — explicit Noh-Bathe two-sub-step (Ladruno fork)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ExplicitBathe(Integrator):
+    """``integrator ExplicitBathe p [flags...]`` — **fork-only**.
+
+    The Noh-Bathe two-sub-step explicit scheme (2nd order, controllable
+    high-frequency dissipation via ``p``). Requires the OpenSees
+    *Ladruno fork* build to run; emission works on any build.
+
+    ``p`` is the sub-step parameter ``∈(0,1)`` (default ``0.54``). The
+    option flags enable + tune the critical-time-step (``dt_cr``)
+    machinery and per-step diagnostics:
+
+    * ``cfl`` — estimate ``dt_cr`` (queryable via ``criticalTimeStep()``).
+    * ``cfl_abort`` — abort if ``dt`` exceeds the Noh-Bathe limit
+      (inert unless a ``dt_cr`` source — ``cfl``/``tangent``/``recompute``
+      — is also enabled).
+    * ``tangent`` — estimate ``dt_cr`` from the current tangent.
+    * ``recompute`` — refresh ``dt_cr`` every N committed steps (N >= 1).
+    * ``lump`` — element mass lumping for ``dt_cr`` (default RowSum).
+    * ``verbose`` — per-step dt/energy reporting.
+    * ``divergence`` — abort if kinetic energy grows by this factor.
+    """
+
+    p: float = 0.54
+    cfl: bool = False
+    cfl_abort: bool = False
+    tangent: bool = False
+    recompute: int | None = None
+    lump: Lump | None = None
+    verbose: bool = False
+    divergence: float | None = None
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.p < 1.0):
+            raise ValueError(
+                f"ExplicitBathe: p must be in (0, 1), got {self.p}."
+            )
+        _validate_explicit_cfl_options(
+            who="ExplicitBathe",
+            recompute=self.recompute,
+            lump=self.lump,
+            divergence=self.divergence,
+        )
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        _ = tag
+        args: list[float | int | str] = [self.p]
+        _render_explicit_cfl_options(
+            args,
+            cfl=self.cfl,
+            cfl_abort=self.cfl_abort,
+            tangent=self.tangent,
+            recompute=self.recompute,
+            lump=self.lump,
+            verbose=self.verbose,
+            divergence=self.divergence,
+        )
+        emitter.integrator("ExplicitBathe", *args)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# ExplicitBatheLNVD — Noh-Bathe + FLAC local non-viscous damping (fork)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ExplicitBatheLNVD(Integrator):
+    """``integrator ExplicitBatheLNVD p alpha [flags...]`` — **fork-only**.
+
+    :class:`ExplicitBathe` plus FLAC local non-viscous damping, for
+    dynamic relaxation / quasi-static solving. Requires the *Ladruno
+    fork* build to run.
+
+    ``p`` is the sub-step parameter ``∈(0,1)`` (default ``0.54``);
+    ``alpha`` is the FLAC local-damping coefficient ``∈[0,1)`` (default
+    ``0.80``; ``0`` disables damping). Both are always emitted
+    explicitly — the fork reads them as a *pair* of leading numerics, so
+    eliding ``alpha`` would shift a following flag into its slot. The
+    option flags are identical to :class:`ExplicitBathe`.
+    """
+
+    p: float = 0.54
+    alpha: float = 0.8
+    cfl: bool = False
+    cfl_abort: bool = False
+    tangent: bool = False
+    recompute: int | None = None
+    lump: Lump | None = None
+    verbose: bool = False
+    divergence: float | None = None
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.p < 1.0):
+            raise ValueError(
+                f"ExplicitBatheLNVD: p must be in (0, 1), got {self.p}."
+            )
+        if not (0.0 <= self.alpha < 1.0):
+            raise ValueError(
+                "ExplicitBatheLNVD: alpha (FLAC damping) must be in "
+                f"[0, 1), got {self.alpha}."
+            )
+        _validate_explicit_cfl_options(
+            who="ExplicitBatheLNVD",
+            recompute=self.recompute,
+            lump=self.lump,
+            divergence=self.divergence,
+        )
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        _ = tag
+        args: list[float | int | str] = [self.p, self.alpha]
+        _render_explicit_cfl_options(
+            args,
+            cfl=self.cfl,
+            cfl_abort=self.cfl_abort,
+            tangent=self.tangent,
+            recompute=self.recompute,
+            lump=self.lump,
+            verbose=self.verbose,
+            divergence=self.divergence,
+        )
+        emitter.integrator("ExplicitBatheLNVD", *args)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# CentralDifferenceLadruno — robust central difference (fork)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class CentralDifferenceLadruno(Integrator):
+    """``integrator CentralDifferenceLadruno [flags...]`` — **fork-only**.
+
+    The *Ladruno fork*'s robust central-difference integrator: a correct
+    first-step starter, built-in ``dt_cr``, and a ``βK`` guard. Requires
+    the fork build to run.
+
+    Takes no positional parameter; the option flags match
+    :class:`ExplicitBathe`, except ``lump`` defaults to **Diagonal**
+    (diagonal-of-consistent) rather than RowSum when omitted. (The
+    dropped *coupled* mode is served by ``NewmarkExplicit 0.5`` — out of
+    scope here.)
+    """
+
+    cfl: bool = False
+    cfl_abort: bool = False
+    tangent: bool = False
+    recompute: int | None = None
+    lump: Lump | None = None
+    verbose: bool = False
+    divergence: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_explicit_cfl_options(
+            who="CentralDifferenceLadruno",
+            recompute=self.recompute,
+            lump=self.lump,
+            divergence=self.divergence,
+        )
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        _ = tag
+        args: list[float | int | str] = []
+        _render_explicit_cfl_options(
+            args,
+            cfl=self.cfl,
+            cfl_abort=self.cfl_abort,
+            tangent=self.tangent,
+            recompute=self.recompute,
+            lump=self.lump,
+            verbose=self.verbose,
+            divergence=self.divergence,
+        )
+        emitter.integrator("CentralDifferenceLadruno", *args)
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()

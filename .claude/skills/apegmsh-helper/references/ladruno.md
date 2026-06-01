@@ -15,6 +15,19 @@ point of use, never force the fork.
 | **EnergyBalance** | recorder | fork-only |
 | **`.ladruno` recorder** | recorder | `recorder ladruno` — note `.ladruno`, a sibling of the vanilla `.mpco` |
 
+The three **explicit integrators** are emittable via typed primitives:
+`ops.integrator.ExplicitBathe(p=0.54, cfl=True, ...)`,
+`ops.integrator.ExplicitBatheLNVD(p=0.54, alpha=0.8, ...)`, and
+`ops.integrator.CentralDifferenceLadruno(cfl=True, ...)`. They share an order-free
+option grammar (`cfl` / `cfl_abort` / `tangent` / `recompute=N` /
+`lump="rowsum"|"diagonal"` / `verbose` / `divergence=f`). Emission works on **any**
+build (it's just an `integrator <Type> ...` line); the fork is required only to
+*run* the deck — stock OpenSees raises "unknown integrator" at `ops.analyze(...)`.
+Defaults: Bathe `p∈(0,1)`=0.54, LNVD `alpha∈[0,1)`=0.80; `lump` defaults to RowSum
+on the Bathe schemes and Diagonal on CentralDifferenceLadruno (omit to inherit).
+The runtime `criticalTimeStep()` query and an auto-`dt` sub-stepping helper are
+**not yet** exposed on the bridge (deferred — pick `dt` by hand for now).
+
 The `.ladruno` recorder **does** write `MODEL/LOCAL_AXES` (per-class quaternion
 `FRAME`) for beams — unlike vanilla `.mpco`, which omits beam local axes. Don't
 carry the stale "MPCO carries no beam LOCAL_AXES" assumption into `.ladruno`
