@@ -53,7 +53,10 @@ from apeGmsh.opensees.analysis.constraint_handler import (
 from apeGmsh.opensees.analysis.integrator import (
     ArcLength,
     CentralDifference,
+    CentralDifferenceLadruno,
     DisplacementControl,
+    ExplicitBathe,
+    ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
     LoadControl,
@@ -69,10 +72,15 @@ from apeGmsh.opensees.analysis.numberer import Plain as NumbererPlain
 from apeGmsh.opensees.analysis.system import (
     BandGeneral,
     BandSPD,
+    Diagonal,
     FullGeneral,
+    MPIDiagonal,
     Mumps,
+    ParallelProfileSPD,
     ProfileSPD,
     SparseGeneral,
+    SparseSYM,
+    SProfileSPD,
     UmfPack,
 )
 from apeGmsh.opensees.analysis.test import (
@@ -82,7 +90,9 @@ from apeGmsh.opensees.analysis.test import (
     NormUnbalance,
     RelativeNormDispIncr,
 )
+from apeGmsh.opensees.emitter.py import PyEmitter
 from apeGmsh.opensees.emitter.recording import RecordingEmitter
+from apeGmsh.opensees.emitter.tcl import TclEmitter
 
 
 def _make_ops() -> apeSees:
@@ -371,10 +381,15 @@ class TestNumbererNamespace:
         (BandGeneral, "BandGeneral"),
         (BandSPD, "BandSPD"),
         (ProfileSPD, "ProfileSPD"),
+        (SProfileSPD, "SProfileSPD"),
         (UmfPack, "UmfPack"),
         (Mumps, "Mumps"),
         (SparseGeneral, "SparseGeneral"),
+        (SparseSYM, "SparseSYM"),
         (FullGeneral, "FullGeneral"),
+        (Diagonal, "Diagonal"),
+        (MPIDiagonal, "MPIDiagonal"),
+        (ParallelProfileSPD, "ParallelProfileSPD"),
     ],
 )
 def test_system_emit_records_token(
@@ -388,8 +403,9 @@ def test_system_emit_records_token(
 @pytest.mark.parametrize(
     "cls",
     [
-        BandGeneral, BandSPD, ProfileSPD, UmfPack,
-        Mumps, SparseGeneral, FullGeneral,
+        BandGeneral, BandSPD, ProfileSPD, SProfileSPD, UmfPack,
+        Mumps, SparseGeneral, SparseSYM, FullGeneral, Diagonal,
+        MPIDiagonal, ParallelProfileSPD,
     ],
 )
 def test_system_dependencies_empty(cls: type) -> None:
@@ -431,6 +447,31 @@ class TestSystemNamespace:
         ops = _make_ops()
         s = ops.system.FullGeneral()
         assert isinstance(s, FullGeneral)
+
+    def test_sprofile_spd(self) -> None:
+        ops = _make_ops()
+        s = ops.system.SProfileSPD()
+        assert isinstance(s, SProfileSPD)
+
+    def test_sparse_sym(self) -> None:
+        ops = _make_ops()
+        s = ops.system.SparseSYM()
+        assert isinstance(s, SparseSYM)
+
+    def test_diagonal(self) -> None:
+        ops = _make_ops()
+        s = ops.system.Diagonal()
+        assert isinstance(s, Diagonal)
+
+    def test_mpi_diagonal(self) -> None:
+        ops = _make_ops()
+        s = ops.system.MPIDiagonal()
+        assert isinstance(s, MPIDiagonal)
+
+    def test_parallel_profile_spd(self) -> None:
+        ops = _make_ops()
+        s = ops.system.ParallelProfileSPD()
+        assert isinstance(s, ParallelProfileSPD)
 
 
 # ===========================================================================
@@ -935,6 +976,156 @@ class TestExplicitDifference:
         assert e.calls == [("integrator", ("ExplicitDifference",), {})]
 
 
+# ---------------------------------------------------------------------------
+# Fork-only explicit integrators (Ladruno)
+# ---------------------------------------------------------------------------
+
+class TestExplicitBathe:
+    def test_emit_default(self) -> None:
+        e = RecordingEmitter()
+        ExplicitBathe()._emit(e, tag=1)
+        assert e.calls == [("integrator", ("ExplicitBathe", 0.54), {})]
+
+    def test_emit_all_flags_canonical_order(self) -> None:
+        e = RecordingEmitter()
+        ExplicitBathe(
+            p=0.6,
+            cfl=True,
+            cfl_abort=True,
+            tangent=True,
+            recompute=5,
+            lump="diagonal",
+            verbose=True,
+            divergence=2.0,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "ExplicitBathe",
+                    0.6,
+                    "-cfl",
+                    "-cflAbort",
+                    "-tangent",
+                    "-recompute",
+                    5,
+                    "-lump",
+                    "diagonal",
+                    "-verbose",
+                    "-divergence",
+                    2.0,
+                ),
+                {},
+            )
+        ]
+
+    def test_tcl_line(self) -> None:
+        e = TclEmitter()
+        ExplicitBathe(p=0.54, cfl=True)._emit(e, tag=1)
+        assert "integrator ExplicitBathe 0.54 -cfl" in e.lines()
+
+    def test_py_line(self) -> None:
+        e = PyEmitter()
+        ExplicitBathe(p=0.54, cfl=True)._emit(e, tag=1)
+        assert "ops.integrator('ExplicitBathe', 0.54, '-cfl')" in e.lines()
+
+    def test_p_out_of_range_raises(self) -> None:
+        with pytest.raises(ValueError, match="p must be in"):
+            ExplicitBathe(p=0.0)
+        with pytest.raises(ValueError, match="p must be in"):
+            ExplicitBathe(p=1.0)
+
+    def test_recompute_below_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="recompute must be >= 1"):
+            ExplicitBathe(recompute=0)
+
+    def test_bad_lump_raises(self) -> None:
+        with pytest.raises(ValueError, match="lump must be"):
+            ExplicitBathe(lump="banded")  # type: ignore[arg-type]
+
+    def test_nonpositive_divergence_raises(self) -> None:
+        with pytest.raises(ValueError, match="divergence factor must be > 0"):
+            ExplicitBathe(divergence=0.0)
+
+    def test_dependencies_empty(self) -> None:
+        assert ExplicitBathe().dependencies() == ()
+
+
+class TestExplicitBatheLNVD:
+    def test_emit_default_emits_both_positionals(self) -> None:
+        e = RecordingEmitter()
+        ExplicitBatheLNVD()._emit(e, tag=1)
+        assert e.calls == [
+            ("integrator", ("ExplicitBatheLNVD", 0.54, 0.8), {})
+        ]
+
+    def test_emit_all_flags(self) -> None:
+        e = RecordingEmitter()
+        ExplicitBatheLNVD(
+            p=0.6,
+            alpha=0.0,
+            cfl=True,
+            lump="rowsum",
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                ("ExplicitBatheLNVD", 0.6, 0.0, "-cfl", "-lump", "rowsum"),
+                {},
+            )
+        ]
+
+    def test_py_line(self) -> None:
+        e = PyEmitter()
+        ExplicitBatheLNVD(p=0.54, alpha=0.8)._emit(e, tag=1)
+        assert (
+            "ops.integrator('ExplicitBatheLNVD', 0.54, 0.8)" in e.lines()
+        )
+
+    def test_alpha_out_of_range_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"alpha .* must be in"):
+            ExplicitBatheLNVD(alpha=1.0)
+        with pytest.raises(ValueError, match=r"alpha .* must be in"):
+            ExplicitBatheLNVD(alpha=-0.1)
+
+    def test_alpha_zero_allowed(self) -> None:
+        # alpha == 0 is valid (disables damping) — must not raise.
+        assert ExplicitBatheLNVD(alpha=0.0).alpha == 0.0
+
+    def test_dependencies_empty(self) -> None:
+        assert ExplicitBatheLNVD().dependencies() == ()
+
+
+class TestCentralDifferenceLadruno:
+    def test_emit_default_no_positional(self) -> None:
+        e = RecordingEmitter()
+        CentralDifferenceLadruno()._emit(e, tag=1)
+        assert e.calls == [("integrator", ("CentralDifferenceLadruno",), {})]
+
+    def test_emit_flags(self) -> None:
+        e = RecordingEmitter()
+        CentralDifferenceLadruno(cfl=True, lump="diagonal")._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                ("CentralDifferenceLadruno", "-cfl", "-lump", "diagonal"),
+                {},
+            )
+        ]
+
+    def test_tcl_line(self) -> None:
+        e = TclEmitter()
+        CentralDifferenceLadruno(cfl=True)._emit(e, tag=1)
+        assert "integrator CentralDifferenceLadruno -cfl" in e.lines()
+
+    def test_recompute_below_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="recompute must be >= 1"):
+            CentralDifferenceLadruno(recompute=-1)
+
+    def test_dependencies_empty(self) -> None:
+        assert CentralDifferenceLadruno().dependencies() == ()
+
+
 class TestIntegratorNamespace:
     def test_load_control(self) -> None:
         ops = _make_ops()
@@ -973,6 +1164,25 @@ class TestIntegratorNamespace:
         ops = _make_ops()
         i = ops.integrator.ExplicitDifference()
         assert isinstance(i, ExplicitDifference)
+
+    def test_explicit_bathe(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.ExplicitBathe(p=0.54, cfl=True)
+        assert isinstance(i, ExplicitBathe)
+        assert i.p == 0.54
+        assert i.cfl is True
+
+    def test_explicit_bathe_lnvd(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.ExplicitBatheLNVD(p=0.54, alpha=0.8)
+        assert isinstance(i, ExplicitBatheLNVD)
+        assert i.alpha == 0.8
+
+    def test_central_difference_ladruno(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.CentralDifferenceLadruno(cfl=True, verbose=True)
+        assert isinstance(i, CentralDifferenceLadruno)
+        assert i.verbose is True
 
 
 # ===========================================================================

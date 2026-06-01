@@ -62,7 +62,10 @@ from apeGmsh.opensees.analysis.constraint_handler import (
 from apeGmsh.opensees.analysis.integrator import (
     ArcLength,
     CentralDifference,
+    CentralDifferenceLadruno,
     DisplacementControl,
+    ExplicitBathe,
+    ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
     LoadControl,
@@ -78,10 +81,15 @@ from apeGmsh.opensees.analysis.numberer import Plain as NumbererPlain
 from apeGmsh.opensees.analysis.system import (
     BandGeneral,
     BandSPD,
+    Diagonal,
     FullGeneral,
+    MPIDiagonal,
     Mumps,
+    ParallelProfileSPD,
     ProfileSPD,
     SparseGeneral,
+    SparseSYM,
+    SProfileSPD,
     UmfPack,
 )
 from apeGmsh.opensees.analysis.test import (
@@ -118,10 +126,15 @@ ALL_SYSTEMS: list[type[LinearSystem]] = [
     BandGeneral,
     BandSPD,
     ProfileSPD,
+    SProfileSPD,
     UmfPack,
     Mumps,
     SparseGeneral,
+    SparseSYM,
     FullGeneral,
+    Diagonal,
+    MPIDiagonal,
+    ParallelProfileSPD,
 ]
 
 ALL_TESTS: list[type[ConvergenceTest]] = [
@@ -150,6 +163,9 @@ ALL_INTEGRATORS: list[type[Integrator]] = [
     HHT,
     CentralDifference,
     ExplicitDifference,
+    ExplicitBathe,
+    ExplicitBatheLNVD,
+    CentralDifferenceLadruno,
 ]
 
 ALL_ANALYSES: list[type[Analysis]] = [
@@ -192,10 +208,15 @@ _MINIMAL_PARAMS: dict[type[Primitive], dict[str, Any]] = {
     BandGeneral: {},
     BandSPD: {},
     ProfileSPD: {},
+    SProfileSPD: {},
     UmfPack: {},
     Mumps: {},
     SparseGeneral: {},
+    SparseSYM: {},
     FullGeneral: {},
+    Diagonal: {},
+    MPIDiagonal: {},
+    ParallelProfileSPD: {},
     # test
     NormDispIncr: {"tol": 1e-6, "max_iter": 10},
     NormUnbalance: {"tol": 1e-6, "max_iter": 10},
@@ -218,6 +239,9 @@ _MINIMAL_PARAMS: dict[type[Primitive], dict[str, Any]] = {
     HHT: {"alpha": 0.9},
     CentralDifference: {},
     ExplicitDifference: {},
+    ExplicitBathe: {"p": 0.54},
+    ExplicitBatheLNVD: {"p": 0.54, "alpha": 0.8},
+    CentralDifferenceLadruno: {},
     # analysis
     Static: {},
     Transient: {},
