@@ -37,12 +37,11 @@ re-declared explicitly on ``ops``
 
 Since the teardown, the bridge has been progressively widened:
 
-- **Loads emit automatically** from ``fem.nodes.loads``. Loads
-  declared via ``g.loads.*`` are synthesized into ``Plain``
-  patterns by the broker-load emitter and land in the runnable
-  Tcl/Py deck (and the live/run path) without an ``ingest`` step —
-  purely additive on top of any bridge-registered pattern
-  primitives. (See the double-declaration caveat above.)
+- **Loads are opt-in** (ADR 0051). A ``g.loads.*`` case reaches the
+  runnable Tcl/Py deck (and the live/run path) only when a bridge
+  pattern imports it with ``p.from_model(case)`` — or you author the
+  load directly with ``p.load(...)``. Nothing auto-emits; the deck is
+  authoritative (see the note above).
 - **MP constraints emit automatically** from ``fem.nodes.constraints``
   / ``fem.elements.constraints``
   ([ADR 0022](https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0022-mp-constraint-emission-fanout.md),
