@@ -454,6 +454,66 @@ class Results:
             model_path=Path(model_h5),
         )
 
+    @classmethod
+    def from_ladruno(
+        cls,
+        path: "str | Path",
+        *,
+        fem: "Optional[FEMData]" = None,
+        model_h5: "Optional[str | Path]" = None,
+    ) -> "Results":
+        """Open a Ladruno ``.ladruno`` HDF5 results file.
+
+        The Ladruno recorder is the fork's *canonical* recorder. Unlike
+        ``.mpco`` (and unlike :meth:`from_mpco`, which **requires**
+        ``model_h5=``), a ``.ladruno`` is **self-sufficient** — it carries
+        its own geometry, regions and beam local axes (schema Principle 0:
+        "this *is* the native path; no sibling file"). So ``model_h5=`` is
+        **optional**:
+
+        * omitted → the broker is built in-memory from the file's own
+          ``MODEL`` group (geometry + inferred ``ndm``/``ndf``; bridge
+          record zones empty). This is read-time interpretation, not a
+          transcode.
+        * supplied → the richer broker is loaded via
+          :meth:`OpenSeesModel.from_h5` (full bridge records + lineage),
+          and — for a composed model (ADR 0043) — the fem_eid↔ops-tag
+          translator is attached.
+
+        Keys on ``INFO/GENERATOR="Ladruno"`` + a supported
+        ``FORMAT_VERSION`` (the reader rejects a ``.mpco`` / foreign file
+        or an out-of-window version loudly).
+
+        Note
+        ----
+        Multi-partition merge (``<stem>.part-<N>.ladruno``) is a deferred
+        slice; pass a single ``.ladruno`` path for now.
+        """
+        from .readers._ladruno import LadrunoReader
+
+        anchor = Path(path)
+        reader = LadrunoReader(anchor)
+        bound_fem = _resolve_fem(reader, fem)
+        bound_model: "Optional[OpenSeesModel]"
+        if model_h5 is not None:
+            from ..opensees.opensees_model import OpenSeesModel
+            bound_model = OpenSeesModel.from_h5(model_h5)
+            if _model_is_composed(bound_model):
+                from .readers._tag_translation import ElementTagTranslator
+                reader.attach_tag_map(
+                    ElementTagTranslator.from_model(bound_model),
+                )
+            model_path: "Optional[Path]" = Path(model_h5)
+        else:
+            # Self-sufficient path — minimal broker from the file itself.
+            bound_model = resolve_bound_model(reader, None)
+            model_path = None
+        assert bound_model is not None
+        return cls(
+            reader, fem=bound_fem, path=anchor, model=bound_model,
+            model_path=model_path,
+        )
+
     # ------------------------------------------------------------------
     # FEM access & binding
     # ------------------------------------------------------------------
@@ -472,6 +532,43 @@ class Results:
         OpenSeesModel and its embedded FEMData can be reached.
         """
         return self._model
+
+    def energy(
+        self,
+        *,
+        region: "Optional[int]" = None,
+        stage: Optional[str] = None,
+    ) -> "Any":
+        """Energy-balance time history — **Ladruno-recorder feature**.
+
+        Returns a :class:`pandas.DataFrame` of the closure components
+        ``KE`` / ``IE`` / ``DW`` / ``ULW`` / ``RES`` / ``ERR`` indexed by
+        simulation time, written by the recorder's ``-G energy`` verb.
+
+        * ``region=None`` → whole-domain balance (``ON_DOMAIN``).
+        * ``region=<tag>`` → the per-region balance (``ON_REGIONS``) for
+          the OpenSees region tag.
+
+        ``ERR`` (the normalized energy-balance error %) is the headline
+        solution-quality diagnostic for explicit runs. Raises
+        :class:`TypeError` on a non-Ladruno results object (MPCO / native
+        carry no energy balance) and ``ValueError`` if energy was not
+        recorded / the region is unknown.
+        """
+        read_energy = getattr(self._reader, "read_energy", None)
+        if read_energy is None:
+            raise TypeError(
+                "Results.energy() is a Ladruno-recorder feature. Open a "
+                ".ladruno via Results.from_ladruno(...) recorded with the "
+                "'-G energy' verb; MPCO / native results carry no energy "
+                "balance."
+            )
+        sid = self._resolve_stage(stage)
+        cols, values, time = read_energy(sid, region=region)
+        import pandas as pd
+        return pd.DataFrame(
+            values, columns=cols, index=pd.Index(time, name="time"),
+        )
 
     @property
     def lineage(self) -> "Lineage":
