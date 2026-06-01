@@ -6,11 +6,14 @@ canonicity contract it reads the file **direct** — HDF5 groups → the
 ``ResultsReader`` protocol slabs, lazily, with no transcode to a derived
 on-disk representation.
 
-L2a scope (this slice): file identity + ``FORMAT_VERSION`` window, stage
-enumeration, time vectors, the self-describing FEM (``MODEL/`` →
-:meth:`FEMData.from_ladruno_model`), and **nodal** result reads
-(``RESULTS/ON_NODES`` — chunked ``DATA[T×nIds×nComp]``). Element / gauss /
-line-station / fiber / layer / spring reads return empty slabs until L2b.
+Reads cover: file identity + ``FORMAT_VERSION`` window, stage enumeration,
+time vectors, the self-describing FEM (``MODEL/`` →
+:meth:`FEMData.from_ladruno_model`), nodal reads (``RESULTS/ON_NODES`` —
+chunked ``DATA[T×nIds×nComp]``), element/gauss/line-station reads (L2b-2),
+section-level line stations + fiber stress/strain (L2b-3). Layer and spring
+reads return empty slabs by design — a ``.ladruno`` has no distinct layer or
+spring level (layered shells serialise as fiber sections; zeroLength state
+flows through the element/gauss reads).
 
 Key layout facts (verified against fork build ``605affeb``, FORMAT_VERSION 1):
 
@@ -356,7 +359,13 @@ class LadrunoReader:
             return sorted(_eio.line_station_available(on_elements))
         if level is ResultLevel.ELEMENTS:
             return sorted(_eio.element_available(on_elements))
-        return []  # fibers / layers / springs land in L2b-3
+        if level is ResultLevel.FIBERS:
+            return sorted(_eio.fiber_available(on_elements))
+        # LAYERS / SPRINGS: a .ladruno has no distinct layer or spring
+        # level — layered shells serialise as fiber sections (read via
+        # read_fibers) and zeroLength material/force state is reachable
+        # through read_gauss / read_elements. See _ladruno_element_io.
+        return []
 
     def _locate_node_component(
         self, on_nodes: "h5py.Group", component: str,
@@ -529,12 +538,14 @@ class LadrunoReader:
     ) -> LineStationSlab:
         time = self.time_vector(stage_id)
         t_idx = resolve_time_slice(time_slice, time)
-        on_e = self._on_elements(stage_id)
+        grp = self._resolve_stage_group(stage_id)
+        on_e = _child(grp, "RESULTS/ON_ELEMENTS")
         if on_e is None:
             return _empty_line_station_slab(component, time, t_idx)
         result = _eio.read_line_station_slab(
             on_e, component,
             t_idx=t_idx, element_ids=self._ids_to_ops(element_ids),
+            model_elements=_child(grp, "MODEL/ELEMENTS"),
         )
         if result is None:
             return _empty_line_station_slab(component, time, t_idx)
@@ -602,8 +613,24 @@ class LadrunoReader:
         gp_indices: "Optional[ndarray]" = None, time_slice: TimeSlice = None,
     ) -> FiberSlab:
         time = self.time_vector(stage_id)
-        return _empty_fiber_slab(
-            component, time, resolve_time_slice(time_slice, time),
+        t_idx = resolve_time_slice(time_slice, time)
+        grp = self._resolve_stage_group(stage_id)
+        on_e = _child(grp, "RESULTS/ON_ELEMENTS")
+        if on_e is None:
+            return _empty_fiber_slab(component, time, t_idx)
+        result = _eio.read_fiber_slab(
+            on_e, _child(grp, "MODEL/ELEMENTS"),
+            _child(grp, "MODEL/SECTION_ASSIGNMENTS"), component,
+            t_idx=t_idx, element_ids=self._ids_to_ops(element_ids),
+            gp_indices=gp_indices,
+        )
+        if result is None:
+            return _empty_fiber_slab(component, time, t_idx)
+        values, ei, gpi, y, z, area, mtag = result
+        return FiberSlab(
+            component=component, values=values,
+            element_index=self._index_to_fem(ei), gp_index=gpi,
+            y=y, z=z, area=area, material_tag=mtag, time=time[t_idx],
         )
 
     def read_layers(
@@ -612,6 +639,11 @@ class LadrunoReader:
         gp_indices: "Optional[ndarray]" = None,
         layer_indices: "Optional[ndarray]" = None, time_slice: TimeSlice = None,
     ) -> LayerSlab:
+        # A .ladruno has no distinct layer level: a layered-shell section
+        # serialises as a fiber section (KIND='fiber', layers == fibers),
+        # so layer state is read through read_fibers. (Separately, the fork
+        # does not yet emit per-layer shell material stress under the
+        # obvious recorder verb — a fork-side ask.) Always empty here.
         time = self.time_vector(stage_id)
         return _empty_layer_slab(
             component, time, resolve_time_slice(time_slice, time),
@@ -621,6 +653,10 @@ class LadrunoReader:
         self, stage_id: str, component: str, *,
         element_ids: "Optional[ndarray]" = None, time_slice: TimeSlice = None,
     ) -> SpringSlab:
+        # A .ladruno has no distinct spring level: zeroLength force and
+        # material stress/strain are already reachable via read_elements
+        # (the ``force`` token) and read_gauss (``material.stress`` →
+        # stress_xx). No bespoke spring slab. Always empty here.
         time = self.time_vector(stage_id)
         return _empty_spring_slab(
             component, time, resolve_time_slice(time_slice, time),

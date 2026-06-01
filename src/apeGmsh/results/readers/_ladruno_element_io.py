@@ -43,7 +43,8 @@ if TYPE_CHECKING:
 
 _AXIS = {"1": "x", "2": "y", "3": "z"}
 
-# Beam section / end forces (localForce, basicForce, section.force).
+# Beam end / basic forces (localForce, basicForce) — element-level
+# (``LEVELS==0``) buckets that carry one block of named columns.
 _BEAM_BASE_TO_CANONICAL: dict[str, str] = {
     "N": "axial_force",
     "Vy": "shear_y",
@@ -52,6 +53,50 @@ _BEAM_BASE_TO_CANONICAL: dict[str, str] = {
     "My": "bending_moment_y",
     "Mz": "bending_moment_z",
 }
+
+# Section stress-resultants (``section.force``, recorder token
+# ``LEVELS==2``). One block per integration station; columns named with the
+# OpenSees section response codes ``P``/``Vy``/``Vz``/``T``/``My``/``Mz``
+# (``P`` is the section axial force — distinct from the element-level ``N``).
+_SECTION_FORCE_TO_CANONICAL: dict[str, str] = {
+    "P": "axial_force",
+    "Vy": "shear_y",
+    "Vz": "shear_z",
+    "T": "torsion",
+    "My": "bending_moment_y",
+    "Mz": "bending_moment_z",
+}
+
+# Section generalized strains (``section.deformation``) — conjugate
+# work-pair to the resultants, same per-station layout. Tokens are the
+# OpenSees deformation codes (``eps``/``kappaZ``/…). Only the 2-D pair
+# (``eps``/``kappaZ``) is verified against a fixture; the 3-D tokens follow
+# the standard section response order.
+_SECTION_DEFORM_TO_CANONICAL: dict[str, str] = {
+    "eps": "axial_strain",
+    "gammaY": "shear_strain_y",
+    "gammaZ": "shear_strain_z",
+    "theta": "torsional_strain",
+    "kappaY": "curvature_y",
+    "kappaZ": "curvature_z",
+}
+
+# Fiber-level buckets (``section.fiber.stress`` / ``section.fiber.strain``,
+# ``LEVELS==4`` with ``MULTIPLICITY``==num-fibers). Keyed by token, not by
+# column name (the column is the scalar uniaxial ``sigma11``/``eps11``).
+_FIBER_TOKEN_TO_CANONICAL: dict[str, str] = {
+    "section.fiber.stress": "fiber_stress",
+    "section.fiber.strain": "fiber_strain",
+}
+_FIBER_CANONICAL_TO_TOKEN = {v: k for k, v in _FIBER_TOKEN_TO_CANONICAL.items()}
+
+
+def section_canonical(token: str) -> Optional[str]:
+    """Map a ``section.force`` / ``section.deformation`` column token to a
+    neutral name (``P``→``axial_force``, ``kappaZ``→``curvature_z``), else
+    ``None``."""
+    t = token.strip()
+    return _SECTION_FORCE_TO_CANONICAL.get(t) or _SECTION_DEFORM_TO_CANONICAL.get(t)
 
 # Continuum stress/strain tokens come in two flavours across element
 # classes: the digit form ``sigma11``/``eta11`` (stock FourNodeQuad etc.)
@@ -103,15 +148,22 @@ def beam_canonical(token: str) -> Optional[tuple[str, Optional[int]]]:
 
 @dataclass(frozen=True)
 class _Block:
-    """One ``COLUMN_MAP`` row mapped to its slice of ``DATA``."""
+    """One ``COLUMN_MAP`` row mapped to its slice of ``DATA``.
+
+    Most blocks have ``multiplicity == 1`` (the block is exactly its
+    ``comp_names``). Fiber buckets repeat a single column
+    (``NUM_COMP==1``) once per fiber, so ``multiplicity`` == fibers and the
+    block occupies ``len(comp_names) * multiplicity`` columns of ``DATA``.
+    """
     level: int
     gauss_id: int
     comp_names: tuple[str, ...]
     col_start: int          # first DATA column for this block
+    multiplicity: int = 1
 
     @property
     def width(self) -> int:
-        return len(self.comp_names)
+        return len(self.comp_names) * self.multiplicity
 
 
 def _decode_str(value) -> str:
@@ -134,6 +186,10 @@ def parse_blocks(bucket_grp: "h5py.Group") -> list[_Block]:
     gauss = np.asarray(cm["GAUSS_ID"][...], dtype=np.int64).flatten()
     lines = _decode_str(cm.attrs["COMP_NAMES"]).split("\n")
     n_blocks = int(levels.size)
+    if "MULTIPLICITY" in cm:
+        mult = np.asarray(cm["MULTIPLICITY"][...], dtype=np.int64).flatten()
+    else:
+        mult = np.ones(n_blocks, dtype=np.int64)
     if len(lines) != n_blocks:
         raise ValueError(
             f"COLUMN_MAP has {n_blocks} rows but COMP_NAMES has "
@@ -143,11 +199,12 @@ def parse_blocks(bucket_grp: "h5py.Group") -> list[_Block]:
     col = 0
     for i in range(n_blocks):
         names = tuple(t.strip() for t in lines[i].split(",") if t.strip())
+        m = int(mult[i]) if i < mult.size else 1
         blocks.append(_Block(
             level=int(levels[i]), gauss_id=int(gauss[i]),
-            comp_names=names, col_start=col,
+            comp_names=names, col_start=col, multiplicity=m,
         ))
-        col += len(names)
+        col += len(names) * m
     total = int(np.asarray(bucket_grp["DATA"].shape)[-1])
     if col != total:
         raise ValueError(
@@ -208,7 +265,10 @@ def gauss_available(on_elements: "h5py.Group") -> set[str]:
             except (KeyError, ValueError):
                 continue
             for b in blocks:
-                if b.gauss_id < 0:
+                # Skip element-level (gauss_id<0) and fiber-expansion
+                # (multiplicity>1) blocks — the latter are fiber stress/
+                # strain, read via read_fibers, not continuum Gauss points.
+                if b.gauss_id < 0 or b.multiplicity != 1:
                     continue
                 for name in b.comp_names:
                     c = continuum_canonical(name)
@@ -242,7 +302,9 @@ def read_gauss_slab(
                 blocks = parse_blocks(bucket)
             except (KeyError, ValueError):
                 continue
-            gp_blocks = [b for b in blocks if b.gauss_id >= 0]
+            gp_blocks = [
+                b for b in blocks if b.gauss_id >= 0 and b.multiplicity == 1
+            ]
             if not gp_blocks:
                 continue
             # (block, col-within-DATA) pairs that hold the component.
@@ -302,9 +364,14 @@ def line_station_available(on_elements: "h5py.Group") -> set[str]:
                 continue
             for b in blocks:
                 for name in b.comp_names:
-                    bc = beam_canonical(name)
-                    if bc is not None:
-                        out.add(bc[0])
+                    if b.level == 2:
+                        c = section_canonical(name)
+                        if c is not None:
+                            out.add(c)
+                    else:
+                        bc = beam_canonical(name)
+                        if bc is not None:
+                            out.add(bc[0])
     return out
 
 
@@ -314,14 +381,22 @@ def read_line_station_slab(
     *,
     t_idx: ndarray,
     element_ids: "Optional[ndarray]",
+    model_elements: "Optional[h5py.Group]" = None,
 ) -> "Optional[tuple[ndarray, ndarray, ndarray]]":
     """Return ``(values[T, sumS], element_index, station_natural_coord)``.
 
-    Decodes beam force buckets (``localForce``, ``basicForce``,
-    ``section.force``) from their ``COMP_NAMES`` tokens. The
-    ``localForce`` end-force convention flips the second station's sign so
-    the diagram is a continuous internal-force line (parity with MPCO's
-    ``_mpco_local_force_io``); single-station ``basicForce`` is left as-is.
+    Two bucket flavours feed the beam line diagram:
+
+    * **element-level** (``localForce`` / ``basicForce``, ``LEVELS==0``) —
+      one block of named columns. The ``localForce`` end-force convention
+      flips the second station's sign so the diagram is a continuous
+      internal-force line (parity with MPCO's ``_mpco_local_force_io``);
+      single-station ``basicForce`` is left as-is. Stations are evenly
+      spaced over ``[-1, +1]``.
+    * **section-level** (``section.force`` / ``section.deformation``,
+      ``LEVELS==2``) — one block per integration station. The station's
+      natural coordinate is read from the element's ``QUADRATURE/GP_PARAM``
+      keyed by ``GAUSS_ID`` (force-based beams), not synthesized.
     """
     values_parts: list[ndarray] = []
     eidx_parts: list[ndarray] = []
@@ -335,36 +410,22 @@ def read_line_station_slab(
                 blocks = parse_blocks(bucket)
             except (KeyError, ValueError):
                 continue
-            # station (1-based, None→1) → DATA column for this component.
-            station_to_col: dict[int, int] = {}
-            for b in blocks:
-                for off, name in enumerate(b.comp_names):
-                    bc = beam_canonical(name)
-                    if bc is None or bc[0] != component:
-                        continue
-                    station = bc[1] if bc[1] is not None else 1
-                    station_to_col[station] = b.col_start + off
-            if not station_to_col:
+            if any(b.level == 2 for b in blocks):
+                res = _read_section_stations(
+                    bucket, blocks, component, key, model_elements,
+                    t_idx=t_idx, element_ids=element_ids,
+                )
+            else:
+                res = _read_element_stations(
+                    bucket, blocks, component, token,
+                    t_idx=t_idx, element_ids=element_ids,
+                )
+            if res is None:
                 continue
-            sel = _select_rows(bucket, element_ids)
-            if sel is None:
-                continue
-            rows, sel_ids = sel
-            data = np.asarray(bucket["DATA"][...], dtype=np.float64)
-
-            stations = sorted(station_to_col)
-            n_st = len(stations)
-            T = int(np.size(t_idx))
-            E = sel_ids.size
-            out = np.empty((T, E, n_st), dtype=np.float64)
-            for s_i, st in enumerate(stations):
-                out[:, :, s_i] = data[t_idx][:, rows, station_to_col[st]]
-            # localForce end-force → internal-force sign continuity.
-            if token == "localForce" and n_st == 2:
-                out[:, :, 1] *= -1.0
-            values_parts.append(out.reshape(T, E * n_st))
-            eidx_parts.append(np.repeat(sel_ids, n_st))
-            station_parts.append(np.tile(_station_xi(n_st), E))
+            v, ei, st = res
+            values_parts.append(v)
+            eidx_parts.append(ei)
+            station_parts.append(st)
 
     if not values_parts:
         return None
@@ -372,6 +433,93 @@ def read_line_station_slab(
         np.concatenate(values_parts, axis=1),
         np.concatenate(eidx_parts),
         np.concatenate(station_parts),
+    )
+
+
+def _read_element_stations(
+    bucket: "h5py.Group", blocks: list[_Block], component: str, token: str,
+    *, t_idx: ndarray, element_ids: "Optional[ndarray]",
+) -> "Optional[tuple[ndarray, ndarray, ndarray]]":
+    """Element-level (``localForce``/``basicForce``) line stations."""
+    # station (1-based, None→1) → DATA column for this component.
+    station_to_col: dict[int, int] = {}
+    for b in blocks:
+        for off, name in enumerate(b.comp_names):
+            bc = beam_canonical(name)
+            if bc is None or bc[0] != component:
+                continue
+            station = bc[1] if bc[1] is not None else 1
+            station_to_col[station] = b.col_start + off
+    if not station_to_col:
+        return None
+    sel = _select_rows(bucket, element_ids)
+    if sel is None:
+        return None
+    rows, sel_ids = sel
+    data = np.asarray(bucket["DATA"][...], dtype=np.float64)
+
+    stations = sorted(station_to_col)
+    n_st = len(stations)
+    T = int(np.size(t_idx))
+    E = sel_ids.size
+    out = np.empty((T, E, n_st), dtype=np.float64)
+    for s_i, st in enumerate(stations):
+        out[:, :, s_i] = data[t_idx][:, rows, station_to_col[st]]
+    # localForce end-force → internal-force sign continuity.
+    if token == "localForce" and n_st == 2:
+        out[:, :, 1] *= -1.0
+    return (
+        out.reshape(T, E * n_st),
+        np.repeat(sel_ids, n_st),
+        np.tile(_station_xi(n_st), E),
+    )
+
+
+def _read_section_stations(
+    bucket: "h5py.Group", blocks: list[_Block], component: str,
+    bucket_key: str, model_elements: "Optional[h5py.Group]",
+    *, t_idx: ndarray, element_ids: "Optional[ndarray]",
+) -> "Optional[tuple[ndarray, ndarray, ndarray]]":
+    """Section-level (``section.force``/``section.deformation``) stations.
+
+    Each ``LEVELS==2`` block is one integration station; the station's
+    natural coordinate comes from the element's ``GP_PARAM`` keyed by
+    ``GAUSS_ID``.
+    """
+    # gauss_id → DATA column carrying this component.
+    gp_to_col: dict[int, int] = {}
+    for b in blocks:
+        if b.level != 2:
+            continue
+        for off, name in enumerate(b.comp_names):
+            if section_canonical(name) == component:
+                gp_to_col[b.gauss_id] = b.col_start + off
+    if not gp_to_col:
+        return None
+    sel = _select_rows(bucket, element_ids)
+    if sel is None:
+        return None
+    rows, sel_ids = sel
+    data = np.asarray(bucket["DATA"][...], dtype=np.float64)
+    gp_param = _gp_param_for(model_elements, bucket_key)
+
+    gauss_ids = sorted(gp_to_col)
+    n_st = len(gauss_ids)
+    T = int(np.size(t_idx))
+    E = sel_ids.size
+    out = np.empty((T, E, n_st), dtype=np.float64)
+    xi = np.empty(n_st, dtype=np.float64)
+    fallback = _station_xi(n_st)
+    for s_i, gid in enumerate(gauss_ids):
+        out[:, :, s_i] = data[t_idx][:, rows, gp_to_col[gid]]
+        if gp_param is not None and 0 <= gid < gp_param.shape[0]:
+            xi[s_i] = float(gp_param[gid, 0])
+        else:
+            xi[s_i] = fallback[s_i]
+    return (
+        out.reshape(T, E * n_st),
+        np.repeat(sel_ids, n_st),
+        np.tile(xi, E),
     )
 
 
@@ -472,4 +620,145 @@ def read_element_slab(
     return (
         np.concatenate(values_parts, axis=1),
         np.concatenate(eid_parts),
+    )
+
+
+# =====================================================================
+# Fiber reads (fiber-section stress / strain)
+# =====================================================================
+#
+# A ``.ladruno`` serialises a fiber section's per-fiber state under
+# ``ON_ELEMENTS/section.fiber.stress`` (``…strain``) with one ``LEVELS==4``
+# block per integration station whose ``MULTIPLICITY`` is the fiber count
+# and ``NUM_COMP==1`` (the scalar uniaxial ``sigma11`` / ``eps11``). Fiber
+# *geometry* (y, z, area, material) lives in
+# ``MODEL/SECTION_ASSIGNMENTS/SECTION_<tag>/{FIBER_DATA, FIBER_MATERIALS}``,
+# wired to (element, gauss) by that group's ``ASSIGNMENT[(elem_tag,
+# gauss_id)]``. A layered-shell section serialises the same way (layers ==
+# fibers), so this path covers both when the writer emits the bucket.
+
+
+def fiber_available(on_elements: "h5py.Group") -> set[str]:
+    """``fiber_stress`` / ``fiber_strain`` present under ``ON_ELEMENTS``."""
+    return {
+        _FIBER_TOKEN_TO_CANONICAL[token]
+        for token in on_elements
+        if token in _FIBER_TOKEN_TO_CANONICAL
+    }
+
+
+def _build_fiber_assignment(
+    section_assignments: "Optional[h5py.Group]",
+) -> "dict[tuple[int, int], tuple[ndarray, ndarray, ndarray, ndarray]]":
+    """``(elem_tag, gauss_id)`` → ``(y, z, area, material_tag)`` per fiber."""
+    out: dict[tuple[int, int], tuple[ndarray, ndarray, ndarray, ndarray]] = {}
+    if section_assignments is None:
+        return out
+    for name in section_assignments:
+        sa = section_assignments[name]
+        if "FIBER_DATA" not in sa or "ASSIGNMENT" not in sa:
+            continue
+        fd = np.asarray(sa["FIBER_DATA"][...], dtype=np.float64).reshape(-1, 3)
+        y, z, area = fd[:, 0], fd[:, 1], fd[:, 2]
+        if "FIBER_MATERIALS" in sa:
+            mats = np.asarray(
+                sa["FIBER_MATERIALS"][...], dtype=np.int64,
+            ).flatten()
+        else:
+            mats = np.full(fd.shape[0], -1, dtype=np.int64)
+        assign = np.asarray(sa["ASSIGNMENT"][...], dtype=np.int64).reshape(-1, 2)
+        for etag, gid in assign:
+            out[(int(etag), int(gid))] = (y, z, area, mats)
+    return out
+
+
+def read_fiber_slab(
+    on_elements: "h5py.Group",
+    model_elements: "Optional[h5py.Group]",
+    section_assignments: "Optional[h5py.Group]",
+    component: str,
+    *,
+    t_idx: ndarray,
+    element_ids: "Optional[ndarray]",
+    gp_indices: "Optional[ndarray]",
+) -> "Optional[tuple[ndarray, ndarray, ndarray, ndarray, ndarray, ndarray, ndarray]]":
+    """Return ``(values[T, sumF], elem_index, gp_index, y, z, area, mat)``.
+
+    One slab column per (element, gauss point, fiber). ``None`` if the
+    component (``fiber_stress`` / ``fiber_strain``) is absent.
+    """
+    token = _FIBER_CANONICAL_TO_TOKEN.get(component)
+    if token is None or token not in on_elements:
+        return None
+    token_grp = on_elements[token]
+    assignment = _build_fiber_assignment(section_assignments)
+    want_gp = None if gp_indices is None else set(int(g) for g in gp_indices)
+
+    values_parts: list[ndarray] = []
+    ei_parts: list[ndarray] = []
+    gp_parts: list[ndarray] = []
+    y_parts: list[ndarray] = []
+    z_parts: list[ndarray] = []
+    area_parts: list[ndarray] = []
+    mat_parts: list[ndarray] = []
+
+    for key in token_grp:
+        bucket = token_grp[key]
+        try:
+            blocks = parse_blocks(bucket)
+        except (KeyError, ValueError):
+            continue
+        fiber_blocks = [
+            b for b in blocks
+            if b.gauss_id >= 0 and len(b.comp_names) == 1
+        ]
+        if not fiber_blocks:
+            continue
+        sel = _select_rows(bucket, element_ids)
+        if sel is None:
+            continue
+        rows, sel_ids = sel
+        data = np.asarray(bucket["DATA"][...], dtype=np.float64)
+
+        for b in sorted(fiber_blocks, key=lambda bb: bb.gauss_id):
+            if want_gp is not None and b.gauss_id not in want_gp:
+                continue
+            nfib = b.multiplicity
+            # (T, E, nfib) — NUM_COMP==1, so the block is fiber-major.
+            block = data[t_idx][:, rows, b.col_start:b.col_start + nfib]
+            T = block.shape[0]
+            E = sel_ids.size
+            values_parts.append(block.reshape(T, E * nfib))
+            ei_parts.append(np.repeat(sel_ids, nfib))
+            gp_parts.append(np.full(E * nfib, b.gauss_id, dtype=np.int64))
+            # Per-element fiber geometry from the assigned section.
+            ys = np.empty(E * nfib, dtype=np.float64)
+            zs = np.empty(E * nfib, dtype=np.float64)
+            ars = np.empty(E * nfib, dtype=np.float64)
+            mts = np.empty(E * nfib, dtype=np.int64)
+            for e_i, etag in enumerate(sel_ids):
+                geom = assignment.get((int(etag), b.gauss_id))
+                sl = slice(e_i * nfib, (e_i + 1) * nfib)
+                if geom is not None and geom[0].size == nfib:
+                    ys[sl], zs[sl], ars[sl], mts[sl] = geom
+                else:
+                    ys[sl] = np.nan
+                    zs[sl] = np.nan
+                    ars[sl] = np.nan
+                    mts[sl] = -1
+            y_parts.append(ys)
+            z_parts.append(zs)
+            area_parts.append(ars)
+            mat_parts.append(mts)
+
+    if not values_parts:
+        return None
+    return (
+        np.concatenate(values_parts, axis=1),
+        np.concatenate(ei_parts),
+        np.concatenate(gp_parts),
+        np.concatenate(y_parts),
+        np.concatenate(z_parts),
+        np.concatenate(area_parts),
+        np.concatenate(mat_parts),
     )

@@ -152,6 +152,51 @@ def _quad2d(path: str) -> None:
     ops.wipe()
 
 
+def _fiberbeam(path: str) -> None:
+    """A ``forceBeamColumn`` with a fiber section — the L2b-3 section /
+    fiber read baseline.
+
+    A 2-node cantilever along x (3-point Lobatto) with a unit-square
+    fiber section (2x2 patch → 4 fibers). A tip axial + transverse load
+    gives a constant section ``P`` and a moment ``Mz`` that varies per
+    integration station, so the per-GP station coordinate (read from
+    ``QUADRATURE/GP_PARAM`` keyed by ``GAUSS_ID``) is exercised. Records:
+
+      * ``section.force`` (``LEVELS=2``: ``P,Mz`` per station),
+      * ``section.deformation`` (``eps,kappaZ`` per station),
+      * ``section.fiber.stress`` / ``section.fiber.strain`` (``LEVELS=4``,
+        ``MULTIPLICITY=4`` fibers, ``sigma11``/``eps11``) — the fiber
+        geometry lands in ``MODEL/SECTION_ASSIGNMENTS``.
+    """
+    ops.wipe()
+    ops.model("basic", "-ndm", 2, "-ndf", 3)
+    ops.node(1, 0.0, 0.0)
+    ops.node(2, 1.0, 0.0)
+    ops.fix(1, 1, 1, 1)
+    ops.uniaxialMaterial("Elastic", 1, 200000.0)
+    ops.section("Fiber", 1)
+    ops.patch("rect", 1, 2, 2, -0.05, -0.05, 0.05, 0.05)
+    ops.geomTransf("Linear", 1)
+    ops.beamIntegration("Lobatto", 1, 1, 3)
+    ops.element("forceBeamColumn", 1, 1, 2, 1, 1)
+    ops.timeSeries("Linear", 1)
+    ops.pattern("Plain", 1, 1)
+    ops.load(2, 3.0, 2.0, 0.0)  # axial + transverse → P, varying Mz
+    ops.recorder(
+        "ladruno", path, "-N", "displacement",
+        "-E", "section.force", "section.deformation",
+        "section.fiber.stress", "section.fiber.strain",
+    )
+    ops.system("BandGen")
+    ops.numberer("RCM")
+    ops.constraints("Plain")
+    ops.integrator("LoadControl", 0.5)
+    ops.algorithm("Linear")
+    ops.analysis("Static")
+    ops.analyze(2)
+    ops.wipe()
+
+
 def _bezier_tri6(path: str) -> None:
     """A single fork ``BezierTri6`` — the self-describing HO/bernstein path.
 
@@ -283,6 +328,7 @@ def main() -> None:
         ("energy.ladruno", _energy),
         ("quad2d.ladruno", _quad2d),
         ("bezier_tri6.ladruno", _bezier_tri6),
+        ("fiberbeam.ladruno", _fiberbeam),
     ):
         path = os.path.join(HERE, name)
         if os.path.exists(path):

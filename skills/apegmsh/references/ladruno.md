@@ -54,7 +54,15 @@ names come from the file):
   token forms; cross-backend).
 - `results.elements.line_stations.get(component="axial_force")` — beam internal-force
   diagrams, **neutral** (`axial_force`/`shear_y`/…; `localForce` end forces get the
-  sign-continuity flip, `basicForce` is one station at ξ=0).
+  sign-continuity flip, `basicForce` is one station at ξ=0). For **force-based** beams
+  this also serves `section.force`/`section.deformation` (`P`→`axial_force`,
+  `kappaZ`→`curvature_z`, …) — one station per integration point, its ξ read from the
+  element's `GP_PARAM` (not synthesized).
+- `results.elements.fibers.get(component="fiber_stress")` — fiber-section stress/strain
+  (`fiber_stress`/`fiber_strain`), one row per (element, GP, fiber), with `y`/`z`/`area`/
+  `material_tag` from `MODEL/SECTION_ASSIGNMENTS`. (A `.ladruno` has no distinct *layer*
+  or *spring* level — layered shells serialise as fiber sections; zeroLength force/material
+  state is reachable via the element/gauss reads.)
 - `results.elements.get(component="localForce")` — **token-driven**: the component is
   the file's `ON_ELEMENTS/<token>` key (`basicForce`/`localForce`/`force`/`globalForce`)
   and the slab is the raw `(T, E, NUM_COLUMNS)` block in the file's column order. (This

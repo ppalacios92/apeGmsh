@@ -20,6 +20,7 @@ TRUSS = FIXTURES / "truss2d.ladruno"
 BEAM = FIXTURES / "beam3d.ladruno"
 QUAD = FIXTURES / "quad2d.ladruno"
 BEZIER = FIXTURES / "bezier_tri6.ladruno"
+FIBERBEAM = FIXTURES / "fiberbeam.ladruno"
 
 
 def test_satisfies_results_reader_protocol() -> None:
@@ -283,3 +284,108 @@ def test_bezier_tri6_gauss_axis_token_naming() -> None:
         assert slab.values.shape == (1, 3)
         assert slab.element_index.tolist() == [1, 1, 1]
         assert slab.natural_coords.shape == (3, 2)
+
+
+# =====================================================================
+# L2b-3 — section-level line stations + fibers (force-based fiber beam)
+# =====================================================================
+
+def test_section_force_line_stations() -> None:
+    # forceBeamColumn (Lobatto, 3 stations) fiber section: section.force
+    # (LEVELS=2) → axial_force / bending_moment_z line stations whose
+    # natural coords come from QUADRATURE/GP_PARAM keyed by GAUSS_ID.
+    with LadrunoReader(FIBERBEAM) as r:
+        comps = r.available_components("stage_0", ResultLevel.LINE_STATIONS)
+        assert {"axial_force", "bending_moment_z",
+                "axial_strain", "curvature_z"} <= set(comps)
+
+        axial = r.read_line_stations("stage_0", "axial_force")
+        # 1 beam × 3 Lobatto stations at ξ = -1, 0, +1.
+        assert axial.values.shape == (2, 3)
+        assert axial.element_index.tolist() == [1, 1, 1]
+        np.testing.assert_allclose(axial.station_natural_coord, [-1.0, 0.0, 1.0])
+        # Constant section axial force == applied axial load (3.0) at full load.
+        np.testing.assert_allclose(axial.values[-1], [3.0, 3.0, 3.0], atol=1e-9)
+
+        mz = r.read_line_stations("stage_0", "bending_moment_z")
+        # Tip transverse load 2.0 on a unit cantilever → linear Mz: 2 at the
+        # base station, ~0 at the tip station.
+        np.testing.assert_allclose(mz.values[-1], [2.0, 1.0, 0.0], atol=1e-9)
+
+
+def test_section_deformation_line_stations() -> None:
+    with LadrunoReader(FIBERBEAM) as r:
+        kappa = r.read_line_stations("stage_0", "curvature_z")
+        assert kappa.values.shape == (2, 3)
+        np.testing.assert_allclose(
+            kappa.station_natural_coord, [-1.0, 0.0, 1.0],
+        )
+        # curvature_z is the work-conjugate of Mz → same per-station profile
+        # shape (zero at the tip station).
+        np.testing.assert_allclose(kappa.values[-1, 2], 0.0, atol=1e-9)
+
+
+def test_section_force_station_element_filter() -> None:
+    with LadrunoReader(FIBERBEAM) as r:
+        slab = r.read_line_stations(
+            "stage_0", "axial_force", element_ids=np.array([1]),
+        )
+        assert slab.element_index.tolist() == [1, 1, 1]
+        slab_empty = r.read_line_stations(
+            "stage_0", "axial_force", element_ids=np.array([999]),
+        )
+        assert slab_empty.values.shape[1] == 0
+
+
+def test_fibers_available_and_read() -> None:
+    with LadrunoReader(FIBERBEAM) as r:
+        comps = r.available_components("stage_0", ResultLevel.FIBERS)
+        assert set(comps) == {"fiber_stress", "fiber_strain"}
+
+        slab = r.read_fibers("stage_0", "fiber_stress")
+        # 1 beam × 3 GPs × 4 fibers = 12 columns, 2 steps.
+        assert slab.values.shape == (2, 12)
+        assert slab.element_index.tolist() == [1] * 12
+        # GP-major, fiber-minor ordering.
+        assert slab.gp_index.tolist() == [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+        # Fiber geometry from MODEL/SECTION_ASSIGNMENTS (2×2 patch over
+        # [-0.05, 0.05]² → fibers at y = ±0.025, area 0.0025, material 1).
+        np.testing.assert_allclose(np.unique(slab.y), [-0.025, 0.025])
+        np.testing.assert_allclose(slab.area, 0.0025)
+        assert set(slab.material_tag.tolist()) == {1}
+
+
+def test_fibers_gp_filter() -> None:
+    with LadrunoReader(FIBERBEAM) as r:
+        slab = r.read_fibers(
+            "stage_0", "fiber_strain", gp_indices=np.array([2]),
+        )
+        # Only the tip station's 4 fibers.
+        assert slab.values.shape == (2, 4)
+        assert set(slab.gp_index.tolist()) == {2}
+
+
+def test_fibers_unknown_component_empty() -> None:
+    with LadrunoReader(FIBERBEAM) as r:
+        slab = r.read_fibers("stage_0", "fiber_stress_zz")  # not a fiber name
+        assert slab.values.shape[1] == 0
+
+
+def test_fiber_stress_not_leaked_into_gauss() -> None:
+    # section.fiber.stress carries sigma11 (→ stress_xx under the digit map)
+    # but as MULTIPLICITY>1 fiber blocks. read_gauss must NOT surface them
+    # as continuum Gauss stress.
+    with LadrunoReader(FIBERBEAM) as r:
+        assert r.available_components("stage_0", ResultLevel.GAUSS) == []
+        slab = r.read_gauss("stage_0", "stress_xx")
+        assert slab.values.shape[1] == 0
+
+
+def test_layers_and_springs_empty_by_design() -> None:
+    # A .ladruno has no distinct layer/spring level (layered shells are
+    # fiber sections; zeroLength state flows through element/gauss reads).
+    with LadrunoReader(FIBERBEAM) as r:
+        assert r.available_components("stage_0", ResultLevel.LAYERS) == []
+        assert r.available_components("stage_0", ResultLevel.SPRINGS) == []
+        assert r.read_layers("stage_0", "fiber_stress").values.shape[1] == 0
+        assert r.read_springs("stage_0", "spring_force_0").values.shape[1] == 0

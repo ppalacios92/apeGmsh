@@ -133,3 +133,55 @@ def test_quad_roundtrip_gauss_stress(_require_fork, tmp_path):
     slab = r.elements.gauss.get(component="stress_xx")
     # GaussSlab rows are GP-major for the single element → σxx per GP.
     np.testing.assert_allclose(slab.values[-1], live[:, 0], atol=1e-10)
+
+
+def test_fiber_beam_roundtrip_section_and_fibers(_require_fork, tmp_path):
+    from apeGmsh.results import Results
+
+    path = str(tmp_path / "fiberbeam.ladruno")
+    ops.wipe()
+    ops.model("basic", "-ndm", 2, "-ndf", 3)
+    ops.node(1, 0.0, 0.0)
+    ops.node(2, 1.0, 0.0)
+    ops.fix(1, 1, 1, 1)
+    ops.uniaxialMaterial("Elastic", 1, 200000.0)
+    ops.section("Fiber", 1)
+    ops.patch("rect", 1, 2, 2, -0.05, -0.05, 0.05, 0.05)
+    ops.geomTransf("Linear", 1)
+    ops.beamIntegration("Lobatto", 1, 1, 3)
+    ops.element("forceBeamColumn", 1, 1, 2, 1, 1)
+    ops.timeSeries("Linear", 1)
+    ops.pattern("Plain", 1, 1)
+    ops.load(2, 3.0, 2.0, 0.0)
+    ops.recorder(
+        "ladruno", path, "-E", "section.force", "section.fiber.stress",
+    )
+    ops.system("BandGen")
+    ops.numberer("RCM")
+    ops.constraints("Plain")
+    ops.integrator("LoadControl", 1.0)
+    ops.algorithm("Linear")
+    ops.analysis("Static")
+    ops.analyze(1)
+    # Live per-station section axial force P (dof 1) over the 3 Lobatto GPs.
+    live_P = [ops.sectionForce(1, gp, 1) for gp in (1, 2, 3)]
+    ops.wipe()
+
+    r = Results.from_ladruno(path)
+
+    # section.force → axial_force line stations match ops.sectionForce.
+    axial = r.elements.line_stations.get(component="axial_force")
+    e1 = np.where(axial.element_index == 1)[0]
+    np.testing.assert_allclose(
+        axial.values[-1, e1], live_P, atol=1e-10,
+    )
+
+    # Fiber stresses integrate (Σ σ·A) back to the section axial force at
+    # each Gauss point — ties the fiber read to an independent live value.
+    fib = r.elements.fibers.get(component="fiber_stress")
+    for gp_i, P in enumerate(live_P):
+        cols = np.where(fib.gp_index == gp_i)[0]
+        axial_from_fibers = float(
+            np.sum(fib.values[-1, cols] * fib.area[cols])
+        )
+        np.testing.assert_allclose(axial_from_fibers, P, atol=1e-8)
