@@ -62,3 +62,36 @@ def test_time_slice_last_step() -> None:
     r = Results.from_ladruno(TRUSS)
     slab = r.nodes.get(component="displacement_x", time=-1)
     assert slab.values.shape == (1, 3)
+
+
+# ---------------------------------------------------------------------------
+# Energy balance (L4) — recorder -G energy verb
+# ---------------------------------------------------------------------------
+
+ENERGY = FIXTURES / "energy.ladruno"
+_ENERGY_COLS = ["KE", "IE", "DW", "ULW", "RES", "ERR"]
+
+
+def test_energy_whole_domain() -> None:
+    df = Results.from_ladruno(ENERGY).energy()
+    assert list(df.columns) == _ENERGY_COLS
+    assert df.index.name == "time"
+    assert len(df) == 5                       # energy fixture: 5 transient steps
+    assert "ERR" in df.columns                # the headline quality diagnostic
+
+
+def test_energy_per_region() -> None:
+    df = Results.from_ladruno(ENERGY).energy(region=1)
+    assert list(df.columns) == _ENERGY_COLS
+    assert len(df) == 5
+
+
+def test_energy_unknown_region_raises() -> None:
+    with pytest.raises(ValueError, match="region 999 is not"):
+        Results.from_ladruno(ENERGY).energy(region=999)
+
+
+def test_energy_absent_raises() -> None:
+    # truss2d was recorded without -G energy → no ON_DOMAIN/energyBalance.
+    with pytest.raises(ValueError, match="no ON_DOMAIN/energyBalance"):
+        Results.from_ladruno(TRUSS).energy()

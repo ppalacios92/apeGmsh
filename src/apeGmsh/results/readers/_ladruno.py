@@ -378,6 +378,50 @@ class LadrunoReader:
             component=component, values=vals, node_ids=sel_ids, time=time[t_idx],
         )
 
+    # -- energy balance (Ladruno-only extension, not in the protocol) --
+
+    def read_energy(
+        self,
+        stage_id: str,
+        *,
+        region: "Optional[int]" = None,
+        time_slice: TimeSlice = None,
+    ) -> "tuple[list[str], ndarray, ndarray]":
+        """Read the energy-balance time history (recorder ``-G energy``).
+
+        Returns ``(component_names, values[T, nComp], time[T])``.
+        ``region=None`` → whole-domain ``RESULTS/ON_DOMAIN/energyBalance``;
+        ``region=<tag>`` → the matching row of
+        ``RESULTS/ON_REGIONS/energyBalance``. Raises if the channel is
+        absent (energy was not requested at record time).
+        """
+        grp = self._resolve_stage_group(stage_id)
+        bucket = "ON_REGIONS" if region is not None else "ON_DOMAIN"
+        eg = _child(grp, f"RESULTS/{bucket}/energyBalance")
+        if eg is None:
+            raise ValueError(
+                f"This .ladruno has no {bucket}/energyBalance channel — "
+                "energy was not recorded. Add the recorder's '-G energy' "
+                "verb at record time."
+            )
+        cols = [c.strip() for c in _decode(eg.attrs["COMPONENTS"]).split(",")]
+        ids = np.asarray(eg["ID"][...], dtype=np.int64).flatten()
+        data = np.asarray(eg["DATA"][...], dtype=np.float64)  # (T, nIds, nComp)
+        time = np.asarray(eg["TIME"][...], dtype=np.float64).flatten()
+        if region is None:
+            row = 0
+        else:
+            matches = np.where(ids == int(region))[0]
+            if matches.size == 0:
+                raise ValueError(
+                    f"region {region} is not in this .ladruno's per-region "
+                    f"energy (recorded region tags: {ids.tolist()})."
+                )
+            row = int(matches[0])
+        t_idx = resolve_time_slice(time_slice, time)
+        values = data[t_idx][:, row, :]  # (T, nComp)
+        return cols, values, time[t_idx]
+
     # -- element-level reads (empty until L2b) -------------------------
 
     def read_elements(

@@ -533,6 +533,43 @@ class Results:
         """
         return self._model
 
+    def energy(
+        self,
+        *,
+        region: "Optional[int]" = None,
+        stage: Optional[str] = None,
+    ) -> "Any":
+        """Energy-balance time history — **Ladruno-recorder feature**.
+
+        Returns a :class:`pandas.DataFrame` of the closure components
+        ``KE`` / ``IE`` / ``DW`` / ``ULW`` / ``RES`` / ``ERR`` indexed by
+        simulation time, written by the recorder's ``-G energy`` verb.
+
+        * ``region=None`` → whole-domain balance (``ON_DOMAIN``).
+        * ``region=<tag>`` → the per-region balance (``ON_REGIONS``) for
+          the OpenSees region tag.
+
+        ``ERR`` (the normalized energy-balance error %) is the headline
+        solution-quality diagnostic for explicit runs. Raises
+        :class:`TypeError` on a non-Ladruno results object (MPCO / native
+        carry no energy balance) and ``ValueError`` if energy was not
+        recorded / the region is unknown.
+        """
+        read_energy = getattr(self._reader, "read_energy", None)
+        if read_energy is None:
+            raise TypeError(
+                "Results.energy() is a Ladruno-recorder feature. Open a "
+                ".ladruno via Results.from_ladruno(...) recorded with the "
+                "'-G energy' verb; MPCO / native results carry no energy "
+                "balance."
+            )
+        sid = self._resolve_stage(stage)
+        cols, values, time = read_energy(sid, region=region)
+        import pandas as pd
+        return pd.DataFrame(
+            values, columns=cols, index=pd.Index(time, name="time"),
+        )
+
     @property
     def lineage(self) -> "Lineage":
         """Phase-6 lineage chain — git-style ``fem → model → results``.
