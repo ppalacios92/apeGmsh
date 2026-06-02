@@ -105,8 +105,8 @@ Which namespace:
 
 - **`ops.nDMaterial`** → solid elements (`FourNodeTetrahedron`,
   `stdBrick`, `SSPbrick`, `quad`, `tri31`, `SSPquad`).
-- **`ops.uniaxialMaterial`** → `truss`, `corotTruss`, `zeroLength`
-  springs, and fiber-section beams.
+- **`ops.uniaxialMaterial`** → `truss`, `corotTruss`, `zeroLength` /
+  `twoNodeLink` / `CoupledZeroLength` springs, and fiber-section beams.
 - **`ops.section`** → shell elements (`ElasticMembranePlateSection`)
   and fiber sections for beams.
 
@@ -134,6 +134,41 @@ ops.element.ShellMITC4(pg="Deck", section=slab)
 
 There is **no `eleLoad` pattern verb** — distributed/body loads are
 element parameters (`body_force=`, `pressure=`), not loads.
+
+### Springs, hinges, dashpots (ZeroLength family)
+
+`ops.uniaxialMaterial` springs ride 2-node (typically coincident) PGs.
+Each `(material, dof)` pair is a 1-DOF spring (`dof` 1-based: 1=Ux…6=Rz);
+reuse a material across DOFs, or stack two on the same DOF to add them.
+
+```python
+from apeGmsh.opensees.element.zero_length import ZeroLengthMatDir
+
+# Rotational hinge — moment-rotation material on dir 6 (Mz)
+k = ops.uniaxialMaterial.Steel02(fy=420e6, E=200e9, b=0.01)
+ops.element.ZeroLength(pg="Hinges",
+    mat_dirs=(ZeroLengthMatDir(material=k, dof=6),))
+
+# Viscous dashpot / Lysmer absorbing boundary — Viscous ∥ stabilising elastic
+c  = ops.uniaxialMaterial.Viscous(C=rho*cp*A, alpha=1.0)   # ZERO static stiffness
+ks = ops.uniaxialMaterial.ElasticMaterial(E=k_stab)
+ops.element.ZeroLength(pg="AbsBnd",
+    mat_dirs=(ZeroLengthMatDir(material=c,  dof=1),
+              ZeroLengthMatDir(material=ks, dof=1)))        # both dir 1 → stiffness adds
+```
+
+- **`Viscous` / `ViscousDamper` / `Maxwell`** are the rate-dependent (dashpot)
+  uniaxials — they produce a velocity-proportional force with **no `-doRayleigh`**.
+  A pure `Viscous` has zero static stiffness → parallel it with an elastic spring
+  on the same DOF, or the static tangent is singular.
+- **`ZeroLengthSection`** (fiber / `section.Aggregator` hinge, real P–M coupling)
+  requires `ndf` 3 (2D) or 6 (3D), and its `do_rayleigh` defaults **ON** — the
+  inverse of plain `ZeroLength`. Pass `do_rayleigh=False` to disable.
+- **`TwoNodeLink`** — finite-length link with `-mass` / `-pDelta` / `-shearDist`
+  (the only spring that carries mass). **`CoupledZeroLength`** — one material on
+  the resultant of two dirs (bidirectional / bearing spring).
+- For frequency-band damping on a group of springs, attach a `ops.damping.*`
+  object by PG (`on="MyPG"`) rather than a per-element flag.
 
 ## Boundary conditions, masses, loads — explicit / opt-in
 
