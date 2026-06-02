@@ -50,6 +50,7 @@ __all__ = [
     "ZeroLength",
     "ZeroLengthMatDir",
     "ZeroLengthSection",
+    "CoupledZeroLength",
 ]
 
 
@@ -217,3 +218,78 @@ class ZeroLengthSection(Element):
         # absent flag cannot express ``do_rayleigh=False``.
         args += ["-doRayleigh", 1 if self.do_rayleigh else 0]
         emitter.element("zeroLengthSection", tag, *args)
+
+
+# ---------------------------------------------------------------------------
+# CoupledZeroLength
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class CoupledZeroLength(Element):
+    """``element CoupledZeroLength`` — one material on the resultant of 2 dirs.
+
+    OpenSees command::
+
+        element CoupledZeroLength tag iNode jNode dirn1 dirn2 matTag \
+            [useRayleigh]
+
+    A single uniaxial material acts on the *resultant* deformation of
+    two local directions, so the spring is radial / kinematically
+    coupled in the ``(dir1, dir2)`` plane — the right tool for a
+    bidirectional friction or bearing spring that a pair of independent
+    :class:`ZeroLength` springs cannot reproduce. The element is
+    dashpot-capable (``update()`` passes a strain rate), so a
+    rate-dependent material works.
+
+    Parameters
+    ----------
+    pg
+        Physical-group label whose 2-node entries receive this spec.
+    material
+        The single :class:`UniaxialMaterial` acting on the resultant.
+    dir1, dir2
+        The two coupled local DOFs (1-based: 1=Ux … 6=Rz). Must differ.
+    use_rayleigh
+        Include the element in Rayleigh damping. Defaults ``False``
+        (OpenSees ``CoupledZeroLength.cpp:81``). Always emitted
+        explicitly (``0`` or ``1``) so the value round-trips and does
+        not rely on the parser's uninitialised default slot.
+    """
+
+    pg: str
+    material: UniaxialMaterial
+    dir1: int
+    dir2: int
+    use_rayleigh: bool = False
+
+    def __post_init__(self) -> None:
+        if self.dir1 < 1 or self.dir2 < 1:
+            raise ValueError(
+                f"CoupledZeroLength: dirs must be >= 1, got "
+                f"({self.dir1!r}, {self.dir2!r})"
+            )
+        if self.dir1 == self.dir2:
+            raise ValueError(
+                "CoupledZeroLength: dir1 and dir2 must differ (the "
+                f"material couples two distinct DOFs), got {self.dir1!r}"
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return (self.material,)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        nodes = current_element_nodes(emitter)
+        if len(nodes) != 2:
+            raise ValueError(
+                f"CoupledZeroLength: expected 2 node tags, got "
+                f"{len(nodes)}"
+            )
+        mat_tag = resolve_tag(emitter, self.material)
+        args: list[int | float | str] = [
+            *nodes,
+            self.dir1,
+            self.dir2,
+            mat_tag,
+            1 if self.use_rayleigh else 0,
+        ]
+        emitter.element("CoupledZeroLength", tag, *args)

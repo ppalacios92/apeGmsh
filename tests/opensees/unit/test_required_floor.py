@@ -47,6 +47,11 @@ from apeGmsh.opensees._element_capabilities import (
         #    floor (3 in 2D, 6 in 3D) or OpenSees silently drops it ──
         ("ZeroLengthSection", 2, 3),
         ("ZeroLengthSection", 3, 6),
+        # ── twoNodeLink / CoupledZeroLength: adaptive like plain zeroLength ──
+        ("TwoNodeLink", 2, 1),
+        ("TwoNodeLink", 3, 1),
+        ("CoupledZeroLength", 2, 1),
+        ("CoupledZeroLength", 3, 1),
     ],
 )
 def test_element_required_floor(cls, ndm, expected):

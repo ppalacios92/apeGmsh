@@ -57,7 +57,13 @@ from .solid import (
     stdBrick,
 )
 from .truss import CorotTruss, InertiaTruss, Truss
-from .zero_length import ZeroLength, ZeroLengthMatDir, ZeroLengthSection
+from .two_node_link import TwoNodeLink
+from .zero_length import (
+    CoupledZeroLength,
+    ZeroLength,
+    ZeroLengthMatDir,
+    ZeroLengthSection,
+)
 
 
 __all__ = [
@@ -74,6 +80,9 @@ __all__ = [
     "ZeroLength",
     "ZeroLengthMatDir",
     "ZeroLengthSection",
+    "CoupledZeroLength",
+    # two_node_link
+    "TwoNodeLink",
     # shell
     "ShellMITC3",
     "ShellMITC4",

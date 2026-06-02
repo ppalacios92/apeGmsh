@@ -406,6 +406,10 @@ _EXTRA_CLASS_NDF_OK: dict[str, "frozenset[int]"] = {
     "InertiaTruss": frozenset({2, 3, 6}),
     "ZeroLength": frozenset({1, 2, 3, 4, 5, 6}),
     "ZeroLengthSection": frozenset({3, 6}),
+    # twoNodeLink / CoupledZeroLength are adaptive like plain zeroLength
+    # (any node ndf; the parser handles 2-12 numDOF).
+    "TwoNodeLink": frozenset({1, 2, 3, 4, 5, 6}),
+    "CoupledZeroLength": frozenset({1, 2, 3, 4, 5, 6}),
 }
 
 #: ``required_floor`` (ndm -> minimum dof/node) for the multi-ndm extras
@@ -423,6 +427,8 @@ _EXTRA_CLASS_REQUIRED_FLOOR: dict[str, dict[int, int]] = {
     "InertiaTruss": {2: 2, 3: 3},
     "ZeroLength": {2: 1, 3: 1},
     "ZeroLengthSection": {2: 3, 3: 6},
+    "TwoNodeLink": {2: 1, 3: 1},
+    "CoupledZeroLength": {2: 1, 3: 1},
 }
 
 

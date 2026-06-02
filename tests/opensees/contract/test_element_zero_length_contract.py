@@ -32,7 +32,9 @@ from apeGmsh.opensees._internal.types import (
     Section,
     UniaxialMaterial,
 )
+from apeGmsh.opensees.element.two_node_link import TwoNodeLink
 from apeGmsh.opensees.element.zero_length import (
+    CoupledZeroLength,
     ZeroLength,
     ZeroLengthMatDir,
     ZeroLengthSection,
@@ -44,6 +46,8 @@ from apeGmsh.opensees.emitter.recording import RecordingEmitter
 ALL_ZERO_LENGTH_ELEMENTS: list[type[Element]] = [
     ZeroLength,
     ZeroLengthSection,
+    CoupledZeroLength,
+    TwoNodeLink,
 ]
 
 
@@ -84,6 +88,13 @@ _MINIMAL_FACTORIES: dict[type[Element], Callable[[], Element]] = {
     ),
     ZeroLengthSection: lambda: ZeroLengthSection(
         pg="c", section=_FAKE_SEC,
+    ),
+    CoupledZeroLength: lambda: CoupledZeroLength(
+        pg="c", material=_FAKE_MAT, dir1=1, dir2=2,
+    ),
+    TwoNodeLink: lambda: TwoNodeLink(
+        pg="c",
+        mat_dirs=(ZeroLengthMatDir(material=_FAKE_MAT, dof=1),),
     ),
 }
 

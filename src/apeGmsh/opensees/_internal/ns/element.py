@@ -34,7 +34,9 @@ from ...element.solid import (
     stdBrick,
 )
 from ...element.truss import CorotTruss, InertiaTruss, Truss
+from ...element.two_node_link import TwoNodeLink
 from ...element.zero_length import (
+    CoupledZeroLength,
     ZeroLength,
     ZeroLengthMatDir,
     ZeroLengthSection,
@@ -243,7 +245,7 @@ class _ElementNS(_BridgeNamespace):
         section: Section | str,
         orient: tuple[float, float, float, float, float, float]
         | None = None,
-        do_rayleigh: bool = False,
+        do_rayleigh: bool = True,
     ) -> ZeroLengthSection:
         section = self._bridge._resolve(section, base=Section)
         return self._bridge._register(
@@ -252,6 +254,49 @@ class _ElementNS(_BridgeNamespace):
                 section=section,
                 orient=orient,
                 do_rayleigh=do_rayleigh,
+            )
+        )
+
+    def CoupledZeroLength(
+        self,
+        *,
+        pg: str,
+        material: UniaxialMaterial | str,
+        dir1: int,
+        dir2: int,
+        use_rayleigh: bool = False,
+    ) -> CoupledZeroLength:
+        material = self._bridge._resolve(material, base=UniaxialMaterial)
+        return self._bridge._register(
+            CoupledZeroLength(
+                pg=pg,
+                material=material,
+                dir1=dir1,
+                dir2=dir2,
+                use_rayleigh=use_rayleigh,
+            )
+        )
+
+    def TwoNodeLink(
+        self,
+        *,
+        pg: str,
+        mat_dirs: tuple[ZeroLengthMatDir, ...],
+        orient: tuple[float, ...] | None = None,
+        p_delta: tuple[float, ...] | None = None,
+        shear_dist: tuple[float, ...] | None = None,
+        do_rayleigh: bool = False,
+        mass: float | None = None,
+    ) -> TwoNodeLink:
+        return self._bridge._register(
+            TwoNodeLink(
+                pg=pg,
+                mat_dirs=mat_dirs,
+                orient=orient,
+                p_delta=p_delta,
+                shear_dist=shear_dist,
+                do_rayleigh=do_rayleigh,
+                mass=mass,
             )
         )
 

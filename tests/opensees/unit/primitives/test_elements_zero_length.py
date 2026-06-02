@@ -31,6 +31,7 @@ from apeGmsh.opensees._internal.types import (
     UniaxialMaterial,
 )
 from apeGmsh.opensees.element.zero_length import (
+    CoupledZeroLength,
     ZeroLength,
     ZeroLengthMatDir,
     ZeroLengthSection,
@@ -443,4 +444,72 @@ class TestZeroLengthSectionMisc:
         s = _FakeSection(name="sec")
         assert "ZeroLengthSection" in repr(
             ZeroLengthSection(pg="c", section=s)
+        )
+
+
+# ===========================================================================
+# CoupledZeroLength
+# ===========================================================================
+
+class TestCoupledZeroLength:
+    def test_construction(self) -> None:
+        m = _FakeMat(name="x")
+        czl = CoupledZeroLength(pg="c", material=m, dir1=1, dir2=2)
+        assert czl.pg == "c"
+        assert czl.material is m
+        assert (czl.dir1, czl.dir2) == (1, 2)
+        assert czl.use_rayleigh is False
+
+    def test_dependencies_returns_material(self) -> None:
+        m = _FakeMat(name="x")
+        assert CoupledZeroLength(
+            pg="c", material=m, dir1=1, dir2=2
+        ).dependencies() == (m,)
+
+    def test_emit_positional_with_explicit_rayleigh_zero(self) -> None:
+        m = _FakeMat(name="x")
+        czl = CoupledZeroLength(pg="c", material=m, dir1=1, dir2=3)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_from({id(m): 5}))
+        set_element_nodes(e, (10, 20))
+        czl._emit(e, tag=42)
+        # tag iNode jNode dir1 dir2 matTag useRayleigh(0)
+        assert e.calls == [
+            ("element", ("CoupledZeroLength", 42, 10, 20, 1, 3, 5, 0), {}),
+        ]
+
+    def test_emit_use_rayleigh_true(self) -> None:
+        m = _FakeMat(name="x")
+        czl = CoupledZeroLength(
+            pg="c", material=m, dir1=1, dir2=2, use_rayleigh=True
+        )
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_from({id(m): 5}))
+        set_element_nodes(e, (1, 2))
+        czl._emit(e, tag=3)
+        assert e.calls[0][1] == ("CoupledZeroLength", 3, 1, 2, 1, 2, 5, 1)
+
+    def test_same_dir_rejected(self) -> None:
+        m = _FakeMat(name="x")
+        with pytest.raises(ValueError, match="must differ"):
+            CoupledZeroLength(pg="c", material=m, dir1=2, dir2=2)
+
+    def test_zero_dir_rejected(self) -> None:
+        m = _FakeMat(name="x")
+        with pytest.raises(ValueError, match="dirs must be >= 1"):
+            CoupledZeroLength(pg="c", material=m, dir1=0, dir2=2)
+
+    def test_emit_wrong_node_count_raises(self) -> None:
+        m = _FakeMat(name="x")
+        czl = CoupledZeroLength(pg="c", material=m, dir1=1, dir2=2)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_from({id(m): 1}))
+        set_element_nodes(e, (1,))
+        with pytest.raises(ValueError, match="expected 2 node tags"):
+            czl._emit(e, tag=1)
+
+    def test_repr_includes_class_name(self) -> None:
+        m = _FakeMat(name="x")
+        assert "CoupledZeroLength" in repr(
+            CoupledZeroLength(pg="c", material=m, dir1=1, dir2=2)
         )

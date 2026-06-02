@@ -1460,3 +1460,79 @@ def test_nested_initial_stress_wrapper_emits_in_dependency_order() -> None:
     inner_tag = inner_args[1]
     assert inner_args[2] == leaf_tag
     assert outer_args[2] == inner_tag
+
+
+# ===========================================================================
+# ZeroLength family: namespace defaults + new TwoNodeLink / CoupledZeroLength
+# ===========================================================================
+
+def _element_call(rec, token):
+    """Return the args tuple of the single emitted element with `token`."""
+    hits = [c[1] for c in rec.calls
+            if c[0] == "element" and c[1][0] == token]
+    assert len(hits) == 1, f"expected 1 {token}, got {len(hits)}"
+    return hits[0]
+
+
+def test_zero_length_section_namespace_defaults_rayleigh_on() -> None:
+    """Regression: ``ops.element.ZeroLengthSection`` must default
+    ``do_rayleigh=True`` (OpenSees default ON) through the public
+    namespace — not just the dataclass."""
+    fem = make_two_node_beam()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    sec = ops.section.Elastic(
+        E=2e11, A=0.01, Iz=1e-4, Iy=1e-4, G=8e10, J=1e-4,
+    )
+    ops.element.ZeroLengthSection(pg="Cols", section=sec)
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+    args = _element_call(rec, "zeroLengthSection")
+    assert args[-2:] == ("-doRayleigh", 1)
+
+
+def test_zero_length_section_namespace_can_disable_rayleigh() -> None:
+    fem = make_two_node_beam()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    sec = ops.section.Elastic(
+        E=2e11, A=0.01, Iz=1e-4, Iy=1e-4, G=8e10, J=1e-4,
+    )
+    ops.element.ZeroLengthSection(pg="Cols", section=sec, do_rayleigh=False)
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+    args = _element_call(rec, "zeroLengthSection")
+    assert args[-2:] == ("-doRayleigh", 0)
+
+
+def test_coupled_zero_length_emits_through_pipeline() -> None:
+    fem = make_two_node_beam()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    m = ops.uniaxialMaterial.ElasticMaterial(E=2e11)
+    ops.element.CoupledZeroLength(pg="Cols", material=m, dir1=1, dir2=2)
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+    args = _element_call(rec, "CoupledZeroLength")
+    # (token, tag, iNode, jNode, dir1, dir2, matTag, useRayleigh)
+    assert args[2:4] == (1, 2)          # nodes
+    assert args[4:6] == (1, 2)          # dir1, dir2
+    assert args[-1] == 0                # useRayleigh explicit OFF
+
+
+def test_two_node_link_emits_through_pipeline() -> None:
+    fem = make_two_node_beam()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    from apeGmsh.opensees.element.zero_length import ZeroLengthMatDir
+    k = ops.uniaxialMaterial.ElasticMaterial(E=2e11)
+    ops.element.TwoNodeLink(
+        pg="Cols",
+        mat_dirs=(ZeroLengthMatDir(material=k, dof=1),),
+        mass=3.0,
+    )
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+    args = _element_call(rec, "twoNodeLink")
+    assert "-mat" in args and "-dir" in args
+    assert args[-2:] == ("-mass", 3.0)
