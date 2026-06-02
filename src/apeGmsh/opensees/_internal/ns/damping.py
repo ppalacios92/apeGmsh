@@ -27,7 +27,7 @@ from ..types import TimeSeries
 from ._base import _BridgeNamespace
 
 
-__all__ = ["_DampingNS"]
+__all__ = ["_DampingNS", "_StageDampingNS"]
 
 
 class _DampingNS(_BridgeNamespace):
@@ -114,9 +114,21 @@ class _DampingNS(_BridgeNamespace):
                 "(alpha_m/beta_k/...) or the ratio form (ratio/f_i/f_j).",
             )
         targets = _normalize_on(on)
-        self._bridge._rayleigh_records.append(
-            RayleighRecord(*coeffs, on=targets),
-        )
+        self._sink_rayleigh(RayleighRecord(*coeffs, on=targets))
+
+    def _sink_rayleigh(self, record: RayleighRecord) -> None:
+        """Route a Rayleigh declaration to its pool.
+
+        The flat namespace appends to the bridge's global pool; the
+        stage-bound subclass (:class:`_StageDampingNS`) overrides this to
+        route into the owning stage's pool (ADR 0053 D5).
+        """
+        self._bridge._rayleigh_records.append(record)
+
+    def _sink_attach(self, record: DampingAttachRecord) -> None:
+        """Route a Damping-object region attach to its pool (see
+        :meth:`_sink_rayleigh`)."""
+        self._bridge._damping_attach_records.append(record)
 
     def modal(
         self,
@@ -295,9 +307,46 @@ class _DampingNS(_BridgeNamespace):
         targets = _normalize_on(on)
         self._bridge._register(prim, name=name)
         if targets:
-            self._bridge._damping_attach_records.append(
-                DampingAttachRecord(prim=prim, on=targets),
-            )
+            self._sink_attach(DampingAttachRecord(prim=prim, on=targets))
+
+
+class _StageDampingNS(_DampingNS):
+    """``s.damping.<verb>(...)`` — stage-bound damping declarations (D5).
+
+    Mirrors :class:`_DampingNS` but routes each declaration into the
+    owning stage's pools instead of the bridge's global pools, so the
+    ``rayleigh`` / ``region -damp`` lines emit **inside** the stage block
+    (after ``domainChange``, when the stage's elements are in the domain).
+    The Damping objects themselves still register on the bridge's
+    ``_primitives`` (defined once, pre-element) — only the attach is
+    stage-scoped.
+
+    ``modal`` is intentionally **not** available on a stage: per-stage
+    modal damping interacts with ``eigen`` / ``wipeAnalysis`` in ways
+    that need their own design pass (ADR 0053 §5 / plan D5 defers it).
+    """
+
+    __slots__ = ("_stage",)
+
+    def __init__(self, bridge: "object", stage: "object") -> None:
+        super().__init__(bridge)  # type: ignore[arg-type]
+        self._stage = stage
+
+    def _sink_rayleigh(self, record: RayleighRecord) -> None:
+        self._stage._rayleigh_records.append(record)  # type: ignore[attr-defined]
+
+    def _sink_attach(self, record: DampingAttachRecord) -> None:
+        self._stage._damping_attach_records.append(  # type: ignore[attr-defined]
+            record,
+        )
+
+    def modal(self, *args: object, **kwargs: object) -> None:
+        raise NotImplementedError(
+            "Stage-bound modal damping is not supported (ADR 0053 D5): "
+            "per-stage eigen / modalDamping interacts with wipeAnalysis and "
+            "needs its own design note. Declare modal damping on the flat "
+            "bridge (ops.damping.modal) or raw-emit per stage.",
+        )
 
 
 def _normalize_on(on: "str | Iterable[str] | None") -> tuple[str, ...]:

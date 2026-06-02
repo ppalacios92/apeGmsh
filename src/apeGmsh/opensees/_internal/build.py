@@ -796,6 +796,18 @@ class StageRecord:
     mass_records: tuple[MassRecord, ...] = ()
     region_records: tuple[RegionAssignmentRecord, ...] = ()
     recorder_specs: tuple[Recorder, ...] = ()
+    # ADR 0053 D5: stage-bound damping pools.  ``rayleigh_records``
+    # (``s.damping.rayleigh``) and ``damping_attach_records``
+    # (``s.damping.uniform`` / ``sec_stif`` / ``urd`` / ``urd_beta``)
+    # emit inside this stage's block (after ``domainChange``, before the
+    # analysis chain) so the stage's elements are in the domain when the
+    # ``rayleigh`` / ``region -damp`` lines bind.  The Damping objects
+    # themselves stay in the bridge's ``_primitives`` (defined once,
+    # pre-element); only the attach is stage-scoped.  Modal damping is
+    # NOT staged (deferred — eigen / wipeAnalysis interaction).  Default
+    # ``()`` keeps existing construction sites working unmodified.
+    rayleigh_records: tuple[RayleighRecord, ...] = ()
+    damping_attach_records: tuple[DampingAttachRecord, ...] = ()
     # ADR 0051 (BL-3): stage-scoped load patterns.  Populated by
     # ``_StageBuilder.pattern(series=)`` — each is a stage-owned
     # :class:`Plain` (context manager) whose ``load`` / ``sp`` /

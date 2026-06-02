@@ -83,6 +83,7 @@ from ._internal.ns import (
     _ProfilerNS,
     _RecorderNS,
     _SectionNS,
+    _StageDampingNS,
     _SystemNS,
     _TestNS,
     _TimeSeriesNS,
@@ -1549,6 +1550,22 @@ class BuiltModel:
             ):
                 emitter.domain_change()
 
+            # 5b. Stage-bound damping (ADR 0053 D5).  Emitted AFTER
+            # domainChange so the stage's elements are in the renumbered
+            # domain when ``rayleigh`` binds and ``region -ele … -damp/
+            # -rayleigh`` resolves; BEFORE the analysis chain (rayleigh is a
+            # domain directive, not part of the chain).  The Damping object
+            # definitions themselves emit once, pre-element (global pool);
+            # only the attach is stage-scoped.  Modal damping is not staged.
+            self._emit_rayleigh(
+                emitter, tags, fem_eid_to_ops_tag,
+                records=stage.rayleigh_records,
+            )
+            self._emit_damping_attach(
+                emitter, tags, fem_eid_to_ops_tag,
+                records=stage.damping_attach_records,
+            )
+
             # 6. Initial stress.
             if stage.initial_stress_records:
                 name_to_param_tags = emit_initial_stress_global(
@@ -2307,6 +2324,20 @@ class BuiltModel:
                 # rank after topology+BC activation.  Single global call;
                 # OpenSeesMP executes it locally on each rank.
                 emitter.domain_change()
+
+            # 3b. Stage-bound damping (ADR 0053 D5) — single global emit
+            # after domainChange, mirroring the global partitioned damping
+            # pass: ``rayleigh`` / ``region -ele … -damp/-rayleigh`` lists
+            # every PG element; OpenSeesMP binds only the elements each
+            # rank owns.  Modal damping is not staged.
+            self._emit_rayleigh(
+                emitter, tags, fem_eid_to_ops_tag,
+                records=stage.rayleigh_records,
+            )
+            self._emit_damping_attach(
+                emitter, tags, fem_eid_to_ops_tag,
+                records=stage.damping_attach_records,
+            )
 
             # 4. Initial-stress globals + per-rank ``addToParameter``.
             if stage.initial_stress_records:
@@ -3239,8 +3270,10 @@ class BuiltModel:
         emitter: Emitter,
         tags: "TagAllocator | None" = None,
         fem_eid_to_ops_tag: "dict[int, int] | None" = None,
+        *,
+        records: "Sequence[RayleighRecord] | None" = None,
     ) -> None:
-        """Emit Rayleigh damping declarations (ADR 0053, D1 + D2).
+        """Emit Rayleigh damping declarations (ADR 0053, D1 + D2 + D5).
 
         Domain-level commands, emitted driver-post (after the model is built)
         alongside fixes / masses / regions. **Globals emit first, then
@@ -3256,13 +3289,18 @@ class BuiltModel:
         is stiffness-proportional. ``tags`` / ``fem_eid_to_ops_tag`` are
         required only when region records are present (the emit driver always
         supplies them).
+
+        ``records`` overrides the source pool — D5 passes a stage's
+        ``rayleigh_records`` so stage-bound Rayleigh emits inside the stage
+        block; ``None`` uses the global (non-staged) pool.
         """
-        if not self.rayleigh_records:
+        recs = self.rayleigh_records if records is None else tuple(records)
+        if not recs:
             return
         import warnings as _warnings
 
-        globals_ = [r for r in self.rayleigh_records if not r.on]
-        scoped = [r for r in self.rayleigh_records if r.on]
+        globals_ = [r for r in recs if not r.on]
+        scoped = [r for r in recs if r.on]
         if globals_ and scoped:
             _warnings.warn(
                 RayleighOverwriteWarning(
@@ -3326,6 +3364,8 @@ class BuiltModel:
         emitter: Emitter,
         tags: "TagAllocator | None" = None,
         fem_eid_to_ops_tag: "dict[int, int] | None" = None,
+        *,
+        records: "Sequence[DampingAttachRecord] | None" = None,
     ) -> None:
         """Attach each ``damping`` object to its ``on`` groups (ADR 0053 D3).
 
@@ -3333,10 +3373,16 @@ class BuiltModel:
         the pre-element definition group; here, driver-post, we emit one
         ``region $tag -ele … -damp $dampTag`` per ``on`` physical group, with
         ``-ele`` membership. The object's tag is read back from ``tag_for``.
+
+        ``records`` overrides the source pool — D5 passes a stage's
+        ``damping_attach_records`` so the ``region -damp`` attach emits
+        inside the stage block (the object definition still emits once,
+        pre-element); ``None`` uses the global (non-staged) pool.
         """
-        if not self.damping_attach_records:
+        recs = self.damping_attach_records if records is None else tuple(records)
+        if not recs:
             return
-        for rec in self.damping_attach_records:
+        for rec in recs:
             damp_tag = self.tag_for[id(rec.prim)]
             for name in rec.on:
                 ele_tags = self._resolve_damping_on_elements(
@@ -5502,6 +5548,11 @@ class apeSees:
         region_attached = {
             id(rec.prim) for rec in self._damping_attach_records
         }
+        # D5: a stage-bound object attaches inside its stage's pool.
+        for stage in self._stage_records:
+            region_attached.update(
+                id(rec.prim) for rec in stage.damping_attach_records
+            )
         element_attached = {
             id(damp)
             for p in self._primitives
@@ -5844,6 +5895,10 @@ class _StageBuilder:
         "_mass_records",
         "_region_records",
         "_recorder_specs",
+        # ADR 0053 D5: stage-bound damping pools + the ``s.damping`` namespace.
+        "_rayleigh_records",
+        "_damping_attach_records",
+        "damping",
         # ADR 0051 (BL-3): stage-scoped load patterns created via
         # ``s.pattern(series=)``.
         "_pattern_specs",
@@ -5882,6 +5937,11 @@ class _StageBuilder:
         # Phase SSI-2.D PR-C: stage-bound region + recorder pools.
         self._region_records: list[RegionAssignmentRecord] = []
         self._recorder_specs: list[Recorder] = []
+        # ADR 0053 D5: stage-bound damping pools + the ``s.damping``
+        # namespace (rayleigh + object forms; modal raises — deferred).
+        self._rayleigh_records: list[RayleighRecord] = []
+        self._damping_attach_records: list[DampingAttachRecord] = []
+        self.damping = _StageDampingNS(bridge, self)
         # ADR 0051 (BL-3): stage-scoped load patterns.
         self._pattern_specs: list["Plain"] = []
         # ADR 0052 slice 1: stage-bound HOLD supports + the dedicated
@@ -5960,6 +6020,8 @@ class _StageBuilder:
             mass_records=tuple(self._mass_records),
             region_records=tuple(self._region_records),
             recorder_specs=tuple(self._recorder_specs),
+            rayleigh_records=tuple(self._rayleigh_records),
+            damping_attach_records=tuple(self._damping_attach_records),
             pattern_specs=tuple(self._pattern_specs),
             support_records=tuple(self._support_records),
             support_pattern=self._support_pattern,
