@@ -231,6 +231,88 @@ def test_damping_object_in_py_deck(tmp_path: Path) -> None:
     assert any("damping(" in ln and "Uniform" in ln for ln in text.splitlines())
 
 
+# --- D3b: URD / URDbeta multi-point types + -factor TimeSeries -------------
+
+def test_urd_object_and_attach_in_deck(tmp_path: Path) -> None:
+    ops = _frame_with_damping(
+        "urd", points=[(0.5, 0.02), (5.0, 0.03), (20.0, 0.05)], on="Cols",
+    )
+    lines = [ln.strip() for ln in _deck(ops, tmp_path, "tcl").splitlines()]
+    damp_line = next(ln for ln in lines if ln.startswith("damping URD"))
+    dtoks = damp_line.split()
+    # damping URD $tag 3 0.5 0.02 5.0 0.03 20.0 0.05
+    assert dtoks[3:] == ["3", "0.5", "0.02", "5.0", "0.03", "20.0", "0.05"]
+    assert any(
+        ln.startswith("region") and "-damp" in ln and dtoks[2] in ln
+        for ln in lines
+    )
+
+
+def test_urd_beta_object_in_deck(tmp_path: Path) -> None:
+    ops = _frame_with_damping(
+        "urd_beta", points=[(0.5, 0.001), (10.0, 0.002)], on="Cols",
+    )
+    lines = [ln.strip() for ln in _deck(ops, tmp_path, "tcl").splitlines()]
+    damp_line = next(ln for ln in lines if ln.startswith("damping URDbeta"))
+    assert damp_line.split()[3:] == ["2", "0.5", "0.001", "10.0", "0.002"]
+
+
+def test_factor_emits_minus_factor_and_orders_series_first(
+    tmp_path: Path,
+) -> None:
+    fem = make_two_column_frame()
+    ops = apeSees(cast("object", fem))
+    ops.model(ndm=3, ndf=6)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    ops.element.elasticBeamColumn(
+        pg="Cols", transf=transf,
+        A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
+    )
+    ts = ops.timeSeries.Constant()
+    ops.damping.uniform(
+        ratio=0.03, freq_lower=0.5, freq_upper=10.0, on="Cols", factor=ts,
+    )
+    lines = [ln.strip() for ln in _deck(ops, tmp_path, "tcl").splitlines()]
+    damp_line = next(ln for ln in lines if ln.startswith("damping Uniform"))
+    dtoks = damp_line.split()
+    # -factor <tsTag> present; the tsTag matches the timeSeries definition
+    assert "-factor" in dtoks
+    ts_tag = dtoks[dtoks.index("-factor") + 1]
+    ts_i = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith("timeSeries") and ts_tag in ln.split()
+    )
+    damp_i = lines.index(damp_line)
+    assert ts_i < damp_i  # series declared before the damping object
+
+
+def test_factor_uses_minus_factor_not_fact(tmp_path: Path) -> None:
+    # -fact is a Tcl-only alias that breaks openseespy; the bridge must
+    # emit -factor on both backends (ADR 0053).
+    fem = make_two_column_frame()
+    ops = apeSees(cast("object", fem))
+    ops.model(ndm=3, ndf=6)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    ops.element.elasticBeamColumn(
+        pg="Cols", transf=transf,
+        A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
+    )
+    ts = ops.timeSeries.Constant()
+    ops.damping.uniform(
+        ratio=0.03, freq_lower=0.5, freq_upper=10.0, on="Cols", factor=ts,
+    )
+    for suffix in ("tcl", "py"):
+        text = _deck(ops, tmp_path, suffix)
+        damp_lines = [
+            ln for ln in text.splitlines()
+            if "damping" in ln and "Uniform" in ln
+        ]
+        assert damp_lines
+        for ln in damp_lines:
+            assert "-factor" in ln
+            assert "-fact " not in ln and not ln.rstrip().endswith("-fact")
+
+
 # --- D4: modal damping (eigen + modalDamping) -----------------------------
 
 def _frame_with_modal(ratios: Any, **kwargs: Any) -> apeSees:

@@ -17,12 +17,13 @@ from collections.abc import Iterable
 from collections.abc import Sequence
 
 from ...analysis.rayleigh import Stiffness, rayleigh_from_ratio
-from ...damping.damping import SecStif, Uniform
+from ...damping.damping import URD, SecStif, Uniform, URDbeta
 from ..build import (
     DampingAttachRecord,
     ModalDampingRecord,
     RayleighRecord,
 )
+from ..types import TimeSeries
 from ._base import _BridgeNamespace
 
 
@@ -169,6 +170,7 @@ class _DampingNS(_BridgeNamespace):
         on: str | Iterable[str],
         activate_time: float | None = None,
         deactivate_time: float | None = None,
+        factor: TimeSeries | None = None,
         name: str | None = None,
     ) -> Uniform:
         """Declare a ``damping Uniform`` object and attach it to ``on``.
@@ -180,12 +182,15 @@ class _DampingNS(_BridgeNamespace):
         (required — a damping object with no target is meaningless).
 
         ``activate_time`` / ``deactivate_time`` window when the object
-        dissipates (e.g. off during gravity staging — ADR 0053).  Returns the
-        registered :class:`~apeGmsh.opensees.damping.damping.Uniform` handle.
+        dissipates (e.g. off during gravity staging — ADR 0053).  ``factor``
+        is an ``ops.timeSeries.*`` object scaling the dissipation over time
+        (``-factor``).  Returns the registered
+        :class:`~apeGmsh.opensees.damping.damping.Uniform` handle.
         """
         prim = Uniform(
             zeta=ratio, freq1=freq_lower, freq2=freq_upper,
             activate_time=activate_time, deactivate_time=deactivate_time,
+            factor=factor,
         )
         self._register_damping(prim, on=on, name=name)
         return prim
@@ -197,24 +202,80 @@ class _DampingNS(_BridgeNamespace):
         on: str | Iterable[str],
         activate_time: float | None = None,
         deactivate_time: float | None = None,
+        factor: TimeSeries | None = None,
         name: str | None = None,
     ) -> SecStif:
         """Declare a ``damping SecStif`` object and attach it to ``on``.
 
         Committed (secant) stiffness-proportional damping, coefficient
-        ``beta``.  ``on`` (required) and the time-window kwargs behave as in
-        :meth:`uniform`.  Returns the registered ``SecStif`` handle.
+        ``beta``.  ``on`` (required) and the time-window / ``factor`` kwargs
+        behave as in :meth:`uniform`.  Returns the registered ``SecStif``
+        handle.
         """
         prim = SecStif(
             beta=beta,
             activate_time=activate_time, deactivate_time=deactivate_time,
+            factor=factor,
+        )
+        self._register_damping(prim, on=on, name=name)
+        return prim
+
+    def urd(
+        self,
+        *,
+        points: "Iterable[tuple[float, float]]",
+        on: str | Iterable[str],
+        activate_time: float | None = None,
+        deactivate_time: float | None = None,
+        factor: TimeSeries | None = None,
+        name: str | None = None,
+    ) -> URD:
+        """Declare a ``damping URD`` object and attach it to ``on``.
+
+        Piecewise damping ratio ζ(f) over ``points`` — an iterable of
+        ``(freq, zeta)`` pairs (Hz, physical ratio), strictly ascending in
+        frequency, at least two of them.  ``on`` (required) and the
+        time-window / ``factor`` kwargs behave as in :meth:`uniform`.
+        Returns the registered ``URD`` handle.
+        """
+        prim = URD(
+            points=tuple((float(f), float(z)) for f, z in points),
+            activate_time=activate_time, deactivate_time=deactivate_time,
+            factor=factor,
+        )
+        self._register_damping(prim, on=on, name=name)
+        return prim
+
+    def urd_beta(
+        self,
+        *,
+        points: "Iterable[tuple[float, float]]",
+        on: str | Iterable[str],
+        activate_time: float | None = None,
+        deactivate_time: float | None = None,
+        factor: TimeSeries | None = None,
+        name: str | None = None,
+    ) -> URDbeta:
+        """Declare a ``damping URDbeta`` object and attach it to ``on``.
+
+        Piecewise stiffness-proportional coefficient β(f) over ``points`` —
+        an iterable of ``(freq, beta)`` pairs (``freq`` in Hz; OpenSees
+        multiplies by 2π internally), strictly ascending in frequency, at
+        least two.  ``on`` (required) and the time-window / ``factor`` kwargs
+        behave as in :meth:`uniform`.  Returns the registered ``URDbeta``
+        handle.
+        """
+        prim = URDbeta(
+            points=tuple((float(f), float(b)) for f, b in points),
+            activate_time=activate_time, deactivate_time=deactivate_time,
+            factor=factor,
         )
         self._register_damping(prim, on=on, name=name)
         return prim
 
     def _register_damping(
         self,
-        prim: "Uniform | SecStif",
+        prim: "Uniform | SecStif | URD | URDbeta",
         *,
         on: str | Iterable[str],
         name: str | None,

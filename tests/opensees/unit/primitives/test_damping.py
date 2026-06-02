@@ -12,14 +12,36 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dataclasses import dataclass
+
 from apeGmsh.opensees import apeSees
 from apeGmsh.opensees.analysis.rayleigh import rayleigh_from_ratio
 from apeGmsh.opensees.apesees import BuiltModel
 from apeGmsh.opensees._internal.build import ModalDampingRecord, RayleighRecord
-from apeGmsh.opensees.damping.damping import SecStif, Uniform
+from apeGmsh.opensees._internal.tag_resolution import set_tag_resolver
+from apeGmsh.opensees._internal.types import Primitive, TimeSeries
+from apeGmsh.opensees.damping.damping import URD, SecStif, Uniform, URDbeta
+from apeGmsh.opensees.emitter.base import Emitter
 from apeGmsh.opensees.emitter.py import PyEmitter
 from apeGmsh.opensees.emitter.recording import RecordingEmitter
 from apeGmsh.opensees.emitter.tcl import TclEmitter
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _FakeSeries(TimeSeries):
+    """Stand-in TimeSeries for ``factor=`` dependency tests."""
+
+    def _emit(self, emitter: Emitter, tag: int) -> None:  # pragma: no cover
+        emitter.timeSeries("Fake", tag)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+def _resolver_from(tags: dict[int, int]) -> object:
+    def _resolve(prim: Primitive) -> int:
+        return tags[id(prim)]
+    return _resolve
 
 
 def _make_ops() -> apeSees:
@@ -165,6 +187,72 @@ class TestDampingObjects:
         with pytest.raises(ValueError, match="zeta must be"):
             Uniform(zeta=-0.01, freq1=0.5, freq2=10.0)
 
+    # --- URD / URDbeta multi-point types (D3b) -----------------------------
+
+    def test_urd_emit(self) -> None:
+        e = RecordingEmitter()
+        URD(points=((0.5, 0.02), (5.0, 0.03), (20.0, 0.05)))._emit(e, tag=4)
+        assert e.calls == [(
+            "damping",
+            ("URD", 4, 3, 0.5, 0.02, 5.0, 0.03, 20.0, 0.05),
+            {},
+        )]
+
+    def test_urd_beta_emit(self) -> None:
+        e = RecordingEmitter()
+        URDbeta(points=((0.5, 0.001), (10.0, 0.002)))._emit(e, tag=6)
+        assert e.calls == [(
+            "damping", ("URDbeta", 6, 2, 0.5, 0.001, 10.0, 0.002), {},
+        )]
+
+    def test_urd_rejects_single_point(self) -> None:
+        with pytest.raises(ValueError, match="at least 2"):
+            URD(points=((1.0, 0.02),))
+
+    def test_urd_rejects_non_ascending_freqs(self) -> None:
+        with pytest.raises(ValueError, match="strictly ascending"):
+            URD(points=((5.0, 0.02), (1.0, 0.03)))
+
+    def test_urd_beta_rejects_single_point(self) -> None:
+        with pytest.raises(ValueError, match="at least 2"):
+            URDbeta(points=((1.0, 0.001),))
+
+    # --- -factor TimeSeries scale on all four types (D3b) ------------------
+
+    def test_uniform_factor_emits_minus_factor(self) -> None:
+        e = RecordingEmitter()
+        ts = _FakeSeries()
+        set_tag_resolver(e, _resolver_from({id(ts): 9}))
+        Uniform(zeta=0.03, freq1=0.5, freq2=10.0, factor=ts)._emit(e, tag=5)
+        assert e.calls == [(
+            "damping", ("Uniform", 5, 0.03, 0.5, 10.0, "-factor", 9), {},
+        )]
+
+    def test_factor_is_a_dependency(self) -> None:
+        ts = _FakeSeries()
+        assert Uniform(zeta=0.03, freq1=0.5, freq2=10.0, factor=ts) \
+            .dependencies() == (ts,)
+        assert SecStif(beta=0.002, factor=ts).dependencies() == (ts,)
+        assert URD(points=((1.0, 0.02), (5.0, 0.03)), factor=ts) \
+            .dependencies() == (ts,)
+        assert URDbeta(points=((1.0, 0.001), (5.0, 0.002)), factor=ts) \
+            .dependencies() == (ts,)
+
+    def test_window_and_factor_order(self) -> None:
+        e = RecordingEmitter()
+        ts = _FakeSeries()
+        set_tag_resolver(e, _resolver_from({id(ts): 9}))
+        Uniform(
+            zeta=0.03, freq1=0.5, freq2=10.0,
+            activate_time=1.0, deactivate_time=20.0, factor=ts,
+        )._emit(e, tag=5)
+        assert e.calls == [(
+            "damping",
+            ("Uniform", 5, 0.03, 0.5, 10.0,
+             "-activateTime", 1.0, "-deactivateTime", 20.0, "-factor", 9),
+            {},
+        )]
+
 
 class TestDampingObjectNamespace:
     def test_uniform_registers_and_records_attach(self) -> None:
@@ -198,6 +286,30 @@ class TestDampingObjectNamespace:
         damp = ops.damping.sec_stif(beta=0.002, on="Soil")
         assert isinstance(damp, SecStif)
         assert damp in ops._primitives
+
+    def test_urd_registers_and_records_attach(self) -> None:
+        ops = _make_ops()
+        damp = ops.damping.urd(
+            points=[(0.5, 0.02), (5.0, 0.03), (20.0, 0.05)], on="Soil",
+        )
+        assert isinstance(damp, URD)
+        assert damp in ops._primitives
+        assert damp.points == ((0.5, 0.02), (5.0, 0.03), (20.0, 0.05))
+        (rec,) = ops._damping_attach_records
+        assert rec.prim is damp and rec.on == ("Soil",)
+
+    def test_urd_beta_registers(self) -> None:
+        ops = _make_ops()
+        damp = ops.damping.urd_beta(
+            points=[(0.5, 0.001), (10.0, 0.002)], on="Soil",
+        )
+        assert isinstance(damp, URDbeta)
+        assert damp in ops._primitives
+
+    def test_urd_on_is_required(self) -> None:
+        ops = _make_ops()
+        with pytest.raises(ValueError, match="on= is required"):
+            ops.damping.urd(points=[(0.5, 0.02), (5.0, 0.03)], on=[])
 
 
 # --- modal damping (D4) ----------------------------------------------------
