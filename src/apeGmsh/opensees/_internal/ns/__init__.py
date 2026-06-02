@@ -18,6 +18,7 @@ from .analysis import (
     _TestNS,
 )
 from .beam_integration import _BeamIntegrationNS
+from .damping import _DampingNS
 from .element import _ElementNS
 from .geom_transf import _GeomTransfNS
 from .nd import _NDMaterialNS
@@ -36,6 +37,7 @@ __all__ = [
     "_SectionNS",
     "_GeomTransfNS",
     "_BeamIntegrationNS",
+    "_DampingNS",
     "_TimeSeriesNS",
     "_PatternNS",
     "_ElementNS",

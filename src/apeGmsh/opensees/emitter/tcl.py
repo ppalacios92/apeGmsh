@@ -207,6 +207,19 @@ class TclEmitter:
     def region(self, tag: int, *args: int | float | str) -> None:
         self._lines.append(_join("region", tag, *args))
 
+    # -- Damping (ADR 0053) --------------------------------------------------
+
+    def rayleigh(
+        self,
+        alpha_m: float,
+        beta_k: float,
+        beta_k_init: float,
+        beta_k_comm: float,
+    ) -> None:
+        self._lines.append(
+            _join("rayleigh", alpha_m, beta_k, beta_k_init, beta_k_comm),
+        )
+
     # -- Constitutive --------------------------------------------------------
 
     def uniaxialMaterial(

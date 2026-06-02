@@ -115,6 +115,15 @@ emitters no-op / capture for tests; Live raises
 ``NotImplementedError`` (staged live execution deferred — the
 bridge's :meth:`apeSees.analyze` only supports non-staged models).
 
+**Architecture event — ADR 0053 (damping, 2026-06-01).** The Protocol
+was widened with one new method (:meth:`rayleigh`) so the bridge can
+author global Rayleigh damping ``rayleigh $alphaM $betaK $betaK0
+$betaKc`` from ``ops.damping.rayleigh(...)``. Tcl / py / live emit the
+line; H5 no-ops (global-form archival deferred in D1, same rationale as
+:meth:`eigen`); Recording captures the call. Region-scoped Rayleigh (D2)
+reuses :meth:`region`'s ``-rayleigh`` tail and needs no Protocol change.
+No schema bump.
+
 **Architecture event — Phase SSI-2.B (per-stage topology activation,
 May 2026).** The Protocol gained :meth:`domain_change`, which emits
 the OpenSees ``domainChange`` command.  Staged decks need this
@@ -237,6 +246,23 @@ class Emitter(Protocol):
     # sequence (``-node n1 n2 ...``, ``-ele e1 e2 ...``, ``-eleOnly``,
     # ``-nodeOnly``, ``-eleRange``, etc.) — see the OpenSees manual.
     def region(self, tag: int, *args: int | float | str) -> None: ...
+
+    # -- Damping (ADR 0053) ----------------------------------------------
+    # Global Rayleigh damping ``rayleigh $alphaM $betaK $betaK0 $betaKc`` —
+    # a domain-level command emitted driver-post (after the model is built),
+    # like ``region``. D1 covers this global form; region-scoped Rayleigh
+    # (D2) rides the existing ``region`` method's ``-rayleigh`` tail, so it
+    # needs no new Protocol method. The ``damping`` object factory (D3) will
+    # widen this section further. Tcl / py / live emit the line; the H5
+    # emitter no-ops in D1 (archival of the global form deferred, same
+    # rationale as ``eigen`` — see that method); recording captures it.
+    def rayleigh(
+        self,
+        alpha_m: float,
+        beta_k: float,
+        beta_k_init: float,
+        beta_k_comm: float,
+    ) -> None: ...
 
     # -- Recorders -------------------------------------------------------
     def recorder(self, kind: str, *args: int | float | str) -> None: ...

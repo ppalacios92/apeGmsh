@@ -78,6 +78,7 @@ __all__ = [
     "FixRecord",
     "InitialStressRecord",
     "MassRecord",
+    "RayleighRecord",
     "RegionAssignmentRecord",
     "StageRecord",
     "VECXZ_TOL",
@@ -654,6 +655,24 @@ class RegionAssignmentRecord:
     name: str
     pg: str | None
     nodes: tuple[int, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class RayleighRecord:
+    """One global ``rayleigh`` directive (ADR 0053, D1).
+
+    Carries the four positional coefficients of the OpenSees
+    ``rayleigh $alphaM $betaK $betaK0 $betaKc`` command, already resolved:
+    a ratio-helper fit (when the ratio form is used) is applied at the call
+    site in ``_DampingNS.rayleigh`` before this record is built, so the
+    emitter just renders the four numbers.  Global scope only in D1; region
+    scoping (``on=``) lands in D2.
+    """
+
+    alpha_m: float
+    beta_k: float
+    beta_k_init: float
+    beta_k_comm: float
 
 
 @dataclass(frozen=True, slots=True)

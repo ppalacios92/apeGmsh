@@ -1074,6 +1074,20 @@ class H5Emitter:
     def region(self, tag: int, *args: int | float | str) -> None:
         self._regions.append(_RegionRecord(tag=int(tag), args=tuple(args)))
 
+    def rayleigh(
+        self,
+        alpha_m: float,
+        beta_k: float,
+        beta_k_init: float,
+        beta_k_comm: float,
+    ) -> None:
+        # ADR 0053 (D1): archival of the GLOBAL rayleigh form is deferred —
+        # no ``/opensees/`` slot and no schema bump in D1 (same rationale as
+        # ``eigen``: this is a domain directive, not a tagged model object).
+        # Region-scoped Rayleigh (D2) persists for free via ``region`` since
+        # it carries the ``-rayleigh`` tail. No-op here.
+        del alpha_m, beta_k, beta_k_init, beta_k_comm
+
     def recorder_declaration_begin(
         self,
         *,

@@ -31,6 +31,7 @@ from ._internal.build import (
     FixRecord,
     InitialStressRecord,
     MassRecord,
+    RayleighRecord,
     RegionAssignmentRecord,
     SPRemovalRecord,
     StageRecord,
@@ -70,6 +71,7 @@ from ._internal.ns import (
     _AnalysisNS,
     _BeamIntegrationNS,
     _ConstraintsNS,
+    _DampingNS,
     _ElementNS,
     _GeomTransfNS,
     _IntegratorNS,
@@ -498,6 +500,7 @@ class BuiltModel:
     region_records:          tuple[RegionAssignmentRecord, ...]
     initial_stress_records:  tuple[InitialStressRecord, ...] = ()
     stage_records:           tuple[StageRecord, ...] = ()
+    rayleigh_records:        tuple[RayleighRecord, ...] = ()
 
     def _claimed_recorder_ids(self) -> "set[int]":
         """``id(...)``-set of recorders claimed by stage builders
@@ -971,6 +974,7 @@ class BuiltModel:
         self._emit_fixes(emitter)
         self._emit_masses(emitter)
         self._emit_regions(emitter, tags)
+        self._emit_rayleigh(emitter)
 
         # 7b. MP constraints (Phase 7b, ADR 0022 INV-5).  Records
         # claimed by ``s.embedded`` / ``s.equal_dof`` / ... are
@@ -1213,6 +1217,7 @@ class BuiltModel:
         # -- driver-post: regions, interface, patterns, recorders.
         # ADR 0051: no broker-loads auto-emit — loads ride from_model.
         self._emit_regions(emitter, tags)
+        self._emit_rayleigh(emitter)
         emit_mp_constraints(
             emitter, self.fem, tags,
             claimed_ids=frozenset(self._claimed_constraint_ids()),
@@ -3205,6 +3210,20 @@ class BuiltModel:
                 if int(node_tag) in owned_nodes:
                     emitter.mass(node_tag, *rec.values)
 
+    def _emit_rayleigh(self, emitter: Emitter) -> None:
+        """Emit each global ``rayleigh αM βK βK0 βKc`` declaration (ADR 0053).
+
+        Domain-level command, emitted driver-post (after the model is built)
+        alongside fixes / masses / regions.  Records emit in declaration
+        order; OpenSees applies each to the whole domain and overwrites per
+        element on overlap, so with multiple global records the last one's
+        factors win (ADR 0053 — element Rayleigh is OVERWRITE, not additive).
+        """
+        for rec in self.rayleigh_records:
+            emitter.rayleigh(
+                rec.alpha_m, rec.beta_k, rec.beta_k_init, rec.beta_k_comm,
+            )
+
     def _emit_regions(self, emitter: Emitter, tags: TagAllocator) -> None:
         """Fan named-region assignments out into ``emitter.region`` calls.
 
@@ -3964,6 +3983,7 @@ class apeSees:
         self._fix_records: list[FixRecord] = []
         self._mass_records: list[MassRecord] = []
         self._region_records: list[RegionAssignmentRecord] = []
+        self._rayleigh_records: list[RayleighRecord] = []
         self._initial_stress_records: list[InitialStressRecord] = []
         # Phase SSI-2.A: closed StageRecord instances accumulate here as
         # ``with ops.stage(name) as s:`` blocks exit.  ``stage_records``
@@ -4037,6 +4057,7 @@ class apeSees:
         self.element          = _ElementNS(self)
         self.recorder         = _RecorderNS(self)
         self.profiler         = _ProfilerNS(self)
+        self.damping          = _DampingNS(self)
 
         # FEM-aware aggregates (Phase 5A) — query-and-act over fem.nodes.
         self.nodes            = _NodeAccessor(self)
@@ -5317,6 +5338,7 @@ class apeSees:
             region_records=tuple(self._region_records),
             initial_stress_records=tuple(self._initial_stress_records),
             stage_records=tuple(self._stage_records),
+            rayleigh_records=tuple(self._rayleigh_records),
         )
 
     # -- Internal helpers ------------------------------------------------
