@@ -69,6 +69,19 @@ The dict-style accessors were removed. Today's `model.materials()` returns
 `list[SectionSimpleRecord | SectionComplexRecord]`; etc. Use
 `materials_by_family()` for the family-keyed view.
 
+### ❌ `Viscous` in a `section.Aggregator` → ✅ put it on a `ZeroLength` `-mat`
+A rate-dependent material (`Viscous` / `ViscousDamper` / `Maxwell`) is silently
+inert inside `section.Aggregator → ZeroLengthSection` — neither passes a strain
+rate, so it yields **zero** damping force. `Aggregator` now **fails loud** on
+one. Put the dashpot directly on a `ZeroLength` `(material, dof)` pair (parallel
+an elastic spring on the same DOF for a non-singular static tangent).
+
+### ⚠️ `ZeroLengthSection` Rayleigh defaults **ON** (opposite of `ZeroLength`)
+`zeroLengthSection` initialises `-doRayleigh 1` in OpenSees, so the primitive
+mirrors that: `do_rayleigh` defaults **`True`** (plain `ZeroLength` defaults
+`False`). It always emits the flag explicitly, so `do_rayleigh=False` actually
+disables it. Don't assume the two elements share a default.
+
 ## Pitfalls not covered in the other references
 
 ### `remove_duplicates` tolerance is unit-dependent
