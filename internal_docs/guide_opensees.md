@@ -93,7 +93,7 @@ geometry --> mesh --> FEMData snapshot
 ## Tasks on this page
 
 - [Set model dimensions](#1-model-dimensions-opsmodel) · [Declare materials](#2-materials) · [Assign elements](#3-element-assignment)
-- [Fix a support](#34-fix-a-support-opsfix) · [Add masses](#41-masses-opsmass) · [Apply loads / prescribed SP](#42-loads-and-prescribed-sp-patterns) · [Tie meshes / MP constraints](#44-multi-point-constraints)
+- [Fix a support](#34-fix-a-support-opsfix) · [Add masses](#41-masses-opsmass) · [Apply loads / prescribed SP](#42-loads-and-prescribed-sp-patterns) · [Tie meshes / MP constraints](#44-multi-point-constraints) · [Damping](#46-damping-opsdamping)
 - [Build the model](#5-building-the-model-build) · [Emit Tcl / py / h5 / run](#6-emit-run) · [Inspect the broker](#7-inspection)
 
 
@@ -483,6 +483,98 @@ Deck consequences:
 - For multi-stage decks, name your constraints up front
   (`name="..."` on every `g.constraints.X(...)` call you intend to
   stage-bind) — claim-by-name requires it.
+
+
+### 4.6 Damping -- `ops.damping`
+
+Damping is a **domain-level** concern (a sibling of `fix` / `mass` /
+`region`, *not* part of the analysis chain). The `ops.damping` namespace
+owns four of OpenSees' damping channels — global Rayleigh, region-scoped
+Rayleigh, modal damping, and the tagged `damping` objects. Material
+dashpots (`Viscous`, `ViscousDamper`, …) stay in `ops.uniaxialMaterial.*`
+and numerical/algorithmic damping (HHT-α, …) stays in `ops.integrator.*`.
+Every member is a **declaration resolved at emit** — there is no `assign`
+step and you never hold the object's tag.
+
+**Rayleigh — raw or ratio, global or scoped.**
+
+```python
+# Raw: the four OpenSees coefficients straight through.
+ops.damping.rayleigh(alpha_m=0.1, beta_k=0.01)        # global
+
+# Ratio helper: a target ξ at two frequencies (Hz). α lands in alpha_m;
+# β lands in the slot named by stiffness= (default "initial" = βK0, the
+# nonlinear-safe choice — current/committed are explicit opt-ins).
+ops.damping.rayleigh(ratio=0.05, f_i=1.0, f_j=10.0)
+
+# Region-scoped: on= a physical group (or a list). Uses -ele membership
+# because βK is stiffness-proportional. Region refines global — OpenSees
+# OVERWRITES element Rayleigh per element (not additive), so the emit pass
+# warns (RayleighOverwriteWarning) when a global and an on= form overlap.
+ops.damping.rayleigh(ratio=0.05, f_i=1.0, f_j=10.0, on="Soil")
+```
+
+Setting `ops.damping.rayleigh(...)` is what finally gives the per-element
+`do_rayleigh=True` flags something to opt into.
+
+**Modal damping** — bundles its own `eigen` (computes the modes, then sets
+the per-mode factors). Domain-wide, so no `on=`.
+
+```python
+ops.damping.modal(0.05, modes=4)              # uniform ζ across 4 modes
+ops.damping.modal([0.02, 0.03, 0.05], modes=3)  # per-mode (len == modes)
+```
+
+There is intentionally **no `modal_q`** — OpenSees `modalDampingQ` is a
+verified upstream anti-damping bug (wrong sign). Modal damping only damps
+the modes you computed and is *additive* with any Rayleigh — easy to
+over-damp.
+
+**Tagged `damping` objects** — frequency-band viscous dissipators. `on=`
+attaches them to a physical group's elements via `region -damp`:
+
+```python
+ops.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0, on="Soil")
+ops.damping.sec_stif(beta=0.002, on="Soil")
+ops.damping.urd(points=[(0.5, 0.02), (5.0, 0.03), (20.0, 0.05)], on="Soil")
+ops.damping.urd_beta(points=[(0.5, 1e-3), (10.0, 2e-3)], on="Soil")
+```
+
+`uniform`'s `ratio=` is the **physical** ζ (OpenSees applies the internal
+factor of two — don't pre-divide). All four take time-window kwargs
+`activate_time` / `deactivate_time` (the "no damping during the gravity
+stage" lever) and `factor=` (an `ops.timeSeries.*` object → `-factor`).
+
+Instead of a region, you can attach an object **directly to a supported
+element** via its `damp=` kwarg (omit `on=`):
+
+```python
+damp = ops.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0)
+ops.element.elasticBeamColumn(pg="Cols", transf=t, A=.01, E=2e11, Iz=1e-4,
+                              damp=damp)
+```
+
+`damp=` is accepted only on the elements whose OpenSees parser supports
+`-damp` (`elasticBeamColumn` / `forceBeamColumn` / `dispBeamColumn` /
+`stdBrick` / `FourNodeQuad` / the Shell family / `ZeroLength`); passing it
+elsewhere fails loud. A damping object that attaches to **nothing** (no
+`on=`, never handed to an element) raises at `build()` — there is no
+global `-damp`.
+
+**Staged damping** — inside a `with ops.stage(...) as s:` block the same
+verbs live on `s.damping` and resolve *inside* that stage (after the
+stage's `domainChange`, so they bind the stage's elements):
+
+```python
+with ops.stage(name="dynamic") as s:
+    s.damping.rayleigh(ratio=0.05, f_i=1.0, f_j=10.0)
+    s.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0, on="Soil")
+    ...  # s.analysis(...) + s.run(...)
+```
+
+`s.damping.modal` is not available (per-stage modal damping interacts with
+`eigen` / `wipeAnalysis` and is deferred); declare modal damping on the
+flat bridge instead.
 
 
 ## 5. Building the Model -- `build()`

@@ -471,6 +471,13 @@ with ops.pattern.Plain(series=ts) as p:             # or UniformExcitation
     p.load(*, pg=None, node=None, forces)           # + ad-hoc bridge-authored load
     p.sp(*, pg=None, node=None, dof, value)
 ops.recorder.<Type>(...)                            ops.region(...)
+
+# damping — domain-level (ADR 0053); resolve at emit, no held tag:
+ops.damping.rayleigh(*, alpha_m=,beta_k=,... | ratio=,f_i=,f_j=,stiffness="initial"; on=None)
+ops.damping.modal(ratios, *, modes)                 # bundles eigen; no modal_q
+ops.damping.uniform|sec_stif|urd|urd_beta(*, ..., on=None, activate_time=, factor=)
+#   on= attaches via region -damp; OR omit on= and pass the handle to a
+#   -damp-capable element's damp= kwarg. ops.damping.* also on s.damping.* (staged).
 # Loads reach the deck ONLY via p.from_model(case) or p.load — nothing
 # auto-emits, so no 2x double-count trap. The deck is authoritative: the
 # bridge applies exactly what you import and does NOT audit the geometry's
@@ -481,6 +488,7 @@ ops.recorder.<Type>(...)                            ops.region(...)
 # staged analysis (ADR 0034) — domainChange between stages:
 with ops.stage("excavate") as s:                    # src/apeGmsh/opensees/apesees.py
     s.activate(...); s.fix(...); s.mass(...); s.region(...); s.recorder(...)
+    s.damping.rayleigh(...); s.damping.uniform(..., on=)   # stage-bound (D5); no s.damping.modal
     with s.pattern(series=ts) as p: p.from_model("live")   # stage-scoped pattern (ADR 0051 BL-3)
     s.embedded(...); s.initial_stress(...); s.remove_sp(...); s.remove_bc(...); s.remove_element(...)
     s.set_time(...); s.set_creep(...); s.reset(...)

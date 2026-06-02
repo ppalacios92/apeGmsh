@@ -206,6 +206,50 @@ prior-tier BC inside a stage use `s.remove_bc(...)` (the
 `g.constraints.bc`-reading alias of `s.remove_sp`; `dofs=` are 1-based
 DOF indices, not the fix flag vector).
 
+## Damping — `ops.damping` (ADR 0053)
+
+Domain-level (sibling of `fix`/`mass`/`region`), **not** in the analysis
+chain. Every member is a declaration resolved at emit — no `assign`, no
+held tag. Owns 4 channels; material dashpots stay in
+`ops.uniaxialMaterial.*` (`Viscous`/`ViscousDamper`/…), numerical damping
+in `ops.integrator.*`.
+
+```python
+# Rayleigh — raw OR ratio; global (no on=) OR region-scoped (on=PG/list).
+ops.damping.rayleigh(alpha_m=0.1, beta_k=0.01)                  # raw, global
+ops.damping.rayleigh(ratio=0.05, f_i=1.0, f_j=10.0)             # ratio fit (α, β)
+ops.damping.rayleigh(ratio=0.05, f_i=1.0, f_j=10.0, on="Soil")  # region (-ele)
+# ratio β lands by stiffness= : default "initial"=βK0 (nonlinear-safe);
+# "current"/"committed" explicit. This is what -doRayleigh opts INTO.
+# Element Rayleigh OVERWRITES per element → global+on= overlap warns
+# (RayleighOverwriteWarning); resolver emits global before region.
+
+# Modal — bundles its own eigen; domain-wide (no on=). NO modal_q
+# (modalDampingQ is an upstream anti-damping bug).
+ops.damping.modal(0.05, modes=4)                 # uniform; or [..] len==modes
+
+# Tagged objects → region -damp attach (on= required, OR element damp=).
+ops.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0, on="Soil")
+ops.damping.sec_stif(beta=0.002, on="Soil")
+ops.damping.urd(points=[(0.5,0.02),(5,0.03),(20,0.05)], on="Soil")   # N>=2 asc
+ops.damping.urd_beta(points=[(0.5,1e-3),(10,2e-3)], on="Soil")
+# uniform ratio = PHYSICAL ζ (OpenSees ×2 internally — don't pre-divide).
+# All four: activate_time/deactivate_time (off during gravity) + factor=
+# (an ops.timeSeries.* → -factor). Element-flag attach instead of a region:
+damp = ops.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0)
+ops.element.elasticBeamColumn(pg="Cols", transf=t, A=.01, E=2e11, Iz=1e-4, damp=damp)
+```
+
+`damp=` only on `-damp`-capable elements (elasticBeamColumn /
+forceBeamColumn / dispBeamColumn / stdBrick / FourNodeQuad / Shell family /
+ZeroLength) — else `TypeError`. An object attached to nothing (no `on=`,
+no element) raises at `build()` (no global `-damp`). Persists to
+`/opensees/dampings` (schema 2.15.0, folds into `model_hash`); element-flag
+attach round-trips, region `-damp`/`-rayleigh` attach does not (archival
+`/opensees/regions`, like all region state). **Staged:** `s.damping.*`
+(same verbs, resolve inside the stage after `domainChange`); `s.damping.modal`
+raises (per-stage modal deferred).
+
 ## ✅ Multi-point constraints ARE emitted (ADR 0022)
 
 > This reverses the old skill claim that MP emission is "deferred /
@@ -401,13 +445,13 @@ The canonical component vocabulary is the neutral top-level
 **two-zone** `model.h5`: the *neutral* zone (broker-written —
 nodes/elements/PGs/labels/constraints/loads/masses, same as
 `g.save()`) **and** the `/opensees/` zone (bridge-written —
-transforms, recorders, cuts/sweeps). `g.save()` / `FEMData.to_h5`
+transforms, recorders, dampings, cuts/sweeps). `g.save()` / `FEMData.to_h5`
 write **only** the neutral zone; `apeSees(fem).h5(path)` writes both.
 
 Two **independent** per-zone schema constants (ADR 0023):
 
-- bridge `SCHEMA_VERSION` (`opensees/emitter/h5.py:252`) = **2.12.0**
-  — stamps `/opensees/…`.
+- bridge `SCHEMA_VERSION` (`opensees/emitter/h5.py`) = **2.15.0**
+  — stamps `/opensees/…` (2.15.0 added `/opensees/dampings`, ADR 0053 D3b).
 - broker `NEUTRAL_SCHEMA_VERSION` (`mesh/_femdata_h5_io.py:151`) =
   **2.10.0** — stamps the root neutral zone.
 
