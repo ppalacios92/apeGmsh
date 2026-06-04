@@ -61,6 +61,7 @@ __all__ = [
     "BezierTri6",
     "FourNodeQuad",
     "FourNodeTetrahedron",
+    "LadrunoBrick",
     "SixNodeTri",
     "TenNodeTetrahedron",
     "Tri31",
@@ -69,6 +70,29 @@ __all__ = [
 
 
 _PLANE_TYPES: tuple[str, ...] = ("PlaneStrain", "PlaneStress")
+
+# Ladruno solid geometry/kinematics methods (the ``-geom`` selector shared by
+# BezierTet10 and LadrunoBrick): linear (small strain), corot (large rotation /
+# small strain, EICR), finite (large strain, updated-Lagrangian).
+_GEOM_METHODS: tuple[str, ...] = ("linear", "corot", "finite")
+
+# LadrunoBrick F-bar variant (the ``-fbar`` selector, only meaningful with
+# B-bar + finite). centroid = single centroid J₀; mean_dilatation = volume-avg.
+_FBAR_MODES: tuple[str, ...] = ("centroid", "mean_dilatation")
+
+# LadrunoBrick ``-formulation`` selector (strain interpolation / anti-locking):
+# std (full integration), bbar (mean-dilatation), uri (1-pt reduced + hourglass),
+# ssp (stabilized single-point), eas (true Simo-Rifai enhanced assumed strain).
+_BRICK_FORMULATIONS: tuple[str, ...] = ("std", "bbar", "uri", "ssp", "eas")
+
+# LadrunoBrick formulations that support ``-geom corot|finite`` and ``-damp``
+# (OPS_LadrunoBrick.cpp parse guards): only std and bbar.
+_BRICK_GEOM_FORMULATIONS: frozenset[str] = frozenset({"std", "bbar"})
+
+# LadrunoBrick ``-hourglass`` type (uri only): viscous (explicit-only rate
+# damping), stiffness (Flanagan-Belytschko, implicit-safe), physical
+# (Belytschko-Bindeman assumed strain).
+_BRICK_HOURGLASS_TYPES: tuple[str, ...] = ("viscous", "stiffness", "physical")
 
 # BezierTri6's fork factory (OPS_BezierTri6.cpp:97-101) validates ONLY the
 # canonical pair and errors on anything else — it does NOT accept the
@@ -627,7 +651,8 @@ class BezierTet10(Element):
     Tcl signature::
 
         element BezierTet10 $tag $n1 ... $n10 $matTag \\
-            [-bbar] [-cMass] [-rho $r] [-bodyForce $b1 $b2 $b3] [-pressure $p]
+            [-bbar] [-cMass] [-rho $r] [-bodyForce $b1 $b2 $b3] [-pressure $p] \\
+            [-geom linear|corot|finite] [-fbar centroid|mean_dilatation]
 
     Every option is flag-prefixed and independently optional. Unlike
     :class:`BezierTri6` there is **no plane-stress degeneracy**, so B-bar
@@ -640,9 +665,16 @@ class BezierTet10(Element):
         :class:`BezierTet10` elements at fan-out time.
     material
         The 3D :class:`NDMaterial` that supplies the constitutive law.
+        Under ``geom="finite"`` this must be a finite-strain material
+        driven by ``setTrialF(F)`` (e.g. ``nDMaterial LogStrain``); the
+        fork rejects a small-strain material there at run time (gated at
+        run, not emit — apeGmsh does not model finite-strain-ness).
     bbar
         Enable the B-bar (near-incompressibility) formulation. Defaults
-        to ``False``.
+        to ``False``. With ``geom="finite"`` this selects the **F-bar**
+        element (the large-strain volumetric-locking cure), whose tangent
+        is generally **unsymmetric** — use an unsymmetric solver
+        (``FullGeneral``/``UmfPack``/``SparseGEN``).
     consistent_mass
         Emit ``-cMass`` for a consistent (vs lumped) mass matrix.
         Defaults to ``False``.
@@ -654,7 +686,18 @@ class BezierTet10(Element):
         Defaults to ``None``.
     pressure
         Optional volume-pressure term (``-pressure``). Defaults to
-        ``None``.
+        ``None``. **Rejected** under ``geom="corot"`` or ``"finite"``
+        (unvalidated in the fork v1; ``OPS_BezierTet10.cpp``).
+    geom
+        Geometry/kinematics method — ``"linear"`` (default, small strain),
+        ``"corot"`` (large rotation / small strain, EICR), or ``"finite"``
+        (large strain, updated-Lagrangian). The default elides the flag so
+        existing decks stay byte-identical.
+    fbar
+        F-bar variant, only meaningful with ``bbar=True`` and
+        ``geom="finite"``: ``"centroid"`` (default, single centroid J₀) or
+        ``"mean_dilatation"`` (volume-averaged J̄). Setting it to a
+        non-default value without ``bbar``+``finite`` raises.
     """
 
     pg: str
@@ -664,11 +707,39 @@ class BezierTet10(Element):
     rho: float | None = None
     body_force: tuple[float, float, float] | None = None
     pressure: float | None = None
+    geom: str = "linear"
+    fbar: str = "centroid"
 
     def __post_init__(self) -> None:
         if self.rho is not None and self.rho < 0:
             raise ValueError(
                 f"BezierTet10: rho must be >= 0 if supplied, got {self.rho!r}."
+            )
+        if self.geom not in _GEOM_METHODS:
+            raise ValueError(
+                f"BezierTet10: geom must be one of {_GEOM_METHODS}, "
+                f"got {self.geom!r}."
+            )
+        if self.fbar not in _FBAR_MODES:
+            raise ValueError(
+                f"BezierTet10: fbar must be one of {_FBAR_MODES}, "
+                f"got {self.fbar!r}."
+            )
+        # The fork rejects the +z pressure hack under corot/finite at parse
+        # time (OPS_BezierTet10.cpp:213-228) — unvalidated against the
+        # co-rotating / large-strain load contract in v1.
+        if self.pressure is not None and self.geom in ("corot", "finite"):
+            raise ValueError(
+                f"BezierTet10: pressure is not supported under "
+                f"geom={self.geom!r} (the fork rejects it in v1); "
+                "use geom='linear' or drop pressure."
+            )
+        # -fbar only does anything with the F-bar element (bbar + finite);
+        # the fork warns it is a no-op otherwise. apeGmsh fails loud instead.
+        if self.fbar != "centroid" and not (self.bbar and self.geom == "finite"):
+            raise ValueError(
+                "BezierTet10: fbar='mean_dilatation' requires bbar=True and "
+                "geom='finite' (F-bar is off otherwise)."
             )
 
     def dependencies(self) -> tuple[Primitive, ...]:
@@ -694,7 +765,169 @@ class BezierTet10(Element):
             args += ["-rho", self.rho]
         if self.body_force is not None:
             args += ["-bodyForce", *self.body_force]
+        # Geometry method + F-bar variant. Defaults (linear / centroid) are
+        # elided so existing decks stay byte-identical.
+        if self.geom != "linear":
+            args += ["-geom", self.geom]
+        if self.fbar != "centroid":
+            args += ["-fbar", self.fbar]
         emitter.element("BezierTet10", tag, *args)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LadrunoBrick(Element):
+    """``element LadrunoBrick`` — unified 8-node hexahedral solid.
+
+    A Ladruno-fork 3D continuum element (class tag ``33002``) that exposes
+    the anti-locking treatment as a single ``-formulation`` selector
+    (``std``/``bbar``/``uri``/``ssp``/``eas``) and an orthogonal ``-geom``
+    selector for the kinematic regime (``linear``/``corot``/``finite``).
+    One class reproduces upstream ``Brick``/``bbarBrick``/``SSPbrick``
+    bit-for-bit where they overlap and adds the cheap explicit hex.
+    **Fork-only:** emitting the command works on any build, but
+    ``ops.run()`` needs the fork (gated at run, not emit).
+
+    Tcl signature::
+
+        element LadrunoBrick $tag $n1 ... $n8 $matTag \\
+            [-formulation std|bbar|uri|ssp|eas] [-geom linear|corot|finite] \\
+            [-hourglass viscous|stiffness|physical [$coeff]] \\
+            [-lumped] [-b $bx $by $bz] [-damp $dampTag]
+
+    The 8 nodes are the standard ``Brick`` order (nodes 0–3 on the
+    ``ζ=-1`` face, 4–7 on ``ζ=+1``), byte-identical to Gmsh hex8 (etype 5).
+
+    Parameters
+    ----------
+    pg
+        Physical-group label whose volume cells are realized as
+        :class:`LadrunoBrick` elements at fan-out time.
+    material
+        The 3D :class:`NDMaterial` constitutive law. Under
+        ``geom="finite"`` this must be a finite-strain material driven by
+        ``setTrialF(F)`` (e.g. ``nDMaterial LogStrain``); the fork rejects a
+        small-strain material there at run time.
+    formulation
+        Strain interpolation / anti-locking treatment — one of
+        ``"std"`` (default), ``"bbar"``, ``"uri"``, ``"ssp"``, ``"eas"``.
+    geom
+        Kinematics method — ``"linear"`` (default), ``"corot"`` (large
+        rotation / small strain), ``"finite"`` (large strain). ``corot``
+        and ``finite`` support **only** ``std``/``bbar`` (the fork rejects
+        ``uri``/``ssp``/``eas`` there); with ``finite`` + ``bbar`` you get
+        the F-bar element (unsymmetric tangent — use an unsymmetric solver).
+    hourglass
+        Hourglass-control flavour for ``formulation="uri"`` only —
+        ``"viscous"`` (explicit-only), ``"stiffness"``, or ``"physical"``.
+        Must be ``None`` for every other formulation. Defaults to ``None``.
+    hourglass_coeff
+        Optional numeric coefficient for the hourglass control. Requires
+        ``hourglass`` to be set. Defaults to ``None``.
+    lumped
+        Emit ``-lumped`` for a diagonal (row-sum) mass matrix — required
+        for explicit integrators. Defaults to ``False``.
+    body_force
+        Optional ``(bx, by, bz)`` body force per unit volume (``-b``).
+        Defaults to ``None``.
+    damp
+        Optional :class:`Damping` object attached via the element's
+        ``-damp`` flag (ADR 0053 element-flag attach). The fork honours
+        ``-damp`` **only** with ``std``/``bbar`` formulations; apeGmsh
+        rejects it for the others rather than letting the fork silently
+        drop it. Defaults to ``None``.
+    """
+
+    pg: str
+    material: NDMaterial
+    formulation: str = "std"
+    geom: str = "linear"
+    hourglass: str | None = None
+    hourglass_coeff: float | None = None
+    lumped: bool = False
+    body_force: tuple[float, float, float] | None = None
+    damp: Damping | None = None
+
+    def __post_init__(self) -> None:
+        if self.formulation not in _BRICK_FORMULATIONS:
+            raise ValueError(
+                f"LadrunoBrick: formulation must be one of "
+                f"{_BRICK_FORMULATIONS}, got {self.formulation!r}."
+            )
+        if self.geom not in _GEOM_METHODS:
+            raise ValueError(
+                f"LadrunoBrick: geom must be one of {_GEOM_METHODS}, "
+                f"got {self.geom!r}."
+            )
+        # Hourglass control is meaningful only for the reduced-integration
+        # (uri) kernel (OPS_LadrunoBrick.cpp — the other kernels ignore it).
+        if self.hourglass is not None:
+            if self.hourglass not in _BRICK_HOURGLASS_TYPES:
+                raise ValueError(
+                    f"LadrunoBrick: hourglass must be one of "
+                    f"{_BRICK_HOURGLASS_TYPES}, got {self.hourglass!r}."
+                )
+            if self.formulation != "uri":
+                raise ValueError(
+                    "LadrunoBrick: hourglass is only valid with "
+                    f"formulation='uri', got formulation={self.formulation!r}."
+                )
+        if self.hourglass_coeff is not None and self.hourglass is None:
+            raise ValueError(
+                "LadrunoBrick: hourglass_coeff requires hourglass to be set."
+            )
+        # corot/finite ship std|bbar only (the single-point/EAS kernels under
+        # large rotation/strain are deferred follow-ups — fork parse reject).
+        if (
+            self.geom in ("corot", "finite")
+            and self.formulation not in _BRICK_GEOM_FORMULATIONS
+        ):
+            raise ValueError(
+                f"LadrunoBrick: geom={self.geom!r} supports only "
+                "formulation='std' or 'bbar' "
+                f"(got {self.formulation!r}); uri/ssp/eas are reserved there."
+            )
+        # The fork wires -damp only through the std/bbar kernel and drops it
+        # (with a warning) for the others. apeGmsh fails loud instead.
+        if (
+            self.damp is not None
+            and self.formulation not in _BRICK_GEOM_FORMULATIONS
+        ):
+            raise ValueError(
+                "LadrunoBrick: -damp is only supported with formulation='std' "
+                f"or 'bbar' (got {self.formulation!r})."
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        if self.damp is not None:
+            return (self.material, self.damp)
+        return (self.material,)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        nodes = current_element_nodes(emitter)
+        if len(nodes) != 8:
+            raise ValueError(
+                f"LadrunoBrick: expected 8 node tags, got {len(nodes)}."
+            )
+        mat_tag = resolve_tag(emitter, self.material)
+        args: list[int | float | str] = [*nodes, mat_tag]
+        # Every option is flag-prefixed and order-independent (the fork
+        # factory scans a while-loop). The std/linear defaults are elided.
+        if self.formulation != "std":
+            args += ["-formulation", self.formulation]
+        if self.geom != "linear":
+            args += ["-geom", self.geom]
+        if self.hourglass is not None:
+            args += ["-hourglass", self.hourglass]
+            if self.hourglass_coeff is not None:
+                args.append(self.hourglass_coeff)
+        if self.lumped:
+            args.append("-lumped")
+        if self.body_force is not None:
+            args += ["-b", *self.body_force]
+        # All options above are flag-prefixed, so a trailing -damp parses
+        # cleanly with no zero-fill (unlike stdBrick's greedy body-force tail).
+        args.extend(damp_args(emitter, self.damp))
+        emitter.element("LadrunoBrick", tag, *args)
 
 
 # ---------------------------------------------------------------------------

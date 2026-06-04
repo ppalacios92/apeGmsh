@@ -33,6 +33,7 @@ from apeGmsh.opensees.element.solid import (
     BezierTri6,
     FourNodeQuad,
     FourNodeTetrahedron,
+    LadrunoBrick,
     SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
@@ -860,6 +861,76 @@ class TestBezierTet10:
         )
         assert "-bbar" in rec.calls[0][1]
 
+    def test_emit_minimal_elides_geom_and_fbar(self) -> None:
+        """Defaults (linear / centroid) emit no -geom / -fbar (byte-stable)."""
+        m = _make_material()
+        elem = BezierTet10(pg="Body", material=m)
+        rec = _emit_with(
+            elem, tag=3, nodes=tuple(range(21, 31)), mat_tag=5, material=m,
+        )
+        flat = rec.calls[0][1]
+        assert "-geom" not in flat and "-fbar" not in flat
+
+    def test_emit_geom_corot(self) -> None:
+        m = _make_material()
+        elem = BezierTet10(pg="Body", material=m, geom="corot")
+        rec = _emit_with(
+            elem, tag=1, nodes=tuple(range(1, 11)), mat_tag=1, material=m,
+        )
+        flat = rec.calls[0][1]
+        assert flat[flat.index("-geom") + 1] == "corot"
+
+    def test_emit_fbar_mean_dilatation_with_bbar_finite(self) -> None:
+        """F-bar variant rides with bbar + finite (the only valid combo)."""
+        m = _make_material()
+        elem = BezierTet10(
+            pg="Body", material=m, bbar=True, geom="finite",
+            fbar="mean_dilatation",
+        )
+        rec = _emit_with(
+            elem, tag=7, nodes=tuple(range(1, 11)), mat_tag=2, material=m,
+        )
+        flat = rec.calls[0][1]
+        assert "-bbar" in flat
+        assert flat[flat.index("-geom") + 1] == "finite"
+        assert flat[flat.index("-fbar") + 1] == "mean_dilatation"
+
+    @pytest.mark.parametrize("bad", ["small", "linear ", "Corot", ""])
+    def test_validation_rejects_bad_geom(self, bad: str) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="geom must be one of"):
+            BezierTet10(pg="Body", material=m, geom=bad)
+
+    def test_validation_rejects_bad_fbar(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="fbar must be one of"):
+            BezierTet10(
+                pg="Body", material=m, bbar=True, geom="finite", fbar="nope",
+            )
+
+    @pytest.mark.parametrize("geom", ["corot", "finite"])
+    def test_validation_rejects_pressure_under_corot_finite(
+        self, geom: str,
+    ) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="pressure is not supported"):
+            BezierTet10(
+                pg="Body", material=m, geom=geom, bbar=True, pressure=10.0,
+            )
+
+    def test_validation_rejects_fbar_without_bbar_finite(self) -> None:
+        m = _make_material()
+        # finite but no bbar
+        with pytest.raises(ValueError, match="requires bbar=True"):
+            BezierTet10(
+                pg="Body", material=m, geom="finite", fbar="mean_dilatation",
+            )
+        # bbar but linear (not finite)
+        with pytest.raises(ValueError, match="requires bbar=True"):
+            BezierTet10(
+                pg="Body", material=m, bbar=True, fbar="mean_dilatation",
+            )
+
     def test_emit_without_element_nodes_raises(self) -> None:
         m = _make_material()
         elem = BezierTet10(pg="Body", material=m)
@@ -876,6 +947,209 @@ class TestBezierTet10:
         set_tag_resolver(e, _resolver_for(m, 1))
         set_element_nodes(e, tuple(range(1, bad_count + 1)))
         with pytest.raises(ValueError, match="expected 10 node tags"):
+            elem._emit(e, tag=1)
+
+
+# ===========================================================================
+# LadrunoBrick
+# ===========================================================================
+
+def _resolver_for_many(mapping: dict[int, int]) -> object:
+    """Tag resolver over several primitives keyed by ``id()``."""
+    def _resolve(prim: Primitive) -> int:
+        try:
+            return mapping[id(prim)]
+        except KeyError:
+            raise KeyError(f"unexpected primitive {prim!r}") from None
+    return _resolve
+
+
+class TestLadrunoBrick:
+    def test_construction_minimal_defaults(self) -> None:
+        m = _make_material()
+        e = LadrunoBrick(pg="Body", material=m)
+        assert e.pg == "Body"
+        assert e.material is m
+        assert e.formulation == "std"
+        assert e.geom == "linear"
+        assert e.hourglass is None and e.hourglass_coeff is None
+        assert e.lumped is False
+        assert e.body_force is None and e.damp is None
+
+    def test_repr_includes_type_token(self) -> None:
+        m = _make_material()
+        assert "LadrunoBrick" in repr(LadrunoBrick(pg="Body", material=m))
+
+    def test_dependencies_material_only(self) -> None:
+        m = _make_material()
+        e = LadrunoBrick(pg="Body", material=m)
+        assert e.dependencies() == (m,)
+
+    def test_dependencies_includes_damp(self) -> None:
+        m = _make_material()
+        damp = MagicMock(name="Damping")
+        e = LadrunoBrick(pg="Body", material=m, damp=damp)
+        assert e.dependencies() == (m, damp)
+
+    def test_emit_minimal_uses_LadrunoBrick_token_no_flags(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(pg="Body", material=m)
+        nodes = tuple(range(11, 19))
+        rec = _emit_with(elem, tag=3, nodes=nodes, mat_tag=5, material=m)
+        assert rec.calls == [
+            ("element", ("LadrunoBrick", 3, *nodes, 5), {})
+        ]
+
+    def test_emit_formulation_bbar(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(pg="Body", material=m, formulation="bbar")
+        nodes = tuple(range(1, 9))
+        rec = _emit_with(elem, tag=1, nodes=nodes, mat_tag=2, material=m)
+        assert rec.calls == [
+            ("element", ("LadrunoBrick", 1, *nodes, 2, "-formulation", "bbar"), {})
+        ]
+
+    def test_emit_geom_finite(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(
+            pg="Body", material=m, formulation="bbar", geom="finite",
+        )
+        nodes = tuple(range(1, 9))
+        rec = _emit_with(elem, tag=1, nodes=nodes, mat_tag=2, material=m)
+        flat = rec.calls[0][1]
+        assert flat[flat.index("-geom") + 1] == "finite"
+
+    def test_emit_uri_hourglass_with_coeff(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(
+            pg="Body", material=m, formulation="uri",
+            hourglass="physical", hourglass_coeff=0.05,
+        )
+        nodes = tuple(range(1, 9))
+        rec = _emit_with(elem, tag=2, nodes=nodes, mat_tag=4, material=m)
+        flat = rec.calls[0][1]
+        assert flat[flat.index("-hourglass") + 1] == "physical"
+        assert flat[flat.index("-hourglass") + 2] == 0.05
+
+    def test_emit_all_flags(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(
+            pg="Body", material=m, formulation="uri", geom="linear",
+            hourglass="stiffness", hourglass_coeff=0.1,
+            lumped=True, body_force=(0.0, 0.0, -9.81),
+        )
+        nodes = tuple(range(1, 9))
+        rec = _emit_with(elem, tag=7, nodes=nodes, mat_tag=3, material=m)
+        assert rec.calls == [
+            (
+                "element",
+                (
+                    "LadrunoBrick", 7, *nodes, 3,
+                    "-formulation", "uri",
+                    "-hourglass", "stiffness", 0.1,
+                    "-lumped", "-b", 0.0, 0.0, -9.81,
+                ),
+                {},
+            )
+        ]
+
+    def test_emit_damp_appends_clean_flag(self) -> None:
+        """All options are flag-prefixed → -damp needs no zero-fill tail."""
+        m = _make_material()
+        damp = MagicMock(name="Damping")
+        elem = LadrunoBrick(
+            pg="Body", material=m, formulation="bbar", damp=damp,
+        )
+        nodes = tuple(range(1, 9))
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_for_many({id(m): 2, id(damp): 9}))
+        set_element_nodes(e, nodes)
+        elem._emit(e, tag=4)
+        assert e.calls == [
+            (
+                "element",
+                ("LadrunoBrick", 4, *nodes, 2, "-formulation", "bbar",
+                 "-damp", 9),
+                {},
+            )
+        ]
+
+    @pytest.mark.parametrize("bad", ["STD", "reduced", "linear", ""])
+    def test_validation_rejects_bad_formulation(self, bad: str) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="formulation must be one of"):
+            LadrunoBrick(pg="Body", material=m, formulation=bad)
+
+    def test_validation_rejects_bad_geom(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="geom must be one of"):
+            LadrunoBrick(pg="Body", material=m, geom="small")
+
+    def test_validation_rejects_hourglass_without_uri(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="hourglass is only valid"):
+            LadrunoBrick(
+                pg="Body", material=m, formulation="std", hourglass="stiffness",
+            )
+
+    def test_validation_rejects_bad_hourglass_type(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="hourglass must be one of"):
+            LadrunoBrick(
+                pg="Body", material=m, formulation="uri", hourglass="nope",
+            )
+
+    def test_validation_rejects_hourglass_coeff_without_hourglass(self) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="hourglass_coeff requires"):
+            LadrunoBrick(
+                pg="Body", material=m, formulation="uri", hourglass_coeff=0.1,
+            )
+
+    @pytest.mark.parametrize("geom", ["corot", "finite"])
+    @pytest.mark.parametrize("formulation", ["uri", "ssp", "eas"])
+    def test_validation_rejects_corot_finite_with_nonstdbbar(
+        self, geom: str, formulation: str,
+    ) -> None:
+        m = _make_material()
+        with pytest.raises(ValueError, match="supports only"):
+            LadrunoBrick(
+                pg="Body", material=m, formulation=formulation, geom=geom,
+            )
+
+    @pytest.mark.parametrize("formulation", ["uri", "ssp", "eas"])
+    def test_validation_rejects_damp_with_nonstdbbar(
+        self, formulation: str,
+    ) -> None:
+        m = _make_material()
+        damp = MagicMock(name="Damping")
+        with pytest.raises(ValueError, match="-damp is only supported"):
+            LadrunoBrick(
+                pg="Body", material=m, formulation=formulation, damp=damp,
+            )
+
+    def test_damp_allowed_with_std_and_bbar(self) -> None:
+        m = _make_material()
+        damp = MagicMock(name="Damping")
+        for f in ("std", "bbar"):
+            LadrunoBrick(pg="Body", material=m, formulation=f, damp=damp)
+
+    def test_emit_without_element_nodes_raises(self) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(pg="Body", material=m)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_for(m, 1))
+        with pytest.raises(RuntimeError, match="element-nodes"):
+            elem._emit(e, tag=1)
+
+    @pytest.mark.parametrize("bad_count", [0, 4, 7, 9, 10])
+    def test_emit_with_wrong_node_count_raises(self, bad_count: int) -> None:
+        m = _make_material()
+        elem = LadrunoBrick(pg="Body", material=m)
+        e = RecordingEmitter()
+        set_tag_resolver(e, _resolver_for(m, 1))
+        set_element_nodes(e, tuple(range(1, bad_count + 1)))
+        with pytest.raises(ValueError, match="expected 8 node tags"):
             elem._emit(e, tag=1)
 
 
@@ -954,10 +1228,31 @@ class TestSolidElementNamespace:
         m = ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2)
         e = ops.element.BezierTet10(
             pg="Body", material=m, bbar=True, body_force=(0.0, 0.0, -9.81),
+            geom="corot",
         )
         assert isinstance(e, BezierTet10)
         assert e.bbar is True
+        assert e.geom == "corot"
         assert ops.tag_for(e) == 1
+
+    def test_LadrunoBrick_via_namespace(self) -> None:
+        ops = _stub_bridge()
+        m = ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2)
+        e = ops.element.LadrunoBrick(
+            pg="Body", material=m, formulation="bbar", geom="finite",
+        )
+        assert isinstance(e, LadrunoBrick)
+        assert e.formulation == "bbar"
+        assert e.geom == "finite"
+        assert ops.tag_for(e) == 1
+
+    def test_LadrunoBrick_damp_via_namespace(self) -> None:
+        ops = _stub_bridge()
+        m = ops.nDMaterial.ElasticIsotropic(E=30e9, nu=0.2)
+        damp = ops.damping.uniform(ratio=0.03, freq_lower=0.5, freq_upper=10.0)
+        e = ops.element.LadrunoBrick(pg="Body", material=m, damp=damp)
+        assert isinstance(e, LadrunoBrick)
+        assert e.damp is damp
 
     def test_distinct_elements_get_distinct_tags(self) -> None:
         ops = _stub_bridge()

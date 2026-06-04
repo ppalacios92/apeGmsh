@@ -217,6 +217,19 @@ _ELEM_REGISTRY: dict[str, _ElemSpec] = {
         slots=("nodes", "matTag", "bodyForce"),
         has_gauss=True,
     ),
+    # Ladruno-fork unified 8-node hex (tag 33002). Token == C++ class name ==
+    # registry key ("LadrunoBrick"), so no cpp_class_name / alias. Standard
+    # Brick node order, byte-identical to Gmsh hex8 (etype 5) → identity
+    # reorder. ``-formulation``/``-geom``/``-hourglass``/``-lumped``/``-b``/
+    # ``-damp`` are all flag-prefixed, emitted from the dataclass, NOT slots.
+    "LadrunoBrick": _ElemSpec(
+        mat_family="nd", needs_transf=False,
+        ndm_ok=frozenset({3}), ndf_ok=frozenset({3}),
+        gmsh_etypes=frozenset({5}),
+        node_reorder={5: (0,1,2,3,4,5,6,7)},
+        slots=("nodes", "matTag"),
+        has_gauss=True,
+    ),
 
     # ── 2-D solid ──────────────────────────────────────────────────────────
     "quad": _ElemSpec(
