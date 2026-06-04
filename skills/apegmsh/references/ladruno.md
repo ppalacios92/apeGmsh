@@ -55,7 +55,8 @@ the live emitter uses for `ops.profiler`.
 
 | Feature | Kind | Notes |
 |---|---|---|
-| **BezierTri6 / BezierTet10** | elements | fork-only Bézier (Bernstein) continuum elements — typed primitives `ops.element.BezierTri6/BezierTet10` |
+| **BezierTri6 / BezierTet10** | elements | fork-only Bézier (Bernstein) continuum elements — typed primitives `ops.element.BezierTri6/BezierTet10` (Tet10 also takes `-geom linear/corot/finite` + `-fbar`) |
+| **LadrunoBrick** | element | fork-only unified 8-node hex (tag 33002) — typed `ops.element.LadrunoBrick` with `-formulation`/`-geom`/`-hourglass`/`-damp` |
 | **ExplicitBathe / ExplicitBatheLNVD / CentralDifferenceLadruno** | explicit integrators | not in stock OpenSees |
 | **EnergyBalance** | recorder | fork-only |
 | **`.ladruno` recorder** | recorder | `recorder ladruno` — note `.ladruno`, a sibling of the vanilla `.mpco` |
@@ -73,6 +74,47 @@ Defaults: Bathe `p∈(0,1)`=0.54, LNVD `alpha∈[0,1)`=0.80; `lump` defaults to 
 on the Bathe schemes and Diagonal on CentralDifferenceLadruno (omit to inherit).
 Pair with `ops.system.Diagonal()` (lumped diagonal mass) for explicit runs.
 
+## LadrunoBrick (unified 8-node hex)
+
+Fork-only 8-node hexahedron (class tag **33002**, Gmsh hex8 / etype 5) that folds
+the anti-locking treatment into one `-formulation` selector and an orthogonal
+`-geom` kinematics selector — one class reproduces upstream `stdBrick`/`bbarBrick`/
+`SSPbrick` where they overlap and adds the cheap explicit hex:
+
+```python
+ops.element.LadrunoBrick(pg=…, material=m,
+                         formulation="std",      # std|bbar|uri|ssp|eas
+                         geom="linear",          # linear|corot|finite
+                         hourglass=None,         # uri only: viscous|stiffness|physical
+                         hourglass_coeff=None,
+                         lumped=False, body_force=None,
+                         damp=None)              # element-flag -damp (ADR 0053)
+```
+
+```
+element LadrunoBrick $tag $n1..$n8 $matTag [-formulation std|bbar|uri|ssp|eas]
+    [-geom linear|corot|finite] [-hourglass viscous|stiffness|physical [$coeff]]
+    [-lumped] [-b $bx $by $bz] [-damp $dampTag]
+```
+
+Key points (apeGmsh fails loud at construction, mirroring the fork's parse guards):
+
+- **`formulation`:** `std` (full integration, default), `bbar` (mean-dilatation),
+  `uri` (1-pt reduced + hourglass control), `ssp` (stabilized single-point), `eas`
+  (true Simo–Rifai enhanced assumed strain).
+- **`geom` `corot`/`finite` ship `std`/`bbar` only** — `uri`/`ssp`/`eas` under
+  corot/finite raise (deferred in the fork). `finite` needs a finite-strain
+  material; `finite` + `bbar` = F-bar (unsymmetric tangent → `FullGeneral`/`UmfPack`).
+- **`hourglass` is `uri`-only** (raises with any other formulation); the optional
+  `hourglass_coeff` requires `hourglass` to be set. `viscous` is explicit-only.
+- **`lumped`** emits `-lumped` (diagonal mass) — required for explicit integrators.
+- **`damp`** attaches a `Damping` object via the element's own `-damp` flag
+  (ADR 0053 element-flag attach) — honoured **only** with `std`/`bbar`; apeGmsh
+  raises for the other formulations rather than letting the fork silently drop it.
+  Defaults (`std`/`linear`) are elided so decks stay byte-clean.
+- **Result reads** go through the usual `results.elements.gauss.get(...)`; the
+  recorder always returns 8-GP `Vector(48)` (single-point forms mirror slot 0).
+
 ## Bézier elements (`BezierTri6` / `BezierTet10`)
 
 Two fork-only Bézier (Bernstein) continuum elements (Kadapa 2018), exposed as
@@ -83,7 +125,8 @@ ops.element.BezierTri6(pg=…, thickness=…, material=m, plane_type="PlaneStrai
                        bbar=False, consistent_mass=False,
                        pressure=None, rho=None, body_force=None)   # 2D, 6 nodes
 ops.element.BezierTet10(pg=…, material=m, bbar=False, consistent_mass=False,
-                        rho=None, body_force=None, pressure=None)  # 3D, 10 nodes
+                        rho=None, body_force=None, pressure=None,
+                        geom="linear", fbar="centroid")            # 3D, 10 nodes
 ```
 
 Emit grammar is **flag-prefixed** (each option independently optional), unlike
@@ -91,10 +134,20 @@ Emit grammar is **flag-prefixed** (each option independently optional), unlike
 
 ```
 element BezierTri6  $tag $n1..$n6  $thick $type $matTag [-bbar] [-cMass] [-pressure $p] [-rho $r] [-bodyForce $b1 $b2]
-element BezierTet10 $tag $n1..$n10 $matTag [-bbar] [-cMass] [-rho $r] [-bodyForce $b1 $b2 $b3] [-pressure $p]
+element BezierTet10 $tag $n1..$n10 $matTag [-bbar] [-cMass] [-rho $r] [-bodyForce $b1 $b2 $b3] [-pressure $p] [-geom linear|corot|finite] [-fbar centroid|mean_dilatation]
 ```
 
 Key points:
+
+- **`geom` (Tet10): `linear` (default) / `corot` / `finite`.** `corot` = large
+  rotation / small strain (EICR); `finite` = large strain (updated-Lagrangian),
+  which needs a finite-strain material (`setTrialF(F)`, e.g. `nDMaterial LogStrain`)
+  — the fork rejects a small-strain material there at run time. `finite` + `bbar` =
+  **F-bar** (volumetric-locking cure; unsymmetric tangent → use `FullGeneral`/
+  `UmfPack`). `pressure` is **rejected** under `corot`/`finite`. Defaults elide the
+  flag so existing decks stay byte-identical.
+- **`fbar` (Tet10): `centroid` (default) / `mean_dilatation`** — only meaningful with
+  `bbar=True` + `geom="finite"`; apeGmsh raises if set otherwise.
 
 - **`plane_type` (Tri6 only) accepts ONLY `PlaneStrain` / `PlaneStress`** — not the
   `*2D` spellings `SixNodeTri` tolerates (the fork factory rejects them).

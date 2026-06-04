@@ -28,6 +28,7 @@ from ...element.solid import (
     BezierTri6,
     FourNodeQuad,
     FourNodeTetrahedron,
+    LadrunoBrick,
     SixNodeTri,
     TenNodeTetrahedron,
     Tri31,
@@ -424,6 +425,34 @@ class _ElementNS(_BridgeNamespace):
             )
         )
 
+    def LadrunoBrick(
+        self,
+        *,
+        pg: str,
+        material: NDMaterial | str,
+        formulation: str = "std",
+        geom: str = "linear",
+        hourglass: str | None = None,
+        hourglass_coeff: float | None = None,
+        lumped: bool = False,
+        body_force: tuple[float, float, float] | None = None,
+        damp: Damping | None = None,
+    ) -> LadrunoBrick:
+        material = self._bridge._resolve(material, base=NDMaterial)
+        return self._bridge._register(
+            LadrunoBrick(
+                pg=pg,
+                material=material,
+                formulation=formulation,
+                geom=geom,
+                hourglass=hourglass,
+                hourglass_coeff=hourglass_coeff,
+                lumped=lumped,
+                body_force=body_force,
+                damp=damp,
+            )
+        )
+
     def FourNodeQuad(
         self,
         *,
@@ -536,6 +565,8 @@ class _ElementNS(_BridgeNamespace):
         rho: float | None = None,
         body_force: tuple[float, float, float] | None = None,
         pressure: float | None = None,
+        geom: str = "linear",
+        fbar: str = "centroid",
     ) -> BezierTet10:
         material = self._bridge._resolve(material, base=NDMaterial)
         return self._bridge._register(
@@ -547,5 +578,7 @@ class _ElementNS(_BridgeNamespace):
                 rho=rho,
                 body_force=body_force,
                 pressure=pressure,
+                geom=geom,
+                fbar=fbar,
             )
         )

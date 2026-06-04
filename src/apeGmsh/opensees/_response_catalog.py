@@ -117,6 +117,8 @@ ELE_TAG_SixNodeTri = 209
 # only within the ELE_TAG_* namespace — don't "correct" it to be unique.
 ELE_TAG_BezierTri6 = 33000
 ELE_TAG_BezierTet10 = 33001
+# Ladruno-fork unified 8-node hex (live from ladruno:SRC/classTags.h).
+ELE_TAG_LadrunoBrick = 33002
 # Shells
 ELE_TAG_ShellMITC4 = 53
 ELE_TAG_ShellMITC9 = 54
@@ -771,6 +773,24 @@ RESPONSE_CATALOG: dict[tuple[str, int, str], ResponseLayout] = {
         coord_system="isoparametric",
         component_names=STRAIN,
         class_tag=ELE_TAG_Brick,
+    ),
+
+    # ── LadrunoBrick (8-node, 8 GPs Hex_GL_2) ────────────────────────
+    # Ladruno-fork unified hex (tag 33002). ``stresses``/``strains`` always
+    # return Vector(48) = 6 comp × 8 GP — the single-point forms (uri/ssp)
+    # MIRROR slot 0 onto all 8 GP blocks (LadrunoBrick reference §10.5), so
+    # the recorder layout is Hex_GL_2 for every -formulation, like Brick.
+    ("LadrunoBrick", IntRule.Hex_GL_2, "stress"): _continuum_layout(
+        n_gp=8, natural_coords=_HEX_GL_2_COORDS,
+        coord_system="isoparametric",
+        component_names=STRESS,
+        class_tag=ELE_TAG_LadrunoBrick,
+    ),
+    ("LadrunoBrick", IntRule.Hex_GL_2, "strain"): _continuum_layout(
+        n_gp=8, natural_coords=_HEX_GL_2_COORDS,
+        coord_system="isoparametric",
+        component_names=STRAIN,
+        class_tag=ELE_TAG_LadrunoBrick,
     ),
 
     # ── BbarBrick (8-node, 8 GPs Hex_GL_2) ───────────────────────────
