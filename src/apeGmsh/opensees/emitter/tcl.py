@@ -198,6 +198,17 @@ class TclEmitter:
             )
         )
 
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # LadrunoEmbeddedRebar coupling (g.reinforce, ADR 20). The full
+        # positional arg list is pre-built by the R0 ``embedded_rebar_args``
+        # grammar builder; we just front it with the element command +
+        # token. Fork-only — bites at run time on a stock OpenSees, not
+        # here at emit.
+        self._lines.append(
+            _join("element", "LadrunoEmbeddedRebar", ele_tag, *args))
+
     def mp_constraint_comment(self, name: str) -> None:
         # Round-trips the user's declaration label into the deck (INV-2).
         self._lines.append(f"# {name}")

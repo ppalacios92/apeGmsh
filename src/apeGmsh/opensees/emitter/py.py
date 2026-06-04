@@ -173,6 +173,14 @@ class PyEmitter:
             )
         )
 
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # LadrunoEmbeddedRebar coupling (g.reinforce, ADR 20). Args
+        # pre-built by ``embedded_rebar_args``; fork-only at run time.
+        self._lines.append(
+            _ops_call("element", "LadrunoEmbeddedRebar", ele_tag, *args))
+
     def mp_constraint_comment(self, name: str) -> None:
         # Hash-comment line, matching Tcl's ``# {name}`` convention.
         self._lines.append(f"# {name}")

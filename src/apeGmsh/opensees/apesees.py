@@ -21,7 +21,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence, TypeVar
 
 from ._internal.build import (
@@ -48,6 +48,7 @@ from ._internal.build import (
     emit_initial_stress_global,
     emit_mp_constraints,
     emit_mp_constraints_partitioned,
+    emit_reinforce_ties,
     emit_stage_mp_constraints,
     emit_stage_mp_constraints_partitioned,
     emit_pattern_spec,
@@ -522,6 +523,10 @@ class BuiltModel:
     rayleigh_records:        tuple[RayleighRecord, ...] = ()
     damping_attach_records:  tuple[DampingAttachRecord, ...] = ()
     modal_damping_records:   tuple[ModalDampingRecord, ...] = ()
+    # name → bridge-allocated tag, for resolving g.reinforce bond-material
+    # references (Option B: the def holds the bond name, the bridge owns
+    # the tag). Populated from the name-alias table at build() time.
+    name_to_tag:             dict[str, int] = field(default_factory=dict)
 
     def _claimed_recorder_ids(self) -> "set[int]":
         """``id(...)``-set of recorders claimed by stage builders
@@ -1007,6 +1012,13 @@ class BuiltModel:
             claimed_ids=frozenset(self._claimed_constraint_ids()),
         )
 
+        # 7b'. Embedded reinforcement ties (g.reinforce, ADR 20 / R2b).
+        # One LadrunoEmbeddedRebar per rebar node; bond names resolve to
+        # tags via the bridge name-alias map.
+        emit_reinforce_ties(
+            emitter, self.fem, tags, name_to_tag=self.name_to_tag,
+        )
+
         # 7c. Auto-emit constraint handler when MP constraints present.
         self._maybe_auto_emit_constraint_handler(emitter, pre_element)
 
@@ -1246,6 +1258,9 @@ class BuiltModel:
         emit_mp_constraints(
             emitter, self.fem, tags,
             claimed_ids=frozenset(self._claimed_constraint_ids()),
+        )
+        emit_reinforce_ties(
+            emitter, self.fem, tags, name_to_tag=self.name_to_tag,
         )
         self._maybe_auto_emit_constraint_handler(emitter, pre_element)
 
@@ -1680,6 +1695,22 @@ class BuiltModel:
            :meth:`_emit_stages_partitioned`.
         """
         staged = bool(self.stage_records)
+
+        # g.reinforce (ADR 20 / R2b): partitioned emission of
+        # LadrunoEmbeddedRebar ties needs per-rank node-ownership routing
+        # (a tie spans the rebar node + its host element's nodes, which
+        # may straddle ranks). That routing is deferred; fail loud rather
+        # than silently dropping the reinforcement under MPI emit.
+        elements_comp = getattr(self.fem, "elements", None)
+        if getattr(elements_comp, "reinforce_ties", None):
+            raise BridgeError(
+                "apeSees: g.reinforce embedded-reinforcement ties are not "
+                "yet supported under partitioned (MPI) emit — per-rank "
+                "node-ownership routing of LadrunoEmbeddedRebar is deferred "
+                "(ADR 20 / R2). Emit the reinforced model single-process "
+                "(non-partitioned), or remove the reinforcement for the "
+                "partitioned run."
+            )
 
         # Phase SSI-2.C: compute stage ownership for partitioned + staged.
         element_owner_stage: dict[int, int] = {}
@@ -5577,6 +5608,9 @@ class apeSees:
             rayleigh_records=tuple(self._rayleigh_records),
             damping_attach_records=tuple(self._damping_attach_records),
             modal_damping_records=tuple(self._modal_damping_records),
+            name_to_tag={
+                nm: tag for nm, _kind, tag in self._name_records()
+            },
         )
 
     # -- Internal helpers ------------------------------------------------

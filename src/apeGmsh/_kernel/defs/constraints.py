@@ -733,6 +733,7 @@ __all__ = [
     "TieDef",
     "DistributingCouplingDef",
     "EmbeddedDef",
+    "ReinforceDef",
     "NodeToSurfaceDef",
     "NodeToSurfaceSpringDef",
     "TiedContactDef",

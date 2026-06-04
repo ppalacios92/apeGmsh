@@ -449,6 +449,7 @@ def _from_gmsh(
     element_loads: list = []
     sp_records: list = []
     mass_records: list = []
+    reinforce_ties: list = []
 
     if session is not None:
         parts_comp = getattr(session, "parts", None)
@@ -489,6 +490,18 @@ def _from_gmsh(
                 node_ids, node_coords_all, **resolve_kw)
             node_constraints, surface_constraints = \
                 _split_constraints(all_constraints)
+
+        # Embedded reinforcement (g.reinforce, ADR 20 / R2b). Pure
+        # geometry like embedded(): each rebar-PG node is inverse-mapped
+        # into its non-matching solid host, producing one
+        # ReinforceTieRecord per node. Fail-loud (a stray rebar node, an
+        # empty host, an unsupported host kind all raise) — same policy as
+        # the constraint resolve above.
+        reinforce_comp = getattr(session, "reinforce", None)
+        if (reinforce_comp is not None
+                and getattr(reinforce_comp, "reinforce_defs", None)):
+            reinforce_ties = reinforce_comp.resolve(
+                node_ids, node_coords_all)
 
         loads_comp = getattr(session, "loads", None)
         if (loads_comp is not None
@@ -625,6 +638,7 @@ def _from_gmsh(
         loads=element_loads or None,
         partitions=partitions or None,
         part_elem_map=part_elem_map or None,
+        reinforce_ties=reinforce_ties or None,
     )
 
     # Stamp the post-extraction flag on the session so any further
