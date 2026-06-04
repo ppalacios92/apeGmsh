@@ -19,7 +19,8 @@ layout under ``SRC/analysis/``:
 * :mod:`.integrator`          — ``integrator <Type>`` (LoadControl,
   DisplacementControl, ArcLength, Newmark, HHT, CentralDifference,
   ExplicitDifference; fork-only ExplicitBathe, ExplicitBatheLNVD,
-  CentralDifferenceLadruno)
+  CentralDifferenceLadruno, LadrunoArcLength, LadrunoDynamicRelaxation,
+  LadrunoIndirectControl)
 * :mod:`.analysis`            — ``analysis <Type>`` (Static, Transient,
   VariableTransient)
 
@@ -65,6 +66,9 @@ from .integrator import (
     ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
+    LadrunoArcLength,
+    LadrunoDynamicRelaxation,
+    LadrunoIndirectControl,
     LoadControl,
     Newmark,
 )
@@ -143,6 +147,9 @@ __all__ = [
     "ExplicitBathe",
     "ExplicitBatheLNVD",
     "CentralDifferenceLadruno",
+    "LadrunoArcLength",
+    "LadrunoDynamicRelaxation",
+    "LadrunoIndirectControl",
     # analysis
     "Static",
     "Transient",

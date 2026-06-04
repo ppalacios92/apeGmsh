@@ -59,6 +59,9 @@ from apeGmsh.opensees.analysis.integrator import (
     ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
+    LadrunoArcLength,
+    LadrunoDynamicRelaxation,
+    LadrunoIndirectControl,
     LoadControl,
     Newmark,
 )
@@ -1126,6 +1129,248 @@ class TestCentralDifferenceLadruno:
         assert CentralDifferenceLadruno().dependencies() == ()
 
 
+# ---------------------------------------------------------------------------
+# Fork-only path-following / dynamic-relaxation integrators (Ladruno)
+# ---------------------------------------------------------------------------
+
+class TestLadrunoArcLength:
+    def test_emit_minimal_matches_stock_shape(self) -> None:
+        e = RecordingEmitter()
+        LadrunoArcLength(s=1.0, alpha=0.5)._emit(e, tag=1)
+        assert e.calls == [("integrator", ("LadrunoArcLength", 1.0, 0.5), {})]
+
+    def test_emit_adapt_triple(self) -> None:
+        e = RecordingEmitter()
+        LadrunoArcLength(
+            s=1.0, alpha=0.5, jd=4, ell_min=0.1, ell_max=10.0, p_exp=0.5,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoArcLength", 1.0, 0.5,
+                    "-adapt", 4, 0.1, 10.0, "-p", 0.5,
+                ),
+                {},
+            )
+        ]
+
+    def test_emit_stabilize_renders_explicit_f_default(self) -> None:
+        # The optional -stabilize f is always rendered (fork default 2e-4)
+        # to defend the openseespy greedy-read quirk.
+        e = RecordingEmitter()
+        LadrunoArcLength(s=1.0, alpha=0.5, stabilize=True)._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                ("LadrunoArcLength", 1.0, 0.5, "-stabilize", 2.0e-4),
+                {},
+            )
+        ]
+
+    def test_emit_stabilize_full(self) -> None:
+        e = RecordingEmitter()
+        LadrunoArcLength(
+            s=1.0, alpha=0.5, stabilize=True, f_target=1e-3,
+            adapt_stab=True, c_visc=5.0, mass="lumped", mass_scale=2.0,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoArcLength", 1.0, 0.5,
+                    "-stabilize", 1e-3, "-adaptStab", "-cVisc", 5.0,
+                    "-mass", "lumped", 2.0,
+                ),
+                {},
+            )
+        ]
+
+    def test_emit_mass_unity_no_trailing_scale(self) -> None:
+        e = RecordingEmitter()
+        LadrunoArcLength(
+            s=1.0, alpha=0.5, stabilize=True, mass="unity",
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoArcLength", 1.0, 0.5,
+                    "-stabilize", 2.0e-4, "-mass", "unity",
+                ),
+                {},
+            )
+        ]
+
+    def test_tcl_line(self) -> None:
+        e = TclEmitter()
+        LadrunoArcLength(s=2.0, alpha=1.0)._emit(e, tag=1)
+        assert "integrator LadrunoArcLength 2.0 1.0" in e.lines()
+
+    def test_zero_s_raises(self) -> None:
+        with pytest.raises(ValueError, match="s must be > 0"):
+            LadrunoArcLength(s=0.0, alpha=0.5)
+
+    def test_partial_adapt_triple_raises(self) -> None:
+        with pytest.raises(ValueError, match="-adapt triple"):
+            LadrunoArcLength(s=1.0, alpha=0.5, jd=4)
+
+    def test_adapt_ell_order_raises(self) -> None:
+        with pytest.raises(ValueError, match="ell_min must be <= ell_max"):
+            LadrunoArcLength(
+                s=1.0, alpha=0.5, jd=4, ell_min=10.0, ell_max=1.0,
+            )
+
+    def test_stabilize_knob_without_stabilize_raises(self) -> None:
+        with pytest.raises(ValueError, match="require stabilize=True"):
+            LadrunoArcLength(s=1.0, alpha=0.5, mass="unity")
+        with pytest.raises(ValueError, match="require stabilize=True"):
+            LadrunoArcLength(s=1.0, alpha=0.5, adapt_stab=True)
+
+    def test_mass_scale_without_lumped_raises(self) -> None:
+        with pytest.raises(ValueError, match="mass_scale only applies"):
+            LadrunoArcLength(
+                s=1.0, alpha=0.5, stabilize=True, mass="unity", mass_scale=2.0,
+            )
+
+    def test_dependencies_empty(self) -> None:
+        assert LadrunoArcLength(s=1.0, alpha=0.5).dependencies() == ()
+
+
+class TestLadrunoDynamicRelaxation:
+    def test_emit_minimal_no_args(self) -> None:
+        e = RecordingEmitter()
+        LadrunoDynamicRelaxation()._emit(e, tag=1)
+        assert e.calls == [
+            ("integrator", ("LadrunoDynamicRelaxation",), {})
+        ]
+
+    def test_emit_full(self) -> None:
+        e = RecordingEmitter()
+        LadrunoDynamicRelaxation(
+            mass="gershgorin", dt=0.5, recompute=50,
+            damping="kinetic", divergence=2.0, verbose=True,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoDynamicRelaxation",
+                    "-mass", "gershgorin", "-dt", 0.5, "-recompute", 50,
+                    "-damping", "kinetic", "-divergence", 2.0, "-verbose",
+                ),
+                {},
+            )
+        ]
+
+    def test_emit_lumped_renders_explicit_scale(self) -> None:
+        e = RecordingEmitter()
+        LadrunoDynamicRelaxation(mass="lumped")._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                ("LadrunoDynamicRelaxation", "-mass", "lumped", 1.0),
+                {},
+            )
+        ]
+
+    def test_emit_viscous_renders_explicit_zeta(self) -> None:
+        e = RecordingEmitter()
+        LadrunoDynamicRelaxation(
+            damping="viscous", no_auto_refresh=True, interp=True,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoDynamicRelaxation",
+                    "-damping", "viscous", 1.0, "-noAutoRefresh", "-interp",
+                ),
+                {},
+            )
+        ]
+
+    def test_recompute_below_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="recompute must be >= 1"):
+            LadrunoDynamicRelaxation(recompute=0)
+
+    def test_zeta_without_viscous_raises(self) -> None:
+        with pytest.raises(ValueError, match="zeta only applies"):
+            LadrunoDynamicRelaxation(damping="kinetic", zeta=0.5)
+
+    def test_mass_scale_without_lumped_raises(self) -> None:
+        with pytest.raises(ValueError, match="mass_scale only applies"):
+            LadrunoDynamicRelaxation(mass="gershgorin", mass_scale=2.0)
+
+    def test_dependencies_empty(self) -> None:
+        assert LadrunoDynamicRelaxation().dependencies() == ()
+
+
+class TestLadrunoIndirectControl:
+    def test_emit_single_dof(self) -> None:
+        e = RecordingEmitter()
+        LadrunoIndirectControl(
+            incr=0.01, controls=((10, 1, 1.0),),
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                ("LadrunoIndirectControl", 0.01, "-dof", 10, 1, 1.0),
+                {},
+            )
+        ]
+
+    def test_emit_cmod_two_dofs_with_iter(self) -> None:
+        e = RecordingEmitter()
+        LadrunoIndirectControl(
+            incr=0.01,
+            controls=((5, 1, 1.0), (7, 1, -1.0)),
+            num_iter=4, dmin=0.001, dmax=0.1,
+        )._emit(e, tag=1)
+        assert e.calls == [
+            (
+                "integrator",
+                (
+                    "LadrunoIndirectControl", 0.01,
+                    "-dof", 5, 1, 1.0, "-dof", 7, 1, -1.0,
+                    "-iter", 4, 0.001, 0.1,
+                ),
+                {},
+            )
+        ]
+
+    def test_tcl_line(self) -> None:
+        e = TclEmitter()
+        LadrunoIndirectControl(
+            incr=0.01, controls=((10, 2, 1.0),),
+        )._emit(e, tag=1)
+        assert "integrator LadrunoIndirectControl 0.01 -dof 10 2 1.0" in e.lines()
+
+    def test_empty_controls_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one"):
+            LadrunoIndirectControl(incr=0.01, controls=())
+
+    def test_dof_below_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="dof must be >= 1"):
+            LadrunoIndirectControl(incr=0.01, controls=((10, 0, 1.0),))
+
+    def test_bracket_requires_num_iter(self) -> None:
+        with pytest.raises(ValueError, match="dmin/dmax require num_iter"):
+            LadrunoIndirectControl(
+                incr=0.01, controls=((10, 1, 1.0),), dmin=0.0, dmax=0.1,
+            )
+
+    def test_half_bracket_raises(self) -> None:
+        with pytest.raises(ValueError, match="both dmin and dmax"):
+            LadrunoIndirectControl(
+                incr=0.01, controls=((10, 1, 1.0),), num_iter=4, dmin=0.0,
+            )
+
+    def test_dependencies_empty(self) -> None:
+        i = LadrunoIndirectControl(incr=0.01, controls=((10, 1, 1.0),))
+        assert i.dependencies() == ()
+
+
 class TestIntegratorNamespace:
     def test_load_control(self) -> None:
         ops = _make_ops()
@@ -1183,6 +1428,31 @@ class TestIntegratorNamespace:
         i = ops.integrator.CentralDifferenceLadruno(cfl=True, verbose=True)
         assert isinstance(i, CentralDifferenceLadruno)
         assert i.verbose is True
+
+    def test_ladruno_arc_length(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.LadrunoArcLength(
+            s=1.0, alpha=0.5, stabilize=True, mass="unity",
+        )
+        assert isinstance(i, LadrunoArcLength)
+        assert i.stabilize is True
+        assert i.mass == "unity"
+
+    def test_ladruno_dynamic_relaxation(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.LadrunoDynamicRelaxation(
+            mass="gershgorin", damping="kinetic",
+        )
+        assert isinstance(i, LadrunoDynamicRelaxation)
+        assert i.mass == "gershgorin"
+
+    def test_ladruno_indirect_control(self) -> None:
+        ops = _make_ops()
+        i = ops.integrator.LadrunoIndirectControl(
+            incr=0.01, controls=[(5, 1, 1.0), (7, 1, -1.0)],
+        )
+        assert isinstance(i, LadrunoIndirectControl)
+        assert i.controls == ((5, 1, 1.0), (7, 1, -1.0))
 
 
 # ===========================================================================
