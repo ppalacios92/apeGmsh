@@ -173,6 +173,9 @@ class Emitter(Protocol):
         rotational: bool = False,
         pressure: bool = False,
     ) -> None: ...
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None: ...
     def mp_constraint_comment(self, name: str) -> None: ...
 
     # -- Constitutive ----------------------------------------------------

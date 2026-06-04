@@ -43,7 +43,8 @@ _PROFILER_FORK_REQUIRED = (
 #: class-tag band). Emitting their ``element …`` line works on any build;
 #: the fork is required only to *run* the deck in-process — gated in
 #: :meth:`LiveOpsEmitter.element` below.
-_FORK_ONLY_ELEMENTS = frozenset({"BezierTri6", "BezierTet10"})
+_FORK_ONLY_ELEMENTS = frozenset(
+    {"BezierTri6", "BezierTet10", "LadrunoEmbeddedRebar"})
 
 
 def _fork_element_required(ele_type: str) -> str:
@@ -193,6 +194,16 @@ class LiveOpsEmitter:
             "ASDEmbeddedNodeElement", ele_tag, cnode,
             *master_nodes, *flag_args,
         )
+
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # LadrunoEmbeddedRebar coupling (g.reinforce, ADR 20). Routed
+        # through self.element so the fork-only gate (it is in
+        # _FORK_ONLY_ELEMENTS) raises a clear "requires the Ladruno fork
+        # build" error on a stock OpenSees instead of a cryptic parser
+        # failure.
+        self.element("LadrunoEmbeddedRebar", ele_tag, *args)
 
     def mp_constraint_comment(self, name: str) -> None:
         # No-op — live execution can't carry comments. Argument exists

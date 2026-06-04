@@ -745,6 +745,7 @@ class ElementComposite:
         partitions: dict[int, dict] | None = None,
         part_elem_map: dict | None = None,
         module_label: dict[int, ndarray] | None = None,
+        reinforce_ties=None,
     ) -> None:
         self._groups: dict[int, ElementGroup] = dict(groups)
         self.physical = physical
@@ -752,6 +753,15 @@ class ElementComposite:
 
         self.constraints = SurfaceConstraintSet(constraints)
         self.loads       = ElementLoadSet(loads)
+
+        # Embedded-reinforcement ties (g.reinforce, ADR 20 / R2b). A plain
+        # list of ReinforceTieRecord — one LadrunoEmbeddedRebar coupling
+        # per rebar node. Runtime-only: the bridge build step consumes it
+        # (opensees._internal.build.emit_reinforce_ties); native H5
+        # round-trip of the ties is deferred (R2), so it is NOT persisted
+        # by FEMData.to_h5 and a model without reinforcement keeps a
+        # byte-identical snapshot.
+        self.reinforce_ties: list = list(reinforce_ties or [])
 
         self._partitions: dict[int, dict] = partitions or {}
 
@@ -1778,6 +1788,22 @@ class FEMData:
         Use ``apeSees(fem).h5(path)`` instead to get a fully enriched
         file (neutral zone + ``/opensees/...``).
         """
+        # g.reinforce (ADR 20 / R2b): LadrunoEmbeddedRebar ties do not yet
+        # round-trip through the neutral model.h5 (deferred, R2). Warn
+        # rather than silently drop them — a reinforced model written here
+        # and reloaded would lose its reinforcement.
+        ties = getattr(self.elements, "reinforce_ties", None)
+        if ties:
+            import warnings as _warnings
+            _warnings.warn(
+                f"FEMData.to_h5: {len(ties)} g.reinforce LadrunoEmbeddedRebar "
+                f"tie(s) are not persisted to the neutral model.h5 — native "
+                f"H5 round-trip of embedded reinforcement is deferred (ADR 20 "
+                f"/ R2). The reloaded model will be missing its reinforcement. "
+                f"Emit directly via apeSees(fem) in the same session for a "
+                f"complete model.",
+                UserWarning, stacklevel=2,
+            )
         from ._femdata_h5_io import write_fem_h5
         write_fem_h5(
             self, path,

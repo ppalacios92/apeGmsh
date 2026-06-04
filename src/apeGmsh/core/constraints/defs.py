@@ -26,6 +26,7 @@ from apeGmsh._kernel.defs.constraints import (  # noqa: F401
     NodeToSurfaceDef,
     NodeToSurfaceSpringDef,
     PenaltyDef,
+    ReinforceDef,
     RigidBodyDef,
     RigidDiaphragmDef,
     RigidLinkDef,

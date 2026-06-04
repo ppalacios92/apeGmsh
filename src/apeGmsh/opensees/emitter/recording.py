@@ -75,6 +75,11 @@ class RecordingEmitter:
             },
         ))
 
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        self.calls.append(("embedded_rebar", (ele_tag, *args), {}))
+
     def mp_constraint_comment(self, name: str) -> None:
         self.calls.append(("mp_constraint_comment", (name,), {}))
 

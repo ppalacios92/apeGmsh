@@ -102,6 +102,7 @@ __all__ = [
     "resolve_initial_stress_elements",
     "emit_mp_constraints",
     "emit_mp_constraints_partitioned",
+    "emit_reinforce_ties",
     "emit_stage_mp_constraints",
     "emit_stage_mp_constraints_partitioned",
     "emit_pattern_spec",
@@ -2318,6 +2319,78 @@ def emit_mp_constraints(
     # -------------------------------------------------------------------
     if surface_constraints is not None:
         _emit_surface_couplings(emitter, surface_constraints, tags)
+
+
+def emit_reinforce_ties(
+    emitter: "Emitter", fem: "FEMData", tags: TagAllocator,
+    *, name_to_tag: "dict[str, int]",
+) -> None:
+    """Emit one ``element LadrunoEmbeddedRebar`` per resolved reinforcement
+    tie (``g.reinforce``, ADR 20 / R2b).
+
+    Consumes ``fem.elements.reinforce_ties`` —
+    :class:`~apeGmsh._kernel.records._constraints.ReinforceTieRecord` rows
+    produced by :class:`ReinforcementsComposite` at FEM-build time. Each
+    record carries the rebar node, the host node list + shape-function
+    weights (the ``-shape`` host-element-tag-free path), the bar axis
+    ``-dir``, and the axial law (``-perfect kAxial`` or ``-bond matName``
+    + ``-bondScale``). The positional argument list is assembled by the
+    R0 ``embedded_rebar_args`` grammar builder (the single source of truth
+    for the flag order), and a fresh element tag is drawn from the
+    canonical :class:`TagAllocator` so rebar couplings share the global
+    element-tag namespace.
+
+    Bond name → tag resolution (Option B): a ``bond`` record holds the
+    **name** of a ``LadrunoBondSlip`` material declared separately on the
+    bridge. ``name_to_tag`` (the bridge's resolved name-alias map) is
+    consulted here; a missing name fails loud — a tie that references an
+    unregistered bond material must not silently emit a dangling tag.
+
+    No-op when the FEM snapshot exposes no ``elements.reinforce_ties`` —
+    reinforcement is purely additive on top of any other bridge state.
+    """
+    from ..element.embedded_rebar import embedded_rebar_args
+
+    elements = getattr(fem, "elements", None)
+    ties = (
+        getattr(elements, "reinforce_ties", None)
+        if elements is not None else None
+    )
+    if not ties:
+        return
+
+    for rec in ties:
+        _emit_name(emitter, rec.name)
+
+        if rec.bond is not None:
+            bond_tag = name_to_tag.get(rec.bond)
+            if bond_tag is None:
+                known = ", ".join(sorted(name_to_tag)) or "<none>"
+                raise ValueError(
+                    f"reinforce: tie at rebar node {rec.rebar_node} "
+                    f"references bond material {rec.bond!r}, but no "
+                    f"primitive with that name is registered on the "
+                    f"bridge. Declare it (e.g. "
+                    f"ops.uniaxialMaterial.LadrunoBondSlip(..., "
+                    f"name={rec.bond!r})). Known names: {known}."
+                )
+        else:
+            bond_tag = None
+
+        args = embedded_rebar_args(
+            rebar_node=int(rec.rebar_node),
+            direction=[float(d) for d in rec.direction],
+            host_nodes=[int(h) for h in rec.host_nodes],
+            shape=[float(w) for w in rec.weights],
+            perfect=rec.perfect,
+            bond=bond_tag,
+            bond_scale=rec.bond_scale,
+            kt=rec.kt,
+            kt_alpha=rec.kt_alpha,
+            enforce=rec.enforce,
+        )
+        ele_tag = tags.allocate("element")
+        emitter.embedded_rebar(ele_tag, *args)
 
 
 # ---------------------------------------------------------------------------

@@ -109,7 +109,14 @@ from .._internal.typed_records import (
 )
 
 
-__all__ = ["H5Emitter", "SCHEMA_VERSION"]
+__all__ = ["H5Emitter", "SCHEMA_VERSION", "H5ReinforceDeviationWarning"]
+
+
+class H5ReinforceDeviationWarning(UserWarning):
+    """A ``g.reinforce`` LadrunoEmbeddedRebar tie was dropped from the
+    OpenSees H5 deck — native H5 round-trip of the fork coupling is
+    deferred (ADR 20 / R2). Emit to Tcl / openseespy for the complete
+    model with reinforcement."""
 
 
 #: Schema version string emitted in ``/meta/schema_version``. Bump
@@ -523,6 +530,13 @@ class H5Emitter:
         # constraint emit (INV-2).
         self._pending_mp_name: str = ""
 
+        # g.reinforce (ADR 20 / R2b): LadrunoEmbeddedRebar ties are NOT
+        # persisted to the OpenSees H5 deck — native round-trip of the
+        # fork coupling is deferred (R2). The emitter no-ops each tie and
+        # counts it; the first skipped tie raises a deviation warning so a
+        # round-tripped H5 deck is not silently missing its reinforcement.
+        self._skipped_reinforce_ties: int = 0
+
         # Constitutive.
         self._uniaxial: list[_MaterialRecord] = []
         self._nd: list[_MaterialRecord] = []
@@ -705,6 +719,29 @@ class H5Emitter:
                 name=name,
             )
         )
+
+    def embedded_rebar(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # g.reinforce (ADR 20 / R2b): native H5 persistence of the
+        # LadrunoEmbeddedRebar coupling is deferred (R2). No-op the tie,
+        # consume any latched mp comment so it can't leak onto the next
+        # real MP record, and raise a one-time deviation warning so the
+        # H5 deck is not silently missing its reinforcement.
+        import warnings as _warnings
+        del ele_tag, args
+        self._consume_pending_mp_name()
+        self._skipped_reinforce_ties += 1
+        if self._skipped_reinforce_ties == 1:
+            _warnings.warn(
+                "H5 emitter: LadrunoEmbeddedRebar reinforcement ties are "
+                "not persisted to the OpenSees model.h5 — native H5 "
+                "round-trip of g.reinforce ties is deferred (ADR 20 / R2). "
+                "The H5 deck will be missing its embedded reinforcement; "
+                "emit to Tcl / openseespy (or run live) for a complete "
+                "model with reinforcement.",
+                H5ReinforceDeviationWarning, stacklevel=2,
+            )
 
     def mp_constraint_comment(self, name: str) -> None:
         # Latch the declaration label; the next MP-constraint call will
