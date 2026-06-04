@@ -68,6 +68,9 @@ from apeGmsh.opensees.analysis.integrator import (
     ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
+    LadrunoArcLength,
+    LadrunoDynamicRelaxation,
+    LadrunoIndirectControl,
     LoadControl,
     Newmark,
 )
@@ -166,6 +169,9 @@ ALL_INTEGRATORS: list[type[Integrator]] = [
     ExplicitBathe,
     ExplicitBatheLNVD,
     CentralDifferenceLadruno,
+    LadrunoArcLength,
+    LadrunoDynamicRelaxation,
+    LadrunoIndirectControl,
 ]
 
 ALL_ANALYSES: list[type[Analysis]] = [
@@ -242,6 +248,9 @@ _MINIMAL_PARAMS: dict[type[Primitive], dict[str, Any]] = {
     ExplicitBathe: {"p": 0.54},
     ExplicitBatheLNVD: {"p": 0.54, "alpha": 0.8},
     CentralDifferenceLadruno: {},
+    LadrunoArcLength: {"s": 1.0, "alpha": 0.5},
+    LadrunoDynamicRelaxation: {},
+    LadrunoIndirectControl: {"incr": 0.01, "controls": ((10, 1, 1.0),)},
     # analysis
     Static: {},
     Transient: {},

@@ -21,7 +21,7 @@ Each method registers its primitive with the bridge via
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Sequence
 
 from ...analysis.algorithm import (
     BFGS,
@@ -48,13 +48,18 @@ from ...analysis.integrator import (
     ArcLength,
     CentralDifference,
     CentralDifferenceLadruno,
+    DampingMode,
     DisplacementControl,
     ExplicitBathe,
     ExplicitBatheLNVD,
     ExplicitDifference,
     HHT,
+    LadrunoArcLength,
+    LadrunoDynamicRelaxation,
+    LadrunoIndirectControl,
     LoadControl,
     Lump,
+    MassMode,
     Newmark,
 )
 from ...analysis.numberer import AMD, RCM, ParallelPlain, ParallelRCM
@@ -596,6 +601,113 @@ class _IntegratorNS(_BridgeNamespace):
                 lump=lump,
                 verbose=verbose,
                 divergence=divergence,
+            )
+        )
+
+    def LadrunoArcLength(
+        self,
+        *,
+        s: float,
+        alpha: float,
+        jd: int | None = None,
+        ell_min: float | None = None,
+        ell_max: float | None = None,
+        p_exp: float | None = None,
+        stabilize: bool = False,
+        f_target: float | None = None,
+        adapt_stab: bool = False,
+        c_visc: float | None = None,
+        mass: MassMode | None = None,
+        mass_scale: float | None = None,
+    ) -> LadrunoArcLength:
+        """``integrator LadrunoArcLength s alpha [flags...]`` — **fork-only**.
+
+        Adaptive / viscous-stabilized arc-length (superset of upstream
+        ``ArcLength``; flag-free it is bit-identical). Supply the
+        ``jd``/``ell_min``/``ell_max`` triple for Ramm adaptive radius, or
+        ``stabilize=True`` (+ ``f_target``/``c_visc``/``mass``/
+        ``adapt_stab``) for the viscous-regularized limit-point path. Fork
+        required only to *run*. See
+        :class:`apeGmsh.opensees.analysis.integrator.LadrunoArcLength`.
+        """
+        return self._bridge._register(
+            LadrunoArcLength(
+                s=s,
+                alpha=alpha,
+                jd=jd,
+                ell_min=ell_min,
+                ell_max=ell_max,
+                p_exp=p_exp,
+                stabilize=stabilize,
+                f_target=f_target,
+                adapt_stab=adapt_stab,
+                c_visc=c_visc,
+                mass=mass,
+                mass_scale=mass_scale,
+            )
+        )
+
+    def LadrunoDynamicRelaxation(
+        self,
+        *,
+        mass: MassMode | None = None,
+        mass_scale: float | None = None,
+        dt: float | None = None,
+        recompute: int | None = None,
+        damping: DampingMode | None = None,
+        zeta: float | None = None,
+        no_auto_refresh: bool = False,
+        interp: bool = False,
+        divergence: float | None = None,
+        verbose: bool = False,
+    ) -> LadrunoDynamicRelaxation:
+        """``integrator LadrunoDynamicRelaxation [flags...]`` — **fork-only**.
+
+        Matrix-free dynamic relaxation to static equilibrium (no tangent
+        factorization). Drive with ``ops.system.Diagonal()`` +
+        ``ops.algorithm.Linear()`` + ``ops.analysis.Transient()``. Fork
+        required only to *run*. See
+        :class:`apeGmsh.opensees.analysis.integrator.LadrunoDynamicRelaxation`.
+        """
+        return self._bridge._register(
+            LadrunoDynamicRelaxation(
+                mass=mass,
+                mass_scale=mass_scale,
+                dt=dt,
+                recompute=recompute,
+                damping=damping,
+                zeta=zeta,
+                no_auto_refresh=no_auto_refresh,
+                interp=interp,
+                divergence=divergence,
+                verbose=verbose,
+            )
+        )
+
+    def LadrunoIndirectControl(
+        self,
+        *,
+        incr: float,
+        controls: Sequence[tuple[int, int, float]],
+        num_iter: int | None = None,
+        dmin: float | None = None,
+        dmax: float | None = None,
+    ) -> LadrunoIndirectControl:
+        """``integrator LadrunoIndirectControl incr -dof ...`` — **fork-only**.
+
+        Weighted multi-DOF indirect displacement control (monotone
+        ``c^T U`` through snap-back). ``controls`` is a non-empty sequence
+        of ``(node, dof, coef)`` entries (1-based ``dof``). Fork required
+        only to *run*. See
+        :class:`apeGmsh.opensees.analysis.integrator.LadrunoIndirectControl`.
+        """
+        return self._bridge._register(
+            LadrunoIndirectControl(
+                incr=incr,
+                controls=tuple(controls),
+                num_iter=num_iter,
+                dmin=dmin,
+                dmax=dmax,
             )
         )
 
