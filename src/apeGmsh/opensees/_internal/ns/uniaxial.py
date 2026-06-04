@@ -18,6 +18,7 @@ from ...material.uniaxial import (
     ElasticMaterial,
     Hysteretic,
     InitialStress,
+    LadrunoBondSlip,
     Maxwell,
     Steel01,
     Steel02,
@@ -328,5 +329,32 @@ class _UniaxialMaterialNS(_BridgeNamespace):
         )
         return self._bridge._register(
             InitialStress(base_material=base_material, sigma_init=sigma_init),
+            name=name,
+        )
+
+    def LadrunoBondSlip(
+        self, *,
+        tau_max: float,
+        s1:      float,
+        s2:      float,
+        s3:      float,
+        tau_f:   float,
+        alpha:   float,
+        Gf:      float | None = None,
+        s0:      float | None = None,
+        name: str | None = None,
+    ) -> LadrunoBondSlip:
+        r"""``uniaxialMaterial LadrunoBondSlip`` — 1D bond-slip
+        :math:`\tau`–s law (Ladruno fork, ``MAT_TAG`` 33002), the axial
+        slot of :class:`LadrunoEmbeddedRebar`. See :class:`LadrunoBondSlip`.
+
+        Fork-only: emits on any build, errors at ``ops.run()`` on stock
+        ``openseespy``.
+        """
+        return self._bridge._register(
+            LadrunoBondSlip(
+                tau_max=tau_max, s1=s1, s2=s2, s3=s3,
+                tau_f=tau_f, alpha=alpha, Gf=Gf, s0=s0,
+            ),
             name=name,
         )

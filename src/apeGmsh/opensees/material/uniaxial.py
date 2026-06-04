@@ -39,6 +39,7 @@ __all__ = [
     "Maxwell",
     "InitialStress",
     "ASDConcrete1D",
+    "LadrunoBondSlip",
 ]
 
 
@@ -1137,6 +1138,116 @@ class ASDConcrete1D(UniaxialMaterial):
         if self.auto_regularize:
             args += ["-autoRegularization", self.lch_ref]
         emitter.uniaxialMaterial("ASDConcrete1D", tag, *args)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# Ladruno fork — bond-slip (the axial law of LadrunoEmbeddedRebar)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LadrunoBondSlip(UniaxialMaterial):
+    r"""``uniaxialMaterial LadrunoBondSlip`` — 1D bond-slip :math:`\tau`–s law.
+
+    OpenSees command (Ladruno fork, ``MAT_TAG`` **33002**)::
+
+        uniaxialMaterial LadrunoBondSlip tag tau_max s1 s2 s3 tau_f alpha \
+            [-Gf Gf] [-s0 s0]
+
+    The CEB-FIP / Model Code 2010 monotonic backbone used as the axial
+    slot of :class:`LadrunoEmbeddedRebar`: an optional initial linear
+    segment for ``s < s0`` (kills the power-law ``dtau/ds -> inf``
+    singularity at the origin), an ascending power law
+    ``tau_max·(s/s1)^alpha`` up to ``s1``, a plateau to ``s2``, linear
+    softening to the residual ``tau_f`` at ``s3``, then residual ``tau_f``.
+    ``-Gf`` regularizes the post-peak softening by a bond fracture energy
+    (mirrors ``ASDConcrete1D``'s ``lch_ref/lch`` scaling) so the response
+    stays mesh-objective.
+
+    This is a **stress** law (:math:`\tau` vs slip): the embedded-rebar
+    element converts it to a nodal force with
+    ``F = tau · bondScale`` where ``bondScale = perimeter · L_trib =
+    pi·d_b · L_trib`` (the ``g.reinforce`` generator computes this).
+
+    .. warning::
+       Past ``tau_max`` the backbone has a **negative tangent** — load
+       control diverges. Use ``DisplacementControl`` / ``ArcLength`` /
+       IMPLEX on the softening branch (ADR 20 D4.2).
+
+    .. note::
+       Fork-only. Emission produces a deck line on any build; the
+       material is unavailable on stock ``openseespy`` and bites only at
+       ``ops.run()`` (a "requires the Ladruno fork build" error).
+
+    Parameters
+    ----------
+    tau_max
+        Peak bond stress (must be > 0).
+    s1, s2, s3
+        Slip at peak, end-of-plateau, and residual onset. Must satisfy
+        ``0 < s1 <= s2 <= s3``.
+    tau_f
+        Residual bond stress (``0 <= tau_f <= tau_max``).
+    alpha
+        Ascending-branch power-law exponent (``0 < alpha <= 1``; MC2010
+        well-confined value ``0.4``).
+    Gf
+        Optional bond fracture energy for softening regularization
+        (``-Gf``; must be > 0 if supplied).
+    s0
+        Optional initial-linear-segment slip (``-s0``; must satisfy
+        ``0 < s0 < s1``). Omitted -> the fork default (``~0.1·s1``).
+    """
+
+    tau_max: float
+    s1: float
+    s2: float
+    s3: float
+    tau_f: float
+    alpha: float
+    Gf: float | None = None
+    s0: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.tau_max <= 0:
+            raise ValueError(
+                f"LadrunoBondSlip: tau_max must be > 0, got {self.tau_max!r}"
+            )
+        if not (0.0 < self.s1 <= self.s2 <= self.s3):
+            raise ValueError(
+                "LadrunoBondSlip: slips must satisfy 0 < s1 <= s2 <= s3, "
+                f"got s1={self.s1!r}, s2={self.s2!r}, s3={self.s3!r}"
+            )
+        if not (0.0 <= self.tau_f <= self.tau_max):
+            raise ValueError(
+                "LadrunoBondSlip: tau_f must be in [0, tau_max], got "
+                f"tau_f={self.tau_f!r}, tau_max={self.tau_max!r}"
+            )
+        if not (0.0 < self.alpha <= 1.0):
+            raise ValueError(
+                f"LadrunoBondSlip: alpha must be in (0, 1], got {self.alpha!r}"
+            )
+        if self.Gf is not None and self.Gf <= 0:
+            raise ValueError(
+                f"LadrunoBondSlip: Gf must be > 0, got {self.Gf!r}"
+            )
+        if self.s0 is not None and not (0.0 < self.s0 < self.s1):
+            raise ValueError(
+                "LadrunoBondSlip: s0 must satisfy 0 < s0 < s1, got "
+                f"s0={self.s0!r}, s1={self.s1!r}"
+            )
+
+    def _emit(self, emitter: Emitter, tag: int) -> None:
+        args: list[float | str] = [
+            self.tau_max, self.s1, self.s2, self.s3, self.tau_f, self.alpha,
+        ]
+        if self.Gf is not None:
+            args += ["-Gf", self.Gf]
+        if self.s0 is not None:
+            args += ["-s0", self.s0]
+        emitter.uniaxialMaterial("LadrunoBondSlip", tag, *args)
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()

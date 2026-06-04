@@ -26,6 +26,7 @@ from apeGmsh.opensees.material.uniaxial import (
     ElasticMaterial,
     Hysteretic,
     InitialStress,
+    LadrunoBondSlip,
     Maxwell,
     Steel01,
     Steel02,
@@ -756,3 +757,76 @@ class TestMaxwell:
     def test_validation_rejects_bad_length(self) -> None:
         with pytest.raises(ValueError, match="length must be > 0"):
             Maxwell(K=1.0, C=1.0, alpha=0.5, length=0.0)
+
+
+# ---------------------------------------------------------------------------
+# LadrunoBondSlip (Ladruno fork — bond-slip axial law, MAT 33002)
+# ---------------------------------------------------------------------------
+
+class TestLadrunoBondSlip:
+    def _valid(self, **over: float) -> LadrunoBondSlip:
+        kw: dict[str, float] = dict(
+            tau_max=12.0, s1=1.0, s2=3.0, s3=10.0, tau_f=2.0, alpha=0.4,
+        )
+        kw.update(over)
+        return LadrunoBondSlip(**kw)  # type: ignore[arg-type]
+
+    def test_construction(self) -> None:
+        m = self._valid()
+        assert m.tau_max == 12.0
+        assert (m.s1, m.s2, m.s3) == (1.0, 3.0, 10.0)
+        assert m.tau_f == 2.0 and m.alpha == 0.4
+        assert m.Gf is None and m.s0 is None
+
+    def test_emit_bare_backbone(self) -> None:
+        rec = RecordingEmitter()
+        self._valid()._emit(rec, tag=7)
+        assert rec.calls == [
+            ("uniaxialMaterial",
+             ("LadrunoBondSlip", 7, 12.0, 1.0, 3.0, 10.0, 2.0, 0.4), {}),
+        ]
+
+    def test_emit_with_Gf_and_s0(self) -> None:
+        rec = RecordingEmitter()
+        self._valid(Gf=0.5, s0=0.1)._emit(rec, tag=3)
+        assert rec.calls[0][1] == (
+            "LadrunoBondSlip", 3, 12.0, 1.0, 3.0, 10.0, 2.0, 0.4,
+            "-Gf", 0.5, "-s0", 0.1,
+        )
+
+    def test_emit_with_only_Gf(self) -> None:
+        rec = RecordingEmitter()
+        self._valid(Gf=0.5)._emit(rec, tag=1)
+        assert rec.calls[0][1] == (
+            "LadrunoBondSlip", 1, 12.0, 1.0, 3.0, 10.0, 2.0, 0.4, "-Gf", 0.5,
+        )
+
+    def test_dependencies_is_empty(self) -> None:
+        assert self._valid().dependencies() == ()
+
+    def test_repr_includes_type_token(self) -> None:
+        assert "LadrunoBondSlip" in repr(self._valid())
+
+    def test_validation_rejects_bad_tau_max(self) -> None:
+        with pytest.raises(ValueError, match="tau_max must be > 0"):
+            self._valid(tau_max=0.0)
+
+    def test_validation_rejects_unordered_slips(self) -> None:
+        with pytest.raises(ValueError, match="0 < s1 <= s2 <= s3"):
+            self._valid(s2=0.5)  # s2 < s1
+
+    def test_validation_rejects_residual_over_peak(self) -> None:
+        with pytest.raises(ValueError, match=r"tau_f must be in \[0, tau_max\]"):
+            self._valid(tau_f=20.0)
+
+    def test_validation_rejects_bad_alpha(self) -> None:
+        with pytest.raises(ValueError, match=r"alpha must be in \(0, 1\]"):
+            self._valid(alpha=1.5)
+
+    def test_validation_rejects_bad_Gf(self) -> None:
+        with pytest.raises(ValueError, match="Gf must be > 0"):
+            self._valid(Gf=0.0)
+
+    def test_validation_rejects_s0_outside_range(self) -> None:
+        with pytest.raises(ValueError, match="s0 must satisfy 0 < s0 < s1"):
+            self._valid(s0=1.0)  # s0 == s1

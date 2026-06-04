@@ -38,6 +38,7 @@ from .beam_column import (
     elasticBeamColumn,
     forceBeamColumn,
 )
+from .embedded_rebar import embedded_rebar_args
 from .shell import (
     ASDShellQ4,
     ASDShellT3,
@@ -99,4 +100,6 @@ __all__ = [
     "BezierTri6",
     "BezierTet10",
     "BezierBBarPlaneStressWarning",
+    # embedded reinforcement (Ladruno fork — resolver-produced coupling)
+    "embedded_rebar_args",
 ]
