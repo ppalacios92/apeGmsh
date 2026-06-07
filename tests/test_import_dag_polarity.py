@@ -105,6 +105,11 @@ BASELINE = {
     ("core", "_kernel", "core/Labels.py"),
     ("core", "_kernel", "core/LoadsComposite.py"),
     ("core", "_kernel", "core/MassesComposite.py"),
+    # g.reinforce composite (reinforce PRs #552/#553) — same downward
+    # core→_kernel leaf edge as its loads/masses siblings (eager import
+    # of its defs/records at module load). Baseline entry omitted by those
+    # PRs; added here so the gate reflects the real (intended) graph.
+    ("core", "_kernel", "core/ReinforcementsComposite.py"),
     ("core", "_kernel", "core/_selection.py"),
     ("core", "_kernel", "core/constraints/defs.py"),
     ("core", "_kernel", "core/loads/defs.py"),
