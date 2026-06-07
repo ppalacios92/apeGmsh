@@ -278,10 +278,23 @@ class OpenSeesModel:
             fixes, masses = cls._load_bcs(model)
             analysis_attrs, analyze_call = cls._load_analysis(model)
             # ADR 0048: capture the effective per-node ndf map persisted
-            # at /opensees/nodes_ndf. This is the sole read-side ndf source
-            # for re-emit (inference cannot run from ElementRecords). None
-            # for older files → empty map → re-emit falls to the envelope.
+            # at /opensees/nodes_ndf. This is the read-side ndf source for
+            # re-emit (inference cannot run from rehydrated ElementRecords).
             nodes_ndf = model.nodes_ndf() or {}
+            if not nodes_ndf:
+                # Pre-2.14.0 archive: /opensees/nodes_ndf is absent. Recover
+                # any per-node ndf the legacy neutral broker zone
+                # (/nodes/ndf) still carries, so a mixed-ndf model written
+                # before this schema re-emits correctly instead of silently
+                # flattening every node to the envelope. (This is the
+                # neutral-zone fallback h5_reader.nodes_ndf() documents.)
+                _bnodes = getattr(fem, "nodes", None)
+                if _bnodes is not None:
+                    for _nid in getattr(_bnodes, "ids", ()):
+                        try:
+                            nodes_ndf[int(_nid)] = int(_bnodes.ndf_for(int(_nid)))
+                        except LookupError:
+                            pass
 
         # ADR 0021 lineage chain.  Read the stamped ``/meta/lineage``
         # attrs and recompute them from the loaded zones; on mismatch,

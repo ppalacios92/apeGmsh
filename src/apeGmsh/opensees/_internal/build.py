@@ -94,6 +94,7 @@ __all__ = [
     "emit_element_spec_partitioned",
     "validate_node_ndf_element_compat",
     "infer_node_ndf",
+    "validate_adaptive_element_endpoints",
     "assert_ndm_compatible",
     "emit_initial_stress_addtoparameter",
     "emit_initial_stress_global",
@@ -317,9 +318,12 @@ def infer_node_ndf(
     Walks each element spec's physical group to its mesh nodes (via
     :func:`expand_pg_to_elements`), then applies
     :func:`_infer_ndf_from_incidence`. Returns ``{node_tag: ndf}`` for every
-    node touched by >= 1 declared element. Nodes touched by NO declared element
-    are absent — the clean break (ADR 0048) fails loud on them; user-declared
-    element-less nodes get their ndf on the bridge (ADR 0049).
+    node touched by >= 1 declared element. Nodes touched by NO declared
+    element — and nodes touched only by adaptive elements — are **absent**
+    from the map; in this pragmatic variant (ADR 0048 PR-1) they fall back
+    to the ``ops.model`` envelope at emit (the purist clean break's
+    fail-loud-on-orphan-mesh-node and ``ops.ndf`` decoupled channel are
+    deferred).
     """
     node_to_classes: dict[int, list[str]] = {}
     for spec in elements:
@@ -328,6 +332,55 @@ def infer_node_ndf(
             for raw in node_tags:
                 node_to_classes.setdefault(int(raw), []).append(etype)
     return _infer_ndf_from_incidence(node_to_classes, ndm)
+
+
+def validate_adaptive_element_endpoints(
+    fem: "FEMData",
+    elements: "Iterable[Element]",
+    ndm: int,
+    inferred: "dict[int, int]",
+    envelope_ndf: int,
+) -> None:
+    """Fail loud when an adaptive element's endpoints resolve to different ndf.
+
+    Adaptive elements (the zeroLength family, ``ndf_ok == {1..6}``) accept
+    any per-node ndf but OpenSees requires **both** ends of a
+    ``zeroLength`` / ``twoNodeLink`` / ``CoupledZeroLength`` to carry the
+    SAME ndf (``ZeroLength.cpp``: ``dofNd1 == dofNd2``; on mismatch
+    ``setDomain`` bails and the element is **silently absent** — analysis
+    proceeds with no spring).
+
+    Inference omits adaptive-only nodes (a spring-to-ground node touched by
+    no structural element falls to the ``ops.model`` envelope), so a spring
+    whose structural end infers a value != envelope would silently emit
+    mismatched ends. This guard catches that — and the symmetric case of a
+    spring straddling two structural regions of differing ndf — at build
+    time, naming the element and the fix.
+    """
+    from .._element_capabilities import element_class_ndf_ok
+
+    for spec in elements:
+        cls = type(spec).__name__
+        if element_class_ndf_ok(cls) != _ADAPTIVE_NDF_OK:
+            continue
+        for eid, node_tags in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
+            eff = {
+                int(n): inferred.get(int(n), int(envelope_ndf))
+                for n in node_tags
+            }
+            if len(set(eff.values())) > 1:
+                raise BridgeError(
+                    f"{cls} element {eid} connects nodes with differing "
+                    f"effective ndf {eff} — OpenSees requires equal ndf at "
+                    f"both ends of a zeroLength-family element (it is "
+                    f"silently dropped otherwise). Typically one end is an "
+                    f"element-less / ground node taking the ops.model "
+                    f"envelope ndf={int(envelope_ndf)} while the structural "
+                    f"end infers a different value. Fix: set the model "
+                    f"envelope to match the structural side, attach an "
+                    f"element to the ground node, or use separate coincident "
+                    f"nodes + g.constraints.equal_dof on the shared DOFs."
+                )
 
 
 def assert_ndm_compatible(class_names: "Iterable[str]", ndm: int) -> None:
@@ -3313,10 +3366,12 @@ def emit_mp_constraints_partitioned(
        constraints (nodes not in this rank's owner set, plus phantoms).
     3. Emit the foreign-node declarations FIRST (INV-2): regular
        foreign nodes via ``node(tag, *xyz[, -ndf K])`` — per-node ndf
-       sourced from the FEM broker via ``fem.nodes.ndf_for(tag)``
-       (S2 / ADR 0033); on ``LookupError`` (no declaration covering
-       the foreign node) the call falls back to ``foreign_node_ndf``
-       — the bridge envelope.  Phantoms via
+       taken from the **global inferred map** (ADR 0048,
+       :func:`infer_node_ndf`), falling back to ``foreign_node_ndf``
+       (the ``ops.model`` envelope) for nodes the map doesn't cover.
+       Because the inferred map is global + deterministic, a ghost node
+       resolves to the SAME ndf its owner rank emits — cross-rank
+       consistency without per-rank broker state.  Phantoms via
        ``node(tag, *xyz, ndf=6)``.
     4. Emit the constraints in the same order as the unpartitioned
        :func:`emit_mp_constraints` (phantom-node pre-step → rigidLink

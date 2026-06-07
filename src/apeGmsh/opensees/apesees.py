@@ -61,6 +61,7 @@ from ._internal.build import (
     topological_order,
     validate_node_ndf_element_compat,
     infer_node_ndf,
+    validate_adaptive_element_endpoints,
     assert_ndm_compatible,
 )
 from ._internal.build import _element_transf as _build_element_transf
@@ -780,6 +781,13 @@ class BuiltModel:
             [type(spec).__name__ for spec in elements], self.ndm,
         )
         inferred_ndf = infer_node_ndf(self.fem, elements, self.ndm)
+        # Fail loud if a zeroLength-family element's two ends would emit
+        # different ndf (e.g. an element-less ground node falling to the
+        # envelope while its structural partner infers a different value) —
+        # OpenSees silently drops such a spring.
+        validate_adaptive_element_endpoints(
+            self.fem, elements, self.ndm, inferred_ndf, self.ndf,
+        )
 
         # 4. Emit non-element / non-transform primitives in topo order.
         pre_element: list[Primitive] = []

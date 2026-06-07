@@ -233,7 +233,8 @@ def test_cross_rank_equalDOF_replicates_on_both_owner_ranks(tmp_path) -> None:
     )
 
     # INV-2: foreign-node decl precedes the equalDOF line on each rank.
-    # Rank 0 owns node 2 (native); node 4 is foreign and must carry -ndf.
+    # Rank 0 owns node 2 (native); node 4 is foreign. Both take the envelope
+    # ndf, so the -ndf token is elided (ADR 0048 inference + elide-on-equal).
     # Rank 1 owns node 4 (native); node 2 is foreign.
     def _tcl_node_decl_index(lines: list[str], tag: int) -> int:
         for i, ln in enumerate(lines):
@@ -563,7 +564,8 @@ def test_cross_rank_rigidDiaphragm_replicates_on_all_slave_owner_ranks(
     n7_r1 = _idx_line_startswith(r1, "node 7 ")
     rd_r1 = _idx_line_startswith(r1, "rigidDiaphragm ")
     assert n7_r1 != -1 and "-ndf" not in r1[n7_r1], (
-        f"rank 1: master 7 is foreign and must carry -ndf: {r1!r}"
+        f"rank 1: foreign master 7 takes the envelope ndf (=6), so its "
+        f"-ndf token is elided (ADR 0048 inference + elide-on-equal): {r1!r}"
     )
     n2_r1 = _idx_line_startswith(r1, "node 2 ")
     n6_r1 = _idx_line_startswith(r1, "node 6 ")

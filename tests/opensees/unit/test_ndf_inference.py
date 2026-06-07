@@ -12,6 +12,7 @@ from apeGmsh.opensees._internal.build import (
     _infer_ndf_from_incidence,
     assert_ndm_compatible,
     infer_node_ndf,
+    validate_adaptive_element_endpoints,
 )
 
 
@@ -149,3 +150,45 @@ def test_infer_node_ndf_walk_shared_incompatible_fails():
     elements = [_spec("stdBrick", "Solid"), _spec("elasticBeamColumn", "Frame")]
     with pytest.raises(BridgeError):
         infer_node_ndf(fem, elements, ndm=3)
+
+
+# ──────────────── adaptive-element endpoint guard (ADR 0048 review) ───────────
+
+def test_adaptive_endpoint_mismatch_fails_loud():
+    """A zeroLength whose structural end infers a value != envelope while
+    its ground end (element-less) falls to the envelope would emit
+    mismatched ndf and OpenSees silently drops the spring — fail loud."""
+    fem = _StubFem({"Spring": [[(9, (20, 21))]]})
+    elements = [_spec("ZeroLength", "Spring")]
+    # node 20 is structural (inferred 3 elsewhere); node 21 is element-less
+    # (absent → envelope). Envelope 6 → 20 emits 3, 21 emits 6 → mismatch.
+    with pytest.raises(BridgeError, match="differing effective ndf"):
+        validate_adaptive_element_endpoints(
+            fem, elements, ndm=3, inferred={20: 3}, envelope_ndf=6,
+        )
+
+
+def test_adaptive_endpoint_match_ok():
+    """Both ends resolve to the same effective ndf → no raise (the common
+    uniform-envelope spring-to-ground case)."""
+    fem = _StubFem({"Spring": [[(9, (20, 21))]]})
+    elements = [_spec("ZeroLength", "Spring")]
+    # node 20 structural 3, node 21 absent → envelope 3 → both 3 → OK.
+    validate_adaptive_element_endpoints(
+        fem, elements, ndm=3, inferred={20: 3}, envelope_ndf=3,
+    )
+    # both ends structural and equal → OK.
+    validate_adaptive_element_endpoints(
+        fem, elements, ndm=3, inferred={20: 6, 21: 6}, envelope_ndf=3,
+    )
+
+
+def test_adaptive_guard_ignores_non_adaptive_elements():
+    """Non-adaptive elements (e.g. ZeroLengthSection {3,6}) are not subject
+    to the endpoint-equality guard here (their ndf is inferred, and the
+    shared-node validity gate handles their compatibility)."""
+    fem = _StubFem({"Sec": [[(9, (20, 21))]]})
+    elements = [_spec("ZeroLengthSection", "Sec")]
+    validate_adaptive_element_endpoints(
+        fem, elements, ndm=3, inferred={20: 6}, envelope_ndf=3,
+    )
