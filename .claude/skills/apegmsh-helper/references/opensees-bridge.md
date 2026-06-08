@@ -155,8 +155,26 @@ ks = ops.uniaxialMaterial.ElasticMaterial(E=k_stab)
 ops.element.ZeroLength(pg="AbsBnd",
     mat_dirs=(ZeroLengthMatDir(material=c,  dof=1),
               ZeroLengthMatDir(material=ks, dof=1)))        # both dir 1 → stiffness adds
+
+# Node-pair form (ADR 0049) — spring to a g.decouple_node ground, NO meshed line.
+# Pass nodes=(node_i, node_j) instead of pg=; each endpoint is a decouple_node
+# handle, a single-node label, or an int tag. The dominant SSI case: a boundary
+# mesh node ↔ a coincident decoupled ground.
+gnd = g.decouple_node(coords=(x, y, z), label="pile_ground")   # session-side
+ops.ndf(gnd, ndf=3)                                            # size the element-less ground
+ops.element.ZeroLength(nodes=("boundary_node", gnd),           # mesh-node label + ground handle
+    mat_dirs=(ZeroLengthMatDir(material=ks, dof=1),
+              ZeroLengthMatDir(material=ks, dof=2),
+              ZeroLengthMatDir(material=ks, dof=3)))
 ```
 
+- **Node-pair `nodes=(i, j)`** works on `ZeroLength` / `CoupledZeroLength` /
+  `TwoNodeLink` (mutually exclusive with `pg=`). Both ends must carry **equal
+  `ndf`** (G1 fails loud otherwise) and resolve to **distinct** nodes. Not for
+  `ZeroLengthSection` (non-adaptive — use `pg=` or a plain `ZeroLength`). v1
+  limits: global-only (no stage binding), fails loud under partitioned/MPI emit,
+  and not drawn in the viewer (no mesh cell). Int endpoints are a non-compose-safe
+  escape hatch — prefer a handle or label.
 - **`Viscous` / `ViscousDamper` / `Maxwell`** are the rate-dependent (dashpot)
   uniaxials — they produce a velocity-proportional force with **no `-doRayleigh`**.
   A pure `Viscous` has zero static stiffness → parallel it with an elastic spring

@@ -37,6 +37,27 @@ phantom-node mechanism of [ADR 0022](0022-mp-constraint-emission-fanout.md),
 and reuses the `∩ ndf_ok` gate of
 [ADR 0046](0046-shell-on-solid-node-sharing-guard.md).
 
+> **Implementation note (node-pair springs, 2026-06-07).** The
+> `ops.element.zeroLength(node_i, ground, …)` node-pair form named above as the
+> natural next step shipped. `ops.element.ZeroLength` / `CoupledZeroLength` /
+> `TwoNodeLink` take `nodes=(node_i, node_j)` (each a `g.decouple_node` handle,
+> a single-node label, or an int tag) as an alternative to `pg=`, wiring one
+> spring to a decoupled ground without a meshed line. **`ZeroLengthSection` is
+> excluded** (non-adaptive `ndf_ok={3,6}` — G1 would skip it and inference would
+> claim the ground, blocking `ops.ndf`). A unified `expand_spec_to_elements`
+> routes every element-spec fan-out site (inference, the `∩` gate, G1,
+> `allocate_element_tags`, `compute_stage_ownership`) so a node-pair spec
+> (`pg is None`) yields a single `(MISSING_FEM_ELEMENT_ID, (i, j))` element; the
+> **correctness spine is G1** over the *effective* (inferred ∪ `ops.ndf`) map
+> (inference is adaptive-inert for the ground, so `ops.ndf(ground)` still owns
+> it). Endpoints must resolve to **distinct** tags (OpenSees has no same-node
+> guard). Connectivity persists via a new optional `inline_connectivity` dataset
+> under `/opensees/element_meta/{type}/` (schema 2.17.0, folds into
+> `model_hash`) since a node-pair element has no neutral gmsh cell. **Deferred:**
+> staged node-pair springs (global-only in v1) and partitioned/MPI emit
+> (fail-loud guard — per-rank node-ownership of an explicit node-pair is
+> unsolved); viewer glyphs (OQ6); OQ1(b) endpoint propagation.
+
 > **Revision note (2026-05-31).** The first draft of this ADR put `ndf` *on
 > the creation call* (`g.nodes.add(x, y, z, ndf=3, ...)`) and added an
 > optional `ndf` field to the neutral broker. That re-coupled the session to

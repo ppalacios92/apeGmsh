@@ -519,15 +519,32 @@ index to the broker's `/elements/{gmsh_alias}` keyed by GMSH alias.
 │                                                    -1 sentinel for records
 │                                                    emitted outside a bridge fan-out)
 ├── args              (N, max_tail) float64       — parameter tail (NaN at string slots)
-└── args_str          (N, max_tail) vlen-utf-8    — string tokens (present only
-                                                    when any slot is a string)
+├── args_str          (N, max_tail) vlen-utf-8    — string tokens (present only
+│                                                    when any slot is a string)
+└── inline_connectivity (N,) vlen-int64           — node-pair endpoint tags
+                                                    (schema 2.17.0; present only
+                                                    when a row has fem_eid < 0)
 ```
 
 `args` and `args_str` encode the element's positional `*args` list
-*after dropping the connectivity prefix*.  A vocabulary-aware reader
-recovers cross-references (`transf_ref`, `section_ref`,
-`integration_ref`, …) by indexing into the element type's known
-signature.
+*after dropping the connectivity prefix* (the drop is **per record** —
+`args[len(connectivity):]` — so a node-pair row whose connectivity length
+differs from its PG siblings still slices its own tail).  A
+vocabulary-aware reader recovers cross-references (`transf_ref`,
+`section_ref`, `integration_ref`, …) by indexing into the element type's
+known signature.
+
+`inline_connectivity` (schema 2.17.0, ADR 0049) carries the endpoint node
+tags of **node-pair** elements (`ops.element.ZeroLength(nodes=…)` and the
+rest of the zeroLength family wired to a `g.decouple_node` ground).  Such
+an element has `fem_eid = -1` and **no gmsh cell** in the neutral
+`/elements` zone, so its connectivity cannot be sourced from there on
+re-emit — it is stored inline here instead, one ragged row per element
+(empty for ordinary PG-fanned rows whose connectivity lives in
+`/elements`).  The dataset is written **only** when a type group has at
+least one node-pair row, so PG-only models are byte-identical and their
+`model_hash` is unperturbed; when present it folds into `model_hash`
+(connectivity is model-defining).
 
 Phase 8.5 split element storage across two zones (master plan §3):
 broker owns geometry (`/elements/{gmsh_alias}` with ids +
@@ -960,6 +977,19 @@ detail lives in the `SCHEMA_VERSION` docstring in
   sentinel, `rotational` (`-rot`), `pressure` (`-p`). Defaults match
   the C++ parser, so legacy decks behave identically. Additive — old
   2.11.x readers ignore the new columns.
+- `2.13.0`–`2.16.0` — see the `SCHEMA_VERSION` docstring in
+  [`opensees/emitter/h5.py`](../emitter/h5.py) (named primitives sidecar,
+  `/opensees/nodes_ndf`, `/opensees/dampings`, `/opensees/initial_stress`).
+  From 2.16.0 onward a minor bump is a producer **hard floor** — a 2.N.x
+  reader REFUSES a 2.(N+1).x file (the window only lets a newer reader open
+  an older file, never the reverse).
+- `2.17.0` — ADR 0049 (node-pair zeroLength): optional
+  `inline_connectivity` vlen-int64 dataset under
+  `/opensees/element_meta/{type}/` carrying the endpoint tags of node-pair
+  spring elements (no neutral gmsh cell to source them from). Written only
+  for type groups with a node-pair (`fem_eid < 0`) row, so PG-only models
+  are byte-identical; folds into `model_hash`. Additive group; a 2.16.x
+  reader refuses a 2.17.x file (hard floor), a 2.17 reader opens 2.16 + 2.17.
 
 A reader skeleton:
 

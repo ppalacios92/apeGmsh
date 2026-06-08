@@ -736,6 +736,12 @@ class OpenSeesModel:
                 if "args" in g else np.zeros((len(ids), 0))
             )
             args_str = g["args_str"][...] if "args_str" in g else None
+            # ADR 0049: inline connectivity for node-pair (fem_eid<0) rows —
+            # endpoints with no neutral gmsh cell to source from.
+            inline_conn = (
+                g["inline_connectivity"][...]
+                if "inline_connectivity" in g else None
+            )
             type_token = type_group_name
             if "type" in g.attrs:
                 attr_v = g.attrs["type"]
@@ -764,13 +770,28 @@ class OpenSeesModel:
                             row_args.append(int(v))
                         else:
                             row_args.append(float(v))
+                # ADR 0049: a node-pair row (fem_eid<0) restores its
+                # connectivity from inline_connectivity and re-prepends it to
+                # args, so the record is fully formed (connectivity set + args
+                # carry the iNode/jNode prefix) for tcl/py/live re-emit AND
+                # byte-stable on H5 re-write (the writer re-slices args by
+                # len(connectivity) and re-stores inline_connectivity).  PG
+                # rows keep connectivity=() and are re-attached later from the
+                # FEM via _rehydrate_element_connectivity.
+                conn: tuple[int, ...] = ()
+                if (
+                    inline_conn is not None
+                    and int(fem_eids[i]) < 0
+                    and i < len(inline_conn)
+                    and len(inline_conn[i]) > 0
+                ):
+                    conn = tuple(int(c) for c in inline_conn[i])
+                    row_args = [*conn, *row_args]
                 out.append(ElementRecord(
                     type_token=type_token,
                     tag=int(ids[i]),
                     args=tuple(row_args),
-                    # Writer drops connectivity prefix — keep it
-                    # empty so to_h5 re-emits the same args tail.
-                    connectivity=(),
+                    connectivity=conn,
                     fem_eid=int(fem_eids[i]),
                 ))
         return tuple(out)

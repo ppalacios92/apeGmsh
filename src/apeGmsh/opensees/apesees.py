@@ -70,6 +70,7 @@ from ._internal.build import (
 )
 from ._internal.build import _element_transf as _build_element_transf
 from ._internal.tag_resolution import (
+    MISSING_FEM_ELEMENT_ID,
     set_current_fem_element_id,
     set_element_nodes,
 )
@@ -992,6 +993,7 @@ class BuiltModel:
                 eid: ele_tag
                 for _, sub in element_plan
                 for eid, _conn, ele_tag in sub
+                if eid != MISSING_FEM_ELEMENT_ID  # ADR 0049: node-pair sentinel
             }
             # Validate that BC pools (global + per-stage) respect the
             # ownership-tier rules — see ``_run_staged_bc_validators``
@@ -1053,6 +1055,7 @@ class BuiltModel:
                 eid: ele_tag
                 for _, sub in element_plan
                 for eid, _conn, ele_tag in sub
+                if eid != MISSING_FEM_ELEMENT_ID  # ADR 0049: node-pair sentinel
             }
         for spec, sub in element_plan:
             if id(spec) in element_owner_stage:
@@ -1277,6 +1280,7 @@ class BuiltModel:
             eid: ele_tag
             for _, sub in element_plan
             for eid, _conn, ele_tag in sub
+            if eid != MISSING_FEM_ELEMENT_ID  # ADR 0049: node-pair sentinel
         }
 
         # Fail loud if any element's module label disagrees with its
@@ -1814,6 +1818,27 @@ class BuiltModel:
                 "partitioned run."
             )
 
+        # ADR 0049: a node-pair zeroLength-family element
+        # (ops.element.*(nodes=...)) has no backing FEM element id, so
+        # build_element_partition_owner cannot place it on a rank and
+        # emit_element_spec_partitioned would silently drop it on EVERY rank.
+        # Per-rank node-ownership routing of an explicit node-pair (whose two
+        # endpoints may straddle ranks) is deferred — fail loud rather than
+        # emit a partitioned deck missing the spring.  Fires before stage
+        # ownership / tag allocation so no node-pair sentinel reaches the
+        # per-rank fan-out.
+        if len(self.fem.partitions) > 1 and any(
+            getattr(spec, "pg", None) is None for spec in elements
+        ):
+            raise BridgeError(
+                "apeSees: node-pair elements (ops.element.<ZeroLength|"
+                "CoupledZeroLength|TwoNodeLink>(nodes=...)) are not yet "
+                "supported under partitioned (MPI) emit — per-rank "
+                "node-ownership routing of an explicit node-pair is deferred "
+                "(ADR 0049). Emit single-process (non-partitioned), or wire "
+                "the spring through a 2-node physical group (pg=) instead."
+            )
+
         # Phase SSI-2.C: compute stage ownership for partitioned + staged.
         element_owner_stage: dict[int, int] = {}
         node_owner_stage: dict[int, int] = {}
@@ -1832,6 +1857,7 @@ class BuiltModel:
                 eid: ele_tag
                 for _, sub in early_element_plan
                 for eid, _conn, ele_tag in sub
+                if eid != MISSING_FEM_ELEMENT_ID  # ADR 0049: node-pair sentinel
             }
             # Phase SSI-2.D + SSI-2.E: run BC ownership-tier validators
             # (H1 / V1 / V2 / V3 / V4 / V5 / V6).  Previously omitted
@@ -1896,6 +1922,8 @@ class BuiltModel:
             fem_eid_to_ops_tag = {}
             for _, sub in element_plan:
                 for eid, _conn, ele_tag in sub:
+                    if eid == MISSING_FEM_ELEMENT_ID:
+                        continue  # ADR 0049: node-pair sentinel — not a fem eid
                     fem_eid_to_ops_tag[int(eid)] = int(ele_tag)
 
         # Initial stress — global side (parameter declarations + proc +

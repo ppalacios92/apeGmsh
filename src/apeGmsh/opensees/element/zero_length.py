@@ -31,6 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from apeGmsh._kernel.defs.decoupled import DecoupledNodeDef
+
 from .._internal.tag_resolution import (
     current_element_nodes,
     damp_args,
@@ -53,7 +55,58 @@ __all__ = [
     "ZeroLengthMatDir",
     "ZeroLengthSection",
     "CoupledZeroLength",
+    "NodeRef",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Node-pair endpoint references (ADR 0049 — node-pair zeroLength form)
+# ---------------------------------------------------------------------------
+
+#: An endpoint reference for the node-pair form ``nodes=(node_i, node_j)``:
+#: a :class:`~apeGmsh._kernel.defs.decoupled.DecoupledNodeDef` handle
+#: (from ``g.decouple_node(...)``), a node *label* string resolving to
+#: exactly one node, or an integer node tag (power-user escape hatch,
+#: **not** compose-safe — see ``resolve_element_node_pair``).
+NodeRef = DecoupledNodeDef | str | int
+
+
+def _validate_pg_xor_nodes(
+    cls_name: str,
+    pg: str | None,
+    nodes: "tuple[NodeRef, NodeRef] | None",
+) -> None:
+    """Validate the dual-mode contract: exactly one of ``pg`` / ``nodes``.
+
+    The PG form fans the spec across a 2-node "line" physical group; the
+    node-pair form (ADR 0049) references two explicit endpoints — at least
+    one typically a decoupled ground — without a meshed line.  Resolution
+    of the endpoint refs to tags (and the ``i != j`` / endpoint-ndf checks)
+    happens at build against the frozen FEM snapshot
+    (``resolve_element_node_pair``); this only checks the static shape.
+    """
+    if (pg is None) == (nodes is None):
+        raise ValueError(
+            f"{cls_name}: pass exactly one of pg= (mesh physical-group "
+            f"fan-out) or nodes=(node_i, node_j) (explicit node-pair, e.g. a "
+            f"spring to a g.decouple_node ground) — got "
+            f"{'both' if pg is not None else 'neither'}."
+        )
+    if nodes is not None:
+        if len(nodes) != 2:
+            raise ValueError(
+                f"{cls_name}: nodes= must be a 2-tuple (node_i, node_j), got "
+                f"length {len(nodes)}."
+            )
+        for ref in nodes:
+            if isinstance(ref, bool) or not isinstance(
+                ref, (DecoupledNodeDef, str, int)
+            ):
+                raise ValueError(
+                    f"{cls_name}: each node-pair endpoint must be a "
+                    f"g.decouple_node handle, a node-label string, or an int "
+                    f"tag; got {type(ref).__name__} {ref!r}."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +159,14 @@ class ZeroLength(Element):
     ----------
     pg
         Physical-group label whose 2-node "line" entries (typically
-        coincident-node pairs) receive this spec.
+        coincident-node pairs) receive this spec.  Mutually exclusive
+        with ``nodes``.
+    nodes
+        Node-pair form (ADR 0049): a 2-tuple ``(node_i, node_j)`` of
+        :data:`NodeRef` endpoints — a ``g.decouple_node`` handle, a node
+        label, or an int tag — wiring a single spring directly (e.g. a
+        boundary node to a decoupled ground) without a meshed line.
+        Mutually exclusive with ``pg``.
     mat_dirs
         Tuple of :class:`ZeroLengthMatDir` value objects, each binding
         a uniaxial material to one local DOF. At least one pair is
@@ -119,13 +179,15 @@ class ZeroLength(Element):
         Include the element in Rayleigh damping (``-doRayleigh``).
     """
 
-    pg: str
-    mat_dirs: tuple[ZeroLengthMatDir, ...]
+    pg: str | None = None
+    nodes: tuple[NodeRef, NodeRef] | None = None
+    mat_dirs: tuple[ZeroLengthMatDir, ...] = ()
     orient: tuple[float, float, float, float, float, float] | None = None
     do_rayleigh: bool = False
     damp: Damping | None = None
 
     def __post_init__(self) -> None:
+        _validate_pg_xor_nodes("ZeroLength", self.pg, self.nodes)
         if not self.mat_dirs:
             raise ValueError(
                 "ZeroLength: at least one (material, dof) pair required."
@@ -202,10 +264,33 @@ class ZeroLengthSection(Element):
         OpenSees default ON.
     """
 
-    pg: str
+    pg: str | None = None
+    nodes: tuple[NodeRef, NodeRef] | None = None
     section: Section
     orient: tuple[float, float, float, float, float, float] | None = None
     do_rayleigh: bool = True
+
+    def __post_init__(self) -> None:
+        # ADR 0049 — node-pair form is NOT supported for ZeroLengthSection in
+        # v1: it is non-adaptive (ndf_ok={3,6}; ZeroLengthSection.cpp:247
+        # aborts unless every node carries exactly 3/6 dof), so the G1
+        # equal-endpoint gate skips it AND inference would claim a decoupled
+        # ground node — making ops.ndf(ground) impossible.  Use plain
+        # ``ZeroLength`` for a section-less spring to a decoupled ground.
+        if self.nodes is not None:
+            raise ValueError(
+                "ZeroLengthSection does not support the node-pair nodes= form "
+                "in v1 (it is non-adaptive — both nodes must carry exactly "
+                "3 (2D) / 6 (3D) dof, and a decoupled ground cannot be sized "
+                "by ops.ndf for it). Use a physical group (pg=) of coincident "
+                "node pairs, or a plain ops.element.ZeroLength(nodes=...) "
+                "spring to the decoupled ground."
+            )
+        if self.pg is None:
+            raise ValueError(
+                "ZeroLengthSection: pg= is required (the node-pair nodes= form "
+                "is unsupported for this element — see above)."
+            )
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return (self.section,)
@@ -252,6 +337,11 @@ class CoupledZeroLength(Element):
     ----------
     pg
         Physical-group label whose 2-node entries receive this spec.
+        Mutually exclusive with ``nodes``.
+    nodes
+        Node-pair form (ADR 0049): ``(node_i, node_j)`` of :data:`NodeRef`
+        endpoints, wiring a single coupled spring directly without a
+        meshed line.  Mutually exclusive with ``pg``.
     material
         The single :class:`UniaxialMaterial` acting on the resultant.
     dir1, dir2
@@ -263,13 +353,15 @@ class CoupledZeroLength(Element):
         not rely on the parser's uninitialised default slot.
     """
 
-    pg: str
+    pg: str | None = None
+    nodes: tuple[NodeRef, NodeRef] | None = None
     material: UniaxialMaterial
     dir1: int
     dir2: int
     use_rayleigh: bool = False
 
     def __post_init__(self) -> None:
+        _validate_pg_xor_nodes("CoupledZeroLength", self.pg, self.nodes)
         if self.dir1 < 1 or self.dir2 < 1:
             raise ValueError(
                 f"CoupledZeroLength: dirs must be >= 1, got "

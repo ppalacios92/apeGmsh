@@ -38,6 +38,7 @@ from ...element.truss import CorotTruss, InertiaTruss, Truss
 from ...element.two_node_link import TwoNodeLink
 from ...element.zero_length import (
     CoupledZeroLength,
+    NodeRef,
     ZeroLength,
     ZeroLengthMatDir,
     ZeroLengthSection,
@@ -229,16 +230,25 @@ class _ElementNS(_BridgeNamespace):
     def ZeroLength(
         self,
         *,
-        pg: str,
+        pg: str | None = None,
+        nodes: tuple[NodeRef, NodeRef] | None = None,
         mat_dirs: tuple[ZeroLengthMatDir, ...],
         orient: tuple[float, float, float, float, float, float]
         | None = None,
         do_rayleigh: bool = False,
         damp: Damping | None = None,
     ) -> ZeroLength:
+        """``element zeroLength`` — coupled (material, dof) springs.
+
+        Pass **exactly one** of ``pg=`` (fan across a 2-node "line"
+        physical group) or ``nodes=(node_i, node_j)`` (ADR 0049 node-pair
+        form — wire one spring to explicit endpoints, e.g. a boundary node
+        to a ``g.decouple_node`` ground, without a meshed line).
+        """
         return self._bridge._register(
             ZeroLength(
                 pg=pg,
+                nodes=nodes,
                 mat_dirs=mat_dirs,
                 orient=orient,
                 do_rayleigh=do_rayleigh,
@@ -268,16 +278,23 @@ class _ElementNS(_BridgeNamespace):
     def CoupledZeroLength(
         self,
         *,
-        pg: str,
+        pg: str | None = None,
+        nodes: tuple[NodeRef, NodeRef] | None = None,
         material: UniaxialMaterial | str,
         dir1: int,
         dir2: int,
         use_rayleigh: bool = False,
     ) -> CoupledZeroLength:
+        """``element CoupledZeroLength`` — one material on the resultant of 2 dirs.
+
+        Pass **exactly one** of ``pg=`` or ``nodes=(node_i, node_j)`` (ADR
+        0049 node-pair form).
+        """
         material = self._bridge._resolve(material, base=UniaxialMaterial)
         return self._bridge._register(
             CoupledZeroLength(
                 pg=pg,
+                nodes=nodes,
                 material=material,
                 dir1=dir1,
                 dir2=dir2,
@@ -288,7 +305,8 @@ class _ElementNS(_BridgeNamespace):
     def TwoNodeLink(
         self,
         *,
-        pg: str,
+        pg: str | None = None,
+        nodes: tuple[NodeRef, NodeRef] | None = None,
         mat_dirs: tuple[ZeroLengthMatDir, ...],
         orient: tuple[float, ...] | None = None,
         p_delta: tuple[float, ...] | None = None,
@@ -296,9 +314,15 @@ class _ElementNS(_BridgeNamespace):
         do_rayleigh: bool = False,
         mass: float | None = None,
     ) -> TwoNodeLink:
+        """``element twoNodeLink`` — finite-length coupled springs.
+
+        Pass **exactly one** of ``pg=`` or ``nodes=(node_i, node_j)`` (ADR
+        0049 node-pair form).
+        """
         return self._bridge._register(
             TwoNodeLink(
                 pg=pg,
+                nodes=nodes,
                 mat_dirs=mat_dirs,
                 orient=orient,
                 p_delta=p_delta,

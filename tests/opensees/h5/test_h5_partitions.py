@@ -38,16 +38,16 @@ from apeGmsh.opensees.emitter.h5_reader import (
 # ---------------------------------------------------------------------------
 
 def test_schema_version_bumped() -> None:
-    """Schema bumped 2.15.0 -> 2.16.0 per ADR 0054 Phase 1 (the
-    ``/opensees/initial_stress`` global initial-stress store).
+    """Schema bumped 2.16.0 -> 2.17.0 per ADR 0049 (node-pair zeroLength: the
+    optional ``inline_connectivity`` element_meta dataset).
 
-    2.15.0 (the ``/opensees/dampings`` store) is now the prior minor; 2.16.0
-    adds the optional ``/opensees/initial_stress`` group.  A minor bump is a
-    producer hard floor (a 2.15 reader REFUSES a 2.16 file); the bridge's
-    :data:`SCHEMA_VERSION` is the single source for the OPENSEES zone
-    (``schema_version.reader_version(OPENSEES)`` reads it).
+    2.16.0 (the ``/opensees/initial_stress`` store, ADR 0054 Phase 1) is now
+    the prior minor; 2.17.0 adds the optional ``inline_connectivity`` dataset.
+    A minor bump is a producer hard floor (a 2.16 reader REFUSES a 2.17 file);
+    the bridge's :data:`SCHEMA_VERSION` is the single source for the OPENSEES
+    zone (``schema_version.reader_version(OPENSEES)`` reads it).
     """
-    assert SCHEMA_VERSION == "2.16.0"
+    assert SCHEMA_VERSION == "2.17.0"
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +239,12 @@ def test_h5_reader_back_compat_pre_partition_schema(
     ``H5Model.partitions()`` returns ``[]`` when no partition brackets
     were emitted.
 
-    The 2.15.0 → 2.16.0 bump (ADR 0054 Phase 1) is additive — the new
-    ``/opensees/initial_stress`` group is absent here.  A 2.15.0 stamp is
-    the oldest the current reader accepts (two-version window); a 2.14.0
+    The 2.16.0 → 2.17.0 bump (ADR 0049) is additive — the new
+    ``inline_connectivity`` dataset is absent here.  A 2.16.0 stamp is
+    the oldest the current reader accepts (two-version window); a 2.15.0
     stamp would now be REFUSED (outside the window — the hard floor).
     """
-    e = H5Emitter(schema_version="2.15.0")
+    e = H5Emitter(schema_version="2.16.0")
     e.model(ndm=3, ndf=6)
     e.node(1, 0.0, 0.0, 0.0)
     e.node(2, 1.0, 0.0, 0.0)
@@ -255,7 +255,7 @@ def test_h5_reader_back_compat_pre_partition_schema(
     e.write(str(out))
 
     with h5_reader.open(str(out)) as m:
-        assert m.schema_version == "2.15.0"
+        assert m.schema_version == "2.16.0"
         recs = m.partitions()
         assert recs == []
 

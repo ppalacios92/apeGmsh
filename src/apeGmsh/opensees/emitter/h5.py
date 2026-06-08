@@ -322,7 +322,19 @@ class H5ReinforceDeviationWarning(UserWarning):
 #:     be ≥ 2.16.0 to open any file written after this lands; the window
 #:     only buys a 2.16 reader the ability to open 2.15 files, NOT the
 #:     reverse.
-SCHEMA_VERSION: str = "2.16.0"
+#:   * 2.17.0 — ADR 0049 (node-pair zeroLength): new optional
+#:     ``inline_connectivity`` vlen-int64 dataset under
+#:     ``/opensees/element_meta/{type}/`` carrying the endpoint node tags
+#:     of node-pair elements (``ops.element.ZeroLength(nodes=...)`` etc.),
+#:     which have no backing gmsh cell in the neutral ``/elements`` zone
+#:     and so cannot source their connectivity from there on re-emit.
+#:     Written only when a type group has ≥1 node-pair (``fem_eid < 0``)
+#:     row, so PG-only models are byte-identical and their ``model_hash``
+#:     is unchanged.  Folds into ``model_hash`` (connectivity is
+#:     model-defining).  Additive group; the hard-floor window semantics
+#:     above apply (a 2.16.x reader REFUSES a 2.17.x file; a 2.17 reader
+#:     opens 2.16 and 2.17 files).
+SCHEMA_VERSION: str = "2.17.0"
 
 
 # Map known time-series type tokens to "is path-bearing": for a Path
@@ -1924,23 +1936,58 @@ class H5Emitter:
                 "partition_ids",
                 data=np.asarray(rank_row, dtype=np.int64),
             )
+            self._write_inline_connectivity(g, recs)
             self._write_element_argstack(g, recs)
+
+    def _write_inline_connectivity(
+        self, g: Any, recs: list[_ElementRecord],
+    ) -> None:
+        """Write ``inline_connectivity`` for node-pair rows (ADR 0049).
+
+        A node-pair element (``ops.element.ZeroLength(nodes=...)`` etc.)
+        carries ``fem_eid == MISSING_FEM_ELEMENT_ID`` (``-1``) and has no
+        gmsh cell in the neutral ``/elements`` zone, so its endpoint tags
+        cannot be sourced from there on re-emit.  Persist them here, one
+        ragged row per element (empty for ordinary PG-fanned rows whose
+        connectivity is recoverable from the FEM).  Written **only** when a
+        type group has ≥1 node-pair row, so PG-only models stay
+        byte-identical and their ``model_hash`` is unperturbed.
+        """
+        import h5py
+        import numpy as np
+
+        if not any(r.fem_eid < 0 and r.connectivity for r in recs):
+            return
+        vlen = h5py.vlen_dtype(np.int64)
+        rows = np.empty(len(recs), dtype=object)
+        for i, r in enumerate(recs):
+            if r.fem_eid < 0 and r.connectivity:
+                rows[i] = np.asarray(
+                    [int(c) for c in r.connectivity], dtype=np.int64,
+                )
+            else:
+                rows[i] = np.empty(0, dtype=np.int64)
+        g.create_dataset("inline_connectivity", data=rows, dtype=vlen)
 
     def _write_element_argstack(
         self, g: Any, recs: list[_ElementRecord],
     ) -> None:
         """Write the element ``args`` / ``args_str`` array pair.
 
-        The first ``arity`` positional args of every element are the
-        node tags (already in the broker's
-        ``/elements/{gmsh_alias}/connectivity`` dataset); we drop them
-        and record only the tail (parameter / cross-reference payload).
+        The first ``len(connectivity)`` positional args of every element
+        are the node tags (recoverable from the broker's
+        ``/elements/{gmsh_alias}/connectivity`` zone for PG-fanned
+        elements, or from ``inline_connectivity`` for node-pair elements);
+        we drop them and record only the tail (parameter / cross-reference
+        payload).  The drop is **per record** (``args[len(r.connectivity):]``)
+        rather than a single max-arity over the type group, so a node-pair
+        row whose connectivity length differs from its PG siblings still
+        slices its own tail correctly (ADR 0049).
         """
         import h5py
         import numpy as np
 
-        arity = max(len(r.connectivity) for r in recs)
-        max_tail = max(len(r.args) - arity for r in recs)
+        max_tail = max(len(r.args) - len(r.connectivity) for r in recs)
         if max_tail <= 0:
             return
 
@@ -1948,7 +1995,7 @@ class H5Emitter:
         arg_strs: list[list[str]] = []
         any_str = False
         for i, r in enumerate(recs):
-            tail = r.args[arity:]
+            tail = r.args[len(r.connectivity):]
             row_strs: list[str] = []
             for j, v in enumerate(tail):
                 if isinstance(v, str):

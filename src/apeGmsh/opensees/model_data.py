@@ -576,6 +576,10 @@ class ModelData:
                         if "args" in g else np.zeros((len(ids), 0))
                     )
                     args_str = g["args_str"][...] if "args_str" in g else None
+                    inline_conn = (
+                        g["inline_connectivity"][...]
+                        if "inline_connectivity" in g else None
+                    )
 
                     type_attr = g.attrs.get("type", type_group_name)
                     if isinstance(type_attr, bytes):
@@ -600,18 +604,27 @@ class ModelData:
                                 row_args.append(float(args[i, j]))
                         else:
                             row_args = []
+                        # ADR 0049: node-pair row (fem_eid<0) restores its
+                        # connectivity from inline_connectivity and
+                        # re-prepends it to args, so the H5→H5 rewrite
+                        # re-slices args[len(connectivity):] back to the same
+                        # tail and re-stores the same inline_connectivity —
+                        # byte-stable.  PG rows keep connectivity=() (their
+                        # prefix lives in the neutral /elements zone).
+                        conn: tuple[int, ...] = ()
+                        if (
+                            inline_conn is not None
+                            and int(fem_eids[i]) < 0
+                            and i < len(inline_conn)
+                            and len(inline_conn[i]) > 0
+                        ):
+                            conn = tuple(int(c) for c in inline_conn[i])
                         md._em._elements.append(
                             _ElementRecord(
                                 type_token=type_token,
                                 tag=int(ids[i]),
-                                args=tuple(row_args),
-                                # Stored layout drops the connectivity
-                                # prefix (``_write_element_argstack``
-                                # writes ``args[arity:]``).  Setting
-                                # ``connectivity=()`` here means a
-                                # rewrite uses ``arity=0`` and writes
-                                # the same tail back — byte-stable.
-                                connectivity=(),
+                                args=(*conn, *row_args),
+                                connectivity=conn,
                                 fem_eid=int(fem_eids[i]),
                             )
                         )

@@ -56,6 +56,7 @@ from ..recorder import RecorderDeclaration, RecorderRecord
 from ..transform import Corotational, Linear, PDelta
 from .tag_allocator import TagAllocator
 from .tag_resolution import (
+    MISSING_FEM_ELEMENT_ID,
     resolve_tag,
     set_current_fem_element_id,
     set_element_nodes,
@@ -202,7 +203,12 @@ def validate_node_ndf_element_compat(
     acc: dict[int, "frozenset[int]"] = {}
     owner: dict[int, str] = {}
     for spec, etype, ndf_ok in classified:
-        for _eid, node_tags in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
+        # ADR 0049: route via expand_spec_to_elements so a node-pair spec
+        # (pg=None) contributes its two endpoints here.  For the adaptive
+        # zeroLength family ndf_ok={1..6} is intersection-inert, so this is
+        # a no-op for correctness — it runs only to keep every fan-out site
+        # uniform (no caller ever passes pg=None to expand_pg_to_elements).
+        for _eid, node_tags in expand_spec_to_elements(fem, spec):
             for raw in node_tags:
                 t = int(raw)
                 prev = acc.get(t)
@@ -332,7 +338,13 @@ def infer_node_ndf(
     node_to_classes: dict[int, list[str]] = {}
     for spec in elements:
         etype = type(spec).__name__
-        for _eid, node_tags in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
+        # ADR 0049: a node-pair spec (pg=None) contributes its two endpoints
+        # via expand_spec_to_elements.  Inert for correctness on the adaptive
+        # zeroLength family (dropped by _infer_ndf_from_incidence), so a
+        # decoupled ground stays absent from the inferred map and remains
+        # ops.ndf-eligible; routed only to avoid an expand_pg_to_elements(None)
+        # whole-mesh fan-out.
+        for _eid, node_tags in expand_spec_to_elements(fem, spec):
             for raw in node_tags:
                 node_to_classes.setdefault(int(raw), []).append(etype)
     return _infer_ndf_from_incidence(node_to_classes, ndm)
@@ -360,6 +372,17 @@ def validate_adaptive_element_endpoints(
     mismatched ends. This guard catches that — and the symmetric case of a
     spring straddling two structural regions of differing ndf — at build
     time, naming the element and the fix.
+
+    ADR 0049 — this is the correctness spine of the node-pair zeroLength
+    form: routing the fan-out through :func:`expand_spec_to_elements` feeds
+    a node-pair spec's two endpoints (one typically a decoupled ground sized
+    by ``ops.ndf``) into this exact check.  **It is load-bearing that the
+    ``inferred`` argument is the *effective* map (inferred ∪ ``ops.ndf``
+    overlay)** — the build site passes ``effective_ndf``; if it ever passed
+    the raw inferred map, a correct ``ops.ndf(ground, K != envelope)`` would
+    fall to the envelope here and falsely raise.  ``ZeroLengthSection`` is
+    intentionally NOT covered (it is non-adaptive; node-pair is forbidden
+    for it).
     """
     from .._element_capabilities import element_class_ndf_ok
 
@@ -367,7 +390,7 @@ def validate_adaptive_element_endpoints(
         cls = type(spec).__name__
         if element_class_ndf_ok(cls) != _ADAPTIVE_NDF_OK:
             continue
-        for eid, node_tags in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
+        for eid, node_tags in expand_spec_to_elements(fem, spec):
             eff = {
                 int(n): inferred.get(int(n), int(envelope_ndf))
                 for n in node_tags
@@ -1310,6 +1333,18 @@ def expand_pg_to_elements(
         If ``pg`` is not a known PG label / name on the FEM snapshot.
         The error includes the available PG names to help the user.
     """
+    if pg is None:
+        # Defensive (ADR 0049): ``FEMData.select(pg=None)`` returns the
+        # WHOLE mesh, so an un-routed node-pair spec (``spec.pg is None``)
+        # reaching here would silently fan out over every element. Fail
+        # loud — every element-spec fan-out must route through
+        # ``expand_spec_to_elements``, which sends node-pair specs down the
+        # explicit-endpoint path and never calls this with ``pg=None``.
+        raise BridgeError(
+            "expand_pg_to_elements called with pg=None — a node-pair element "
+            "spec must be routed through expand_spec_to_elements, not "
+            "expanded as a physical group (this is an internal routing bug)."
+        )
     try:
         # selection-unification v2 P3-R / §6.3 §2 #5 (P-GROUPRESULT;
         # m3 — resolution raises at .select()).
@@ -1327,6 +1362,104 @@ def expand_pg_to_elements(
         for eid, conn_row in group:
             out.append((int(eid), tuple(int(n) for n in conn_row)))
     return out
+
+
+def resolve_element_node_pair(
+    fem: "FEMData", spec: Element,
+) -> tuple[int, int]:
+    """Resolve a node-pair element spec's ``nodes=(ref_i, ref_j)`` to tags.
+
+    ADR 0049 node-pair form.  Each endpoint is a :data:`NodeRef`:
+
+    * a ``DecoupledNodeDef`` handle (from ``g.decouple_node``) → its
+      ``.tag`` (fail-loud if the handle was never materialized by the FEM
+      factory, i.e. ``.tag is None``);
+    * a node-label ``str`` → exactly one node via
+      :func:`_expand_label_to_nodes` (0 or ≥2 matches fail loud);
+    * an ``int`` → the raw node tag (power-user escape hatch — **not**
+      compose-safe: ``g.compose`` offsets node tags at the FEM level
+      before the bridge runs, so a raw int authored against pre-compose
+      numbering binds to the wrong node; prefer a handle or label).
+
+    The two resolved tags must differ — OpenSees has no same-node guard in
+    any zeroLength-family element, so an ``i == j`` pair would assemble a
+    singular zero-length element silently.  Distinctness is checked here on
+    the *resolved* tags (so a label and an int resolving to the same node
+    are caught).
+    """
+    from ..element.zero_length import NodeRef  # noqa: F401  (doc anchor)
+
+    nodes = getattr(spec, "nodes", None)
+    cls = type(spec).__name__
+    if nodes is None or len(nodes) != 2:
+        raise BridgeError(
+            f"{cls}: node-pair element has no resolvable nodes= 2-tuple "
+            f"(got {nodes!r}) — this is an internal routing bug."
+        )
+
+    def _resolve_one(ref: object, which: str) -> int:
+        if isinstance(ref, bool):
+            raise BridgeError(
+                f"{cls} nodes= {which} endpoint must be a g.decouple_node "
+                f"handle, a node-label str, or an int tag; got bool {ref!r}."
+            )
+        if isinstance(ref, int):
+            return int(ref)
+        if isinstance(ref, str):
+            ids = _expand_label_to_nodes(fem, ref)
+            if len(ids) != 1:
+                raise BridgeError(
+                    f"{cls} nodes= {which} endpoint label {ref!r} resolves to "
+                    f"{len(ids)} nodes {tuple(ids)} — a node-pair endpoint "
+                    f"label must name EXACTLY one node. Use a label bound to a "
+                    f"single node (e.g. a g.decouple_node label) or pass the "
+                    f"handle directly."
+                )
+            return int(ids[0])
+        tag = getattr(ref, "tag", None)
+        if tag is None:
+            raise BridgeError(
+                f"{cls} nodes= {which} endpoint is a decoupled-node handle "
+                f"with no resolved tag — call g.mesh.queries.get_fem_data(...) "
+                f"so the FEM factory assigns it a tag before building the "
+                f"bridge."
+            )
+        return int(tag)
+
+    i_tag = _resolve_one(nodes[0], "node_i")
+    j_tag = _resolve_one(nodes[1], "node_j")
+    if i_tag == j_tag:
+        raise BridgeError(
+            f"{cls} node-pair endpoints both resolve to node {i_tag} — a "
+            f"zeroLength-family element needs two DISTINCT nodes (OpenSees "
+            f"would otherwise assemble a singular element silently)."
+        )
+    return i_tag, j_tag
+
+
+def expand_spec_to_elements(
+    fem: "FEMData", spec: Element,
+) -> list[tuple[int, tuple[int, ...]]]:
+    """Unified element-spec fan-out: PG form OR node-pair form (ADR 0049).
+
+    * ``spec.pg is not None`` → fan across the physical group
+      (:func:`expand_pg_to_elements`).
+    * ``spec.pg is None`` (node-pair form) → a single synthetic element
+      ``(MISSING_FEM_ELEMENT_ID, (i_tag, j_tag))`` from the resolved
+      ``nodes=`` endpoints.  The sentinel fem-eid marks "no backing gmsh
+      cell" — it carries through to the emitter so the H5 record stores the
+      connectivity inline (no neutral-mesh cell to source it from).
+
+    Branches on ``pg is not None`` by **identity** (never truthiness): an
+    empty-string pg is still a PG form, and ``pg=None`` must route
+    exclusively to the node-pair path (never to
+    ``expand_pg_to_elements``, which would select the whole mesh).
+    """
+    pg = getattr(spec, "pg", None)
+    if pg is not None:
+        return expand_pg_to_elements(fem, pg)
+    i_tag, j_tag = resolve_element_node_pair(fem, spec)
+    return [(MISSING_FEM_ELEMENT_ID, (i_tag, j_tag))]
 
 
 def expand_pg_to_nodes(fem: "FEMData", pg: str) -> tuple[int, ...]:
@@ -3091,7 +3224,9 @@ def allocate_element_tags(
     plan: list[tuple[Element, list[tuple[int, tuple[int, ...], int]]]] = []
     for spec in elements:
         sub: list[tuple[int, tuple[int, ...], int]] = []
-        for eid, conn in expand_pg_to_elements(fem, spec.pg):  # type: ignore[attr-defined]
+        # ADR 0049: node-pair spec (pg=None) -> single synthetic element
+        # (MISSING_FEM_ELEMENT_ID, (i, j)) via expand_spec_to_elements.
+        for eid, conn in expand_spec_to_elements(fem, spec):
             ele_tag = tags.allocate("element")
             sub.append((int(eid), tuple(int(n) for n in conn), int(ele_tag)))
         plan.append((spec, sub))
@@ -3160,7 +3295,13 @@ def compute_stage_ownership(
         owner_idx = pg_owner.get(spec_pg) if spec_pg else None
         if owner_idx is not None:
             element_owner[id(spec)] = owner_idx
-        for _eid, conn in expand_pg_to_elements(fem, spec_pg):
+        # ADR 0049: a node-pair spec (spec_pg is None) has owner_idx None, so
+        # its two endpoints land in ``global_nodes`` below — forcing a shared
+        # endpoint global so no stage can steal it (which would emit the node
+        # inside a later stage block, after the global node-pair element that
+        # references it -> forward-reference crash).  Node-pair is global-only
+        # in v1.
+        for _eid, conn in expand_spec_to_elements(fem, spec):
             for node_id in conn:
                 if owner_idx is None:
                     global_nodes.add(int(node_id))

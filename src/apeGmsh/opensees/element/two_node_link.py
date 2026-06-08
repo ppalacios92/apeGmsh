@@ -42,7 +42,7 @@ from .._internal.types import (
     Primitive,
     UniaxialMaterial,
 )
-from .zero_length import ZeroLengthMatDir
+from .zero_length import NodeRef, ZeroLengthMatDir, _validate_pg_xor_nodes
 
 if TYPE_CHECKING:
     from ..emitter.base import Emitter
@@ -59,7 +59,11 @@ class TwoNodeLink(Element):
     ----------
     pg
         Physical-group label whose 2-node "line" entries receive this
-        spec.
+        spec.  Mutually exclusive with ``nodes``.
+    nodes
+        Node-pair form (ADR 0049): ``(node_i, node_j)`` of :data:`NodeRef`
+        endpoints, wiring a single link directly without a meshed line.
+        Mutually exclusive with ``pg``.
     mat_dirs
         Tuple of :class:`ZeroLengthMatDir` value objects (reused from
         the ZeroLength family), each binding a uniaxial material to one
@@ -86,8 +90,9 @@ class TwoNodeLink(Element):
         nodes, translational DOFs only. ``None`` omits the flag (mass 0).
     """
 
-    pg: str
-    mat_dirs: tuple[ZeroLengthMatDir, ...]
+    pg: str | None = None
+    nodes: tuple[NodeRef, NodeRef] | None = None
+    mat_dirs: tuple[ZeroLengthMatDir, ...] = ()
     orient: tuple[float, ...] | None = None
     p_delta: tuple[float, ...] | None = None
     shear_dist: tuple[float, ...] | None = None
@@ -95,6 +100,7 @@ class TwoNodeLink(Element):
     mass: float | None = None
 
     def __post_init__(self) -> None:
+        _validate_pg_xor_nodes("TwoNodeLink", self.pg, self.nodes)
         if not self.mat_dirs:
             raise ValueError(
                 "TwoNodeLink: at least one (material, dof) pair required."
