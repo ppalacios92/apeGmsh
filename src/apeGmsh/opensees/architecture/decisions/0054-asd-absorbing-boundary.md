@@ -193,7 +193,16 @@ flip idiom; per-partition flip is the real idiom, not merely a deferral).
   slabs synced-before-weld or interface nodes duplicate). The naive per-quad-
   extrusion is wrong (leaves edge gaps; STKO has `LF`/`BLF` cells) — see
   [the AB-1 plan](../../../../../internal_docs/plan_absorbing_skin_ab1.md).
-  **AB-1c** (rotation / layered-Z / graded skin) remains.
+- **AB-1c (layered slice):** ✅ **DONE.** Stratified soil + per-layer material on
+  both entry points: `add_plane_wave_box(z=[(d,n),…])` and
+  `add_absorbing_shell(box=…, layers=[(d,n),…])` split the soil + lateral skin per
+  layer (base skin on the bottom layer); `AbsorbingSkinResult` gains `n_layers` /
+  `soil_pgs` / `skin_pgs_by_layer` (single-layer output byte-identical), and
+  `ops.element.absorbing_boundary(materials=[m0,m1,…])` fans one derived `G/v/ρ`
+  per layer (STKO adjacent-element rule). Layering lives in the shared
+  `_tag_and_structure` (per `(btype, layer)`) + `_layered_axis_z`; the BYO weld
+  slices the box at layer interfaces first. **Rotation / grading / per-axis
+  thickness remain** (rest of AB-1c).
 - **AB-2 (bridge):** ✅ **DONE.** `ASDAbsorbingBoundary3D` frozen `Element`
   (`opensees/element/absorbing.py`) — raw `G/v/rho`, fixed `btype` (illegal/
   opposite/repeated letters rejected), optional `-fx/-fy/-fz` guarded to bottom

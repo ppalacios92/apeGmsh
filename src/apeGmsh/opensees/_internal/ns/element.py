@@ -552,17 +552,29 @@ class _ElementNS(_BridgeNamespace):
         G: float | None = None,
         v: float | None = None,
         rho: float | None = None,
+        materials: "list[ElasticIsotropic | str] | None" = None,
         base_series: TimeSeries | str | None = None,
         base_dirs: tuple[str, ...] = ("x",),
     ) -> list[ASDAbsorbingBoundary3D]:
         """Emit ``ASDAbsorbingBoundary3D`` over every btype of a plane-wave skin.
 
-        One declaration per ``skin.skin_pgs`` entry (each with its fixed btype);
-        ``base_series`` is attached as ``-fx/-fy/-fz`` (per ``base_dirs``) to
-        every bottom (``B``-containing) skin PG only.  Returns the registered
-        specs.
+        For a **homogeneous** skin, pass a single ``material=`` (or raw
+        ``G/v/rho``): one declaration per ``skin.skin_pgs`` entry (each with its
+        fixed btype).  For a **stratified** skin (built with ``z=[...]`` /
+        ``layers=``), pass ``materials=[m0, m1, …]`` — one per layer, top → bottom,
+        ``len(materials) == skin.n_layers`` — and each layer's skin cells get that
+        layer's derived ``G/v/rho`` (the base skin takes the bottom layer's
+        material).  ``base_series`` is attached as ``-fx/-fy/-fz`` (per
+        ``base_dirs``) to every bottom (``B``-containing) skin PG only.  Returns
+        the registered specs.
         """
-        Gval, vval, rhoval = self._absorbing_props(material, G, v, rho)
+        if materials is not None and (
+            material is not None or G is not None or v is not None or rho is not None
+        ):
+            raise ValueError(
+                "absorbing_boundary: pass either materials= (per-layer) or a "
+                "single material=/G/v/rho, not both."
+            )
         series = (
             self._bridge._resolve(base_series, base=TimeSeries)
             if base_series is not None else None
@@ -574,19 +586,35 @@ class _ElementNS(_BridgeNamespace):
                     f"absorbing_boundary: base_dirs entries must be "
                     f"'x'/'y'/'z', got {d!r}."
                 )
-        out: list[ASDAbsorbingBoundary3D] = []
-        for btype, pg in skin.skin_pgs.items():
+
+        def _emit(pg: str, btype: str, gv: float, vv: float, rv: float):
             bottom = "B" in btype and series is not None
-            out.append(
-                self._bridge._register(
-                    ASDAbsorbingBoundary3D(
-                        pg=pg, G=Gval, v=vval, rho=rhoval, btype=btype,
-                        fx=series if (bottom and "x" in dirs) else None,
-                        fy=series if (bottom and "y" in dirs) else None,
-                        fz=series if (bottom and "z" in dirs) else None,
-                    )
+            return self._bridge._register(
+                ASDAbsorbingBoundary3D(
+                    pg=pg, G=gv, v=vv, rho=rv, btype=btype,
+                    fx=series if (bottom and "x" in dirs) else None,
+                    fy=series if (bottom and "y" in dirs) else None,
+                    fz=series if (bottom and "z" in dirs) else None,
                 )
             )
+
+        out: list[ASDAbsorbingBoundary3D] = []
+        if materials is not None:
+            if len(materials) != skin.n_layers:
+                raise ValueError(
+                    f"absorbing_boundary: materials has {len(materials)} entries "
+                    f"but the skin has {skin.n_layers} layer(s); pass one material "
+                    "per layer, top → bottom."
+                )
+            props = [self._absorbing_props(m, None, None, None) for m in materials]
+            for layer, by_btype in skin.skin_pgs_by_layer.items():
+                gv, vv, rv = props[layer]
+                for btype, pg in by_btype.items():
+                    out.append(_emit(pg, btype, gv, vv, rv))
+        else:
+            Gval, vval, rhoval = self._absorbing_props(material, G, v, rho)
+            for btype, pg in skin.skin_pgs.items():
+                out.append(_emit(pg, btype, Gval, vval, rhoval))
         return out
 
     def FourNodeQuad(

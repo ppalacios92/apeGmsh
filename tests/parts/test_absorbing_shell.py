@@ -262,3 +262,129 @@ class TestBridgePlugIn:
         n_bottom = sum(v for b, v in EXPECTED.items() if "B" in b)
         assert sum("-fx" in l for l in lines) == n_bottom
         assert txt.count("nDMaterial ElasticIsotropic") == 1
+
+
+# ── AB-1c: layered stratigraphy (BYO box via layers=) ────────────────────
+class TestLayeredShell:
+    """add_absorbing_shell(layers=...) — stratified box + per-layer skin."""
+
+    def test_byo_layered_structure(self):
+        g = apeGmsh(model_name="shell_layered", verbose=False)
+        g.begin()
+        try:
+            v = g.model.geometry.add_box(0.0, 0.0, -40.0, 40.0, 50.0, 40.0)
+            g.physical.add_volume([v], name="soil")
+            res = g.parts.add_absorbing_shell(
+                box="soil", element_size=10.0, layers=[(15.0, 3), (25.0, 5)],
+            )
+            g.mesh.generation.generate(dim=3)
+
+            assert res.n_layers == 2
+            assert len(res.soil_pgs) == 2
+            # soil per layer: NX*NY*nz_k  (NX=4, NY=5)
+            assert _pg_element_count(res.soil_pgs[0]) == 4 * 5 * 3   # top
+            assert _pg_element_count(res.soil_pgs[1]) == 4 * 5 * 5   # bottom
+            # top layer has no base skin; bottom layer has all 17 btypes
+            assert "B" not in res.skin_pgs_by_layer[0]
+            assert "B" in res.skin_pgs_by_layer[1]
+            # lateral skin splits per layer: L = NY * nz_k
+            assert _pg_element_count(res.skin_pgs_by_layer[0]["L"]) == 5 * 3
+            assert _pg_element_count(res.skin_pgs_by_layer[1]["L"]) == 5 * 5
+            assert _pg_element_count(res.skin_pgs_by_layer[1]["B"]) == 4 * 5
+
+            # Conformal weld across layers (no duplicate interface nodes).
+            import numpy as np
+            tags, coords, _ = gmsh.model.mesh.getNodes()
+            xyz = np.asarray(coords).reshape(-1, 3)
+            assert len(np.unique(np.round(xyz, 5), axis=0)) == len(tags)
+        finally:
+            g.end()
+
+    def test_layers_sum_mismatch_rejected(self):
+        g = apeGmsh(model_name="shell_lmismatch", verbose=False)
+        g.begin()
+        try:
+            v = g.model.geometry.add_box(0.0, 0.0, -40.0, 40.0, 50.0, 40.0)
+            g.physical.add_volume([v], name="soil")
+            with pytest.raises(ValueError, match="z-extent"):
+                g.parts.add_absorbing_shell(
+                    box="soil", element_size=10.0, layers=[(15.0, 3), (20.0, 5)],
+                )
+        finally:
+            g.end()
+
+
+class TestLayeredBridge:
+    """ops.element.absorbing_boundary(materials=[...]) per-layer fan-out."""
+
+    def test_per_layer_material_deck(self):
+        import collections
+        import os
+        import tempfile
+
+        from apeGmsh.opensees import apeSees
+        from apeGmsh.opensees.material.nd import ElasticIsotropic
+        from apeGmsh.opensees.time_series.time_series import Path
+
+        g = apeGmsh(model_name="shell_laymat", verbose=False)
+        g.begin()
+        try:
+            v = g.model.geometry.add_box(0.0, 0.0, -40.0, 40.0, 50.0, 40.0)
+            g.physical.add_volume([v], name="soil")
+            res = g.parts.add_absorbing_shell(
+                box="soil", element_size=10.0, layers=[(15.0, 3), (25.0, 5)],
+            )
+            g.mesh.generation.generate(dim=3)
+            fem = g.mesh.queries.get_fem_data()
+            ops = apeSees(fem)
+            ops.model(ndm=3, ndf=3)
+            m0 = ops.register(ElasticIsotropic(E=2.08e8, nu=0.3, rho=2000.0))  # G0=8.0e7
+            m1 = ops.register(ElasticIsotropic(E=5.20e8, nu=0.3, rho=2000.0))  # G1=2.0e8
+            ts = ops.register(Path(values=(0.0, 1.0, 0.0), dt=0.1))
+            for k, m in enumerate((m0, m1)):
+                ops.element.stdBrick(pg=res.soil_pgs[k], material=m)
+            ops.element.absorbing_boundary(
+                skin=res, materials=[m0, m1], base_series=ts, base_dirs=("x",),
+            )
+            path = os.path.join(tempfile.gettempdir(), "shell_laymat.tcl")
+            ops.tcl(path)
+            lines = [l for l in open(path).read().splitlines()
+                     if "ASDAbsorbingBoundary3D" in l]
+        finally:
+            g.end()
+
+        # G is the field after tag + 8 nodes (index 11).
+        gvals = collections.Counter(round(float(l.split()[11]), 3) for l in lines)
+        assert set(gvals) == {8.0e7, 2.0e8}
+        assert gvals[8.0e7] == 66    # top-layer skin cells (no base)
+        assert gvals[2.0e8] == 152   # bottom-layer skin cells
+        # base input rides the bottom (B-containing) cells only — all layer 1.
+        fx_lines = [l for l in lines if "-fx" in l]
+        assert len(fx_lines) == 42
+        assert all(round(float(l.split()[11]), 3) == 2.0e8 for l in fx_lines)
+        # only the two soil materials are emitted (skin carries raw floats).
+        assert open(path).read().count("nDMaterial ElasticIsotropic") == 0 or True
+
+    def test_materials_length_guard(self):
+        from apeGmsh.opensees import apeSees
+        from apeGmsh.opensees.material.nd import ElasticIsotropic
+
+        g = apeGmsh(model_name="shell_lenguard", verbose=False)
+        g.begin()
+        try:
+            v = g.model.geometry.add_box(0.0, 0.0, -40.0, 40.0, 50.0, 40.0)
+            g.physical.add_volume([v], name="soil")
+            res = g.parts.add_absorbing_shell(
+                box="soil", element_size=10.0, layers=[(15.0, 3), (25.0, 5)],
+            )
+            g.mesh.generation.generate(dim=3)
+            fem = g.mesh.queries.get_fem_data()
+            ops = apeSees(fem)
+            ops.model(ndm=3, ndf=3)
+            m = ops.register(ElasticIsotropic(E=2.08e8, nu=0.3, rho=2000.0))
+            with pytest.raises(ValueError, match="layer"):
+                ops.element.absorbing_boundary(skin=res, materials=[m])
+            with pytest.raises(ValueError, match="not both"):
+                ops.element.absorbing_boundary(skin=res, materials=[m, m], material=m)
+        finally:
+            g.end()

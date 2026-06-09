@@ -265,14 +265,12 @@ class TestGuards:
         finally:
             g.end()
 
-    def test_layered_z_rejected(self):
-        g = apeGmsh(model_name="pwb_layer", verbose=False)
+    def test_empty_layer_list_rejected(self):
+        g = apeGmsh(model_name="pwb_emptylayer", verbose=False)
         g.begin()
         try:
-            with pytest.raises(NotImplementedError, match="layered Z"):
-                g.parts.add_plane_wave_box(
-                    x=(40.0, 4), y=(50.0, 5), z=[(15.0, 2), (15.0, 1)],
-                )
+            with pytest.raises(ValueError, match="layer list cannot be empty"):
+                g.parts.add_plane_wave_box(x=(40.0, 4), y=(50.0, 5), z=[])
         finally:
             g.end()
 
@@ -291,5 +289,39 @@ class TestGuards:
         try:
             with pytest.raises(ValueError, match="n_elements"):
                 g.parts.add_plane_wave_box(x=(40.0, 0), y=(50.0, 5), z=(30.0, 3))
+        finally:
+            g.end()
+
+
+# ── AB-1c: layered stratigraphy via the turnkey z-list ───────────────────
+class TestLayeredPlaneWaveBox:
+    def test_turnkey_layered_structure(self):
+        g = apeGmsh(model_name="pwb_layered", verbose=False)
+        g.begin()
+        try:
+            res = g.parts.add_plane_wave_box(
+                x=(40.0, 4), y=(50.0, 5), z=[(15.0, 3), (25.0, 5)],
+            )
+            g.mesh.generation.generate(dim=3)
+
+            assert res.n_layers == 2
+            assert len(res.soil_pgs) == 2
+            assert _pg_element_count(res.soil_pgs[0]) == 4 * 5 * 3   # top
+            assert _pg_element_count(res.soil_pgs[1]) == 4 * 5 * 5   # bottom
+            # base skin only in the bottom layer
+            assert "B" not in res.skin_pgs_by_layer[0]
+            assert "B" in res.skin_pgs_by_layer[1]
+            # lateral skin splits per layer: L = NY * nz_k
+            assert _pg_element_count(res.skin_pgs_by_layer[0]["L"]) == 5 * 3
+            assert _pg_element_count(res.skin_pgs_by_layer[1]["L"]) == 5 * 5
+            # per-btype roll-up spans both layers
+            assert _pg_element_count(res.skin_pgs["L"]) == 5 * 3 + 5 * 5
+            # free surface = top of the top layer (NX*NY quads)
+            assert _pg_element_count(res.free_surface_pg, dim=2) == 4 * 5
+
+            import numpy as np
+            tags, coords, _ = gmsh.model.mesh.getNodes()
+            xyz = np.asarray(coords).reshape(-1, 3)
+            assert len(np.unique(np.round(xyz, 5), axis=0)) == len(tags)
         finally:
             g.end()

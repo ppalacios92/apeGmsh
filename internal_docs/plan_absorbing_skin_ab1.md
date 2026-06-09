@@ -229,10 +229,15 @@ class AbsorbingSkinResult:
   soil-PG handling, guards, bridge deck plug-in); full `tests/parts` 72/72.
   Live-smoke run is byte-identical to the AB-4 example (arrival 0.198 s, late/peak
   0.93 %) → drop-in for AB-2/AB-3.
-- **AB-1c** — `center` + `rotation_z` via local-frame classification (refuse other
-  rotations); **layered-Z stratigraphy** (`z: list[...]` + per-layer `material`);
-  grading + aspect-ratio warning (generous threshold — STKO ships ~2:1 bottom);
-  per-axis `skin_thickness`.
+- **AB-1c** — **layered-Z stratigraphy ✅ DONE** (both entry points: turnkey
+  `z=[(d,n),…]` and BYO `layers=[(d,n),…]`; per-layer soil + lateral skin PGs,
+  `AbsorbingSkinResult.n_layers/soil_pgs/skin_pgs_by_layer`, bridge
+  `absorbing_boundary(materials=[…])` per-layer `G/v/ρ`; layering in the shared
+  `_tag_and_structure` + `_layered_axis_z`, BYO weld slices the box at layer
+  interfaces; single-layer byte-identical; tests in both `tests/parts` files; live
+  2-layer transient solves). **Still REMAINING in AB-1c:** `center` + `rotation_z`
+  via local-frame classification (refuse other rotations); grading + aspect-ratio
+  warning (generous threshold — STKO ships ~2:1 bottom); per-axis `skin_thickness`.
 - (deferred) — post-mesh surgery path for wrapping an arbitrary/foreign mesh;
   3-component/oblique base input (`base_series: dict[dir, TimeSeries]`).
 

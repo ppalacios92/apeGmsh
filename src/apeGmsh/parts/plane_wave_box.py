@@ -64,6 +64,18 @@ class AbsorbingSkinResult:
     center: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_z: float = 0.0
     """Applied rotation about +Z, in radians (always 0.0 in AB-1a)."""
+    n_layers: int = 1
+    """Number of soil layers (1 = homogeneous).  Layers are ordered top → bottom,
+    index 0 = top (free surface)."""
+    soil_pgs: tuple[str, ...] = ()
+    """Per-layer soil PG names, top → bottom (index 0 = top).  For a homogeneous
+    box this is ``(soil_pg,)``.  Emit one ``stdBrick`` per entry with that layer's
+    material."""
+    skin_pgs_by_layer: dict[int, dict[str, str]] = field(default_factory=dict)
+    """``layer -> {btype -> PG name}`` for the per-layer skin regions.  For a
+    homogeneous box this is ``{0: skin_pgs}``.  The bridge fans one
+    ``ASDAbsorbingBoundary3D`` per entry with that layer's material when
+    ``absorbing_boundary(materials=...)`` is used."""
 
 
 def _btype_for(rx: str, ry: str, rz: str) -> str:
@@ -150,24 +162,75 @@ def _resolve_active_faces(faces) -> set[str]:
     return active
 
 
+def _is_soil_region(region: str) -> bool:
+    """True for a soil region (``"soil"`` or ``"soil_<k>"``), False for a face."""
+    return region not in _ALL_FACES
+
+
+def _layer_of(rz: str, n_layers: int) -> int:
+    """Layer index of a cell from its z-region (top → bottom, 0 = top).
+
+    The base skin (``rz == "B"``) belongs to the **bottom** layer — STKO gives
+    each absorbing element its adjacent soil element's properties.
+    """
+    if rz == "B":
+        return n_layers - 1
+    if rz.startswith("soil_"):
+        return int(rz[5:])
+    return 0  # "soil" — homogeneous
+
+
+def _layered_axis_z(
+    ztop: float,
+    layers: list[tuple[float, int]],
+    tz: float,
+    b_active: bool,
+) -> Axis1D:
+    """Z-axis from a top-down ``[(depth, n), ...]`` stack + optional base skin.
+
+    Regions increase in z: ``B`` (if active), then the soil layers deepest-first.
+    A single layer is named ``"soil"`` (byte-identical to the homogeneous case);
+    multiple layers are ``"soil_0"`` (top) … ``"soil_{N-1}"`` (bottom).
+    """
+    depths = [float(d) for d, _ in layers]
+    counts = [int(n) for _, n in layers]
+    n_layers = len(layers)
+    bounds = [ztop]
+    acc = ztop
+    for d in depths:
+        acc -= d
+        bounds.append(acc)            # bounds[k] = top of layer k, bounds[k+1] = its bottom
+    zbot = bounds[-1]
+
+    segs: list[tuple[str, float, float, int]] = []
+    if b_active:
+        segs.append(("B", zbot - tz, zbot, 1))
+    for k in range(n_layers - 1, -1, -1):   # deepest first (increasing z)
+        region = "soil" if n_layers == 1 else f"soil_{k}"
+        segs.append((region, bounds[k + 1], bounds[k], counts[k]))
+    return Axis1D("z", tuple(segs))
+
+
 def _axes_from_extent(
     extent: tuple[float, float, float, float, float, float],
     sizes: tuple[float, float, float],
     thick: tuple[float, float, float],
     active: set[str],
+    layers: list[tuple[float, int]] | None = None,
 ) -> tuple[Axis1D, Axis1D, Axis1D]:
     """Three world-frame :class:`Axis1D` from a box AABB + element size + skin.
 
     Soil-segment counts are ``max(1, round(length / size))``; each outer skin
     segment is one element thick.  Outer segments are emitted only for active
-    faces; the +Z top is never shelled.
+    faces; the +Z top is never shelled.  When ``layers`` is given the z-axis is
+    stratified (one ``soil_<k>`` segment per layer); otherwise a single ``soil``
+    segment sized by ``sz``.
     """
     xmin, ymin, zmin, xmax, ymax, zmax = extent
     sx, sy, sz = sizes
     tx, ty, tz = thick
     nx = max(1, round((xmax - xmin) / sx))
     ny = max(1, round((ymax - ymin) / sy))
-    nz = max(1, round((zmax - zmin) / sz))
 
     x_segs: list[tuple[str, float, float, int]] = []
     if "L" in active:
@@ -183,15 +246,15 @@ def _axes_from_extent(
     if "K" in active:
         y_segs.append(("K", ymax, ymax + ty, 1))
 
-    z_segs: list[tuple[str, float, float, int]] = []
-    if "B" in active:
-        z_segs.append(("B", zmin - tz, zmin, 1))
-    z_segs.append(("soil", zmin, zmax, nz))
+    z_layers = layers if layers is not None else [
+        (zmax - zmin, max(1, round((zmax - zmin) / sz))),
+    ]
+    axis_z = _layered_axis_z(zmax, z_layers, tz, b_active="B" in active)
 
     return (
         Axis1D("x", tuple(x_segs)),
         Axis1D("y", tuple(y_segs)),
-        Axis1D("z", tuple(z_segs)),
+        axis_z,
     )
 
 
@@ -221,18 +284,24 @@ def _tag_and_structure(
     ``z = axis_z.hi`` (no skin sits above it).
     """
     queries = session.model.queries
-    soil_vols: list[int] = []
-    by_btype: dict[str, list[int]] = {}
+    n_layers = sum(
+        1 for seg in axis_z.segments if _is_soil_region(seg[0])
+    )
+
+    # ── Classify each sub-volume by (layer, btype) ──────────────────
+    soil_by_layer: dict[int, list[int]] = {}
+    skin_by_layer: dict[int, dict[str, list[int]]] = {}
     per_vol_counts: list[tuple[int, int, int, int]] = []
 
     for vtag in vols:
         lx, ly, lz = to_local(queries.center_of_mass(int(vtag), dim=3))
         rx, ry, rz = axis_x.region_of(lx), axis_y.region_of(ly), axis_z.region_of(lz)
         btype = _btype_for(rx, ry, rz)
+        layer = _layer_of(rz, n_layers)
         if btype:
-            by_btype.setdefault(btype, []).append(int(vtag))
+            skin_by_layer.setdefault(layer, {}).setdefault(btype, []).append(int(vtag))
         else:
-            soil_vols.append(int(vtag))
+            soil_by_layer.setdefault(layer, []).append(int(vtag))
         per_vol_counts.append((
             int(vtag),
             axis_x.count_for(lx), axis_y.count_for(ly), axis_z.count_for(lz),
@@ -246,21 +315,52 @@ def _tag_and_structure(
         return f"{prefix}{base}"
 
     physical = session.physical
+
+    # ── Soil PGs — per layer (+ all-soil roll-up when stratified) ───
+    soil_pgs: list[str] = []
+    all_soil_vols: list[int] = []
+    for k in range(n_layers):
+        kv = soil_by_layer.get(k, [])
+        all_soil_vols.extend(kv)
+        if n_layers == 1 and soil_pg_name is not None:
+            soil_pgs.append(soil_pg_name)   # caller's box already carries the PG
+            continue
+        nm = pg_name("soil") if n_layers == 1 else pg_name(f"soil_layer{k}")
+        soil_pgs.append(nm)
+        if kv:
+            physical.add(3, kv, name=nm)
     if soil_pg_name is not None:
-        soil_pg = soil_pg_name              # caller's box already carries this PG
+        soil_pg = soil_pg_name              # box PG already spans all soil layers
+    elif n_layers == 1:
+        soil_pg = soil_pgs[0]
     else:
         soil_pg = pg_name("soil")
-        if soil_vols:
-            physical.add(3, soil_vols, name=soil_pg)
+        if all_soil_vols:
+            physical.add(3, all_soil_vols, name=soil_pg)
+
+    # ── Skin PGs — per (layer, btype), per-btype roll-up, global roll-up ─
+    skin_pgs_by_layer: dict[int, dict[str, str]] = {}
+    by_btype_vols: dict[str, list[int]] = {}
+    all_skin_vols: list[int] = []
+    for k in range(n_layers):
+        lb = skin_by_layer.get(k, {})
+        for btype in sorted(lb, key=lambda b: (len(b), b)):
+            bvols = lb[btype]
+            nm = (pg_name(f"absorbing_{btype}") if n_layers == 1
+                  else pg_name(f"absorbing_{btype}_layer{k}"))
+            physical.add(3, bvols, name=nm)
+            skin_pgs_by_layer.setdefault(k, {})[btype] = nm
+            by_btype_vols.setdefault(btype, []).extend(bvols)
+            all_skin_vols.extend(bvols)
 
     skin_pgs: dict[str, str] = {}
-    all_skin_vols: list[int] = []
-    for btype in sorted(by_btype, key=lambda b: (len(b), b)):
-        bvols = by_btype[btype]
-        nm = pg_name(f"absorbing_{btype}")
-        physical.add(3, bvols, name=nm)
-        skin_pgs[btype] = nm
-        all_skin_vols.extend(bvols)
+    for btype in sorted(by_btype_vols, key=lambda b: (len(b), b)):
+        if n_layers == 1:
+            skin_pgs[btype] = skin_pgs_by_layer[0][btype]   # the only PG; no roll-up
+        else:
+            nm = pg_name(f"absorbing_{btype}")
+            physical.add(3, by_btype_vols[btype], name=nm)
+            skin_pgs[btype] = nm
 
     skin_all_pg = pg_name("absorbing")
     if all_skin_vols:
@@ -281,8 +381,8 @@ def _tag_and_structure(
         if abs(lz - top) > z_tol:
             continue
         try:  # faces from unrelated geometry fall outside this box's axes
-            in_soil = (axis_x.region_of(lx) == "soil"
-                       and axis_y.region_of(ly) == "soil")
+            in_soil = (_is_soil_region(axis_x.region_of(lx))
+                       and _is_soil_region(axis_y.region_of(ly)))
         except ValueError:
             continue
         if in_soil:
@@ -310,6 +410,9 @@ def _tag_and_structure(
         axes={"x": axis_x, "y": axis_y, "z": axis_z},
         center=center,
         rotation_z=0.0,
+        n_layers=n_layers,
+        soil_pgs=tuple(soil_pgs),
+        skin_pgs_by_layer=skin_pgs_by_layer,
     )
 
 
@@ -332,12 +435,7 @@ def build_plane_wave_box(
     contract.  AB-1a scope: axis-aligned (``rotation_z_deg == 0``), single soil
     segment per axis (layered Z is AB-1c).
     """
-    # ── Fail-loud guards (AB-1a scope) ──────────────────────────────
-    if isinstance(z, list):
-        raise NotImplementedError(
-            "add_plane_wave_box: layered Z (stratigraphy) is AB-1c; pass a "
-            "single (depth, n_elements) tuple for z."
-        )
+    # ── Fail-loud guards ────────────────────────────────────────────
     if abs(float(rotation_z_deg)) > 1e-15:
         raise NotImplementedError(
             "add_plane_wave_box: rotation is AB-1c; rotation_z_deg must be 0.0."
@@ -345,11 +443,20 @@ def build_plane_wave_box(
 
     Lx, nx = _as_size_count(x, "x")
     Ly, ny = _as_size_count(y, "y")
-    Lz, nz = _as_size_count(z, "z")
+    # z is a single (depth, n) tuple OR a top→bottom list of layers (stratigraphy).
+    if isinstance(z, list):
+        if not z:
+            raise ValueError("add_plane_wave_box: z layer list cannot be empty.")
+        layers = [_as_size_count(seg, f"z[{i}]") for i, seg in enumerate(z)]
+    else:
+        layers = [_as_size_count(z, "z")]
+    Lz = sum(d for d, _ in layers)
+    d_bottom, n_bottom = layers[-1]
 
-    # Skin thickness per axis — default = adjacent soil element size.
+    # Skin thickness per axis — default = adjacent soil element size (the base
+    # skin is adjacent to the bottom layer, so tz defaults to its element size).
     if skin_thickness is None:
-        tx, ty, tz = Lx / nx, Ly / ny, Lz / nz
+        tx, ty, tz = Lx / nx, Ly / ny, d_bottom / n_bottom
     elif isinstance(skin_thickness, (int, float)):
         tx = ty = tz = float(skin_thickness)
     else:
@@ -377,10 +484,7 @@ def build_plane_wave_box(
         ("soil", -Ly / 2, Ly / 2, ny),
         ("K", Ly / 2, Ly / 2 + ty, 1),
     ))
-    axis_z = Axis1D("z", (
-        ("B", -Lz - tz, -Lz, 1),
-        ("soil", -Lz, 0.0, nz),
-    ))
+    axis_z = _layered_axis_z(0.0, layers, tz, b_active=True)
 
     cx, cy, cz = (float(v) for v in center)
 
@@ -438,6 +542,7 @@ def build_absorbing_shell(
     element_size,
     skin_thickness=None,
     faces=None,
+    layers: list[tuple[float, int]] | None = None,
     name: str | None = None,
     names: dict[str, str] | None = None,
     apply_transfinite: bool = True,
@@ -445,12 +550,13 @@ def build_absorbing_shell(
     """Weld a one-element absorbing skin onto a user's existing soil box.
 
     See ``g.parts.add_absorbing_shell`` for the user-facing contract (ADR 0054,
-    AB-1b).  AB-1b scope: ``box`` resolves to a single axis-aligned *rectangular*
+    AB-1b/AB-1c).  ``box`` resolves to a single axis-aligned *rectangular*
     volume; the skin discretization is **size-based** and (re)applied to box +
     skin after the weld — gmsh cannot report transfinite counts back and the
     ``fragment`` renumbers entities, so the box's prior mesh state is irrelevant
-    (this call makes it structured).  ``rotation`` / layered-Z / graded skins are
-    AB-1c.
+    (this call makes it structured).  ``layers`` (top→bottom ``[(depth, n), …]``,
+    summing to the box's z-extent) stratifies the box + lateral skin per layer
+    (AB-1c).  ``rotation`` / graded skins remain deferred.
     """
     from apeGmsh.core._helpers import resolve_to_dimtags
 
@@ -460,7 +566,7 @@ def build_absorbing_shell(
     if len(box_vols) != 1:
         raise ValueError(
             f"add_absorbing_shell: box must resolve to exactly one dim-3 "
-            f"volume, got {len(box_vols)} ({box!r}).  AB-1b wraps a single "
+            f"volume, got {len(box_vols)} ({box!r}).  It wraps a single "
             "axis-aligned rectangular soil box."
         )
     box_vol = box_vols[0]
@@ -474,8 +580,7 @@ def build_absorbing_shell(
         raise ValueError(
             "add_absorbing_shell: box is not an axis-aligned rectangular "
             f"block (volume {mass:.6g} != bounding-box product {aabb:.6g}).  "
-            "AB-1b requires a rectangular box; rotated / curved geometry is "
-            "AB-1c."
+            "It requires a rectangular box; rotated / curved geometry is AB-1c."
         )
 
     sizes = _as_xyz(element_size, "add_absorbing_shell: element_size")
@@ -485,34 +590,67 @@ def build_absorbing_shell(
     )
     active = _resolve_active_faces(faces)
 
+    # ── Validate layered stratigraphy against the box's z-extent ─────
+    if layers is not None:
+        layers = [_as_size_count(seg, f"layers[{i}]") for i, seg in enumerate(layers)]
+        if not layers:
+            raise ValueError("add_absorbing_shell: layers cannot be empty.")
+        total = sum(d for d, _ in layers)
+        if abs(total - (zmax - zmin)) > 1e-6 * max(zmax - zmin, 1.0):
+            raise ValueError(
+                f"add_absorbing_shell: layers depths sum to {total:.6g}, which "
+                f"does not match the box z-extent {zmax - zmin:.6g}."
+            )
+
     axis_x, axis_y, axis_z = _axes_from_extent(
-        (xmin, ymin, zmin, xmax, ymax, zmax), sizes, thick, active,
+        (xmin, ymin, zmin, xmax, ymax, zmax), sizes, thick, active, layers=layers,
     )
 
-    # ── Build the skin slabs (every grid cell except the soil interior) ─
-    # The slabs MUST be synchronised before the weld: fragmenting a
-    # synced box against unsynced slabs leaves coincident-but-separate
-    # faces (duplicate interface nodes ⇒ a disconnected, singular model).
     geom = session.model.geometry
+    tolb = 1e-6 * max(xmax - xmin, ymax - ymin, zmax - zmin)
+
+    def _soil_region_vols() -> list[int]:
+        """Current volumes inside the box AABB (the soil; slabs are outside)."""
+        out: list[int] = []
+        for _d, vt in gmsh.model.getEntities(3):
+            cx_, cy_, cz_ = queries.center_of_mass(int(vt), dim=3)
+            if (xmin - tolb <= cx_ <= xmax + tolb
+                    and ymin - tolb <= cy_ <= ymax + tolb
+                    and zmin - tolb <= cz_ <= zmax + tolb):
+                out.append(int(vt))
+        return out
+
+    # ── Stratify: slice the box at the interior layer interfaces ─────
+    if layers is not None and len(layers) > 1:
+        acc = zmax
+        for d, _n in layers[:-1]:
+            acc -= d                       # interface z, strictly inside (zmin, zmax)
+            geom.slice(target=_soil_region_vols(), axis="z", offset=float(acc))
+
+    box_now = _soil_region_vols()          # the (possibly sliced) soil volumes
+
+    # ── Build the skin slabs (every grid cell that is a skin cell) ───
+    # The slabs MUST be synchronised before the weld: fragmenting a synced box
+    # against unsynced slabs leaves coincident-but-separate faces (duplicate
+    # interface nodes ⇒ a disconnected, singular model).
     slab_vols: list[int] = []
     for rx, xlo, xhi, _cx in axis_x.segments:
         for ry, ylo, yhi, _cy in axis_y.segments:
             for rz, zlo, zhi, _cz in axis_z.segments:
-                if rx == "soil" and ry == "soil" and rz == "soil":
-                    continue  # the user's box — never rebuilt
+                if not _btype_for(rx, ry, rz):
+                    continue  # interior soil cell — comes from the box, not a slab
                 slab_vols.append(int(geom.add_box(
                     xlo, ylo, zlo, xhi - xlo, yhi - ylo, zhi - zlo, sync=True,
                 )))
 
     # ── Weld conformally: self-fragment box + slabs (PGs auto-remap) ─
-    session.model.boolean.fragment([box_vol, *slab_vols], [], dim=3)
+    session.model.boolean.fragment([*box_now, *slab_vols], [], dim=3)
 
     # ── Collect the welded box + skin volumes (centroid in the outer
     #    block AABB), tolerant of any other geometry in the session ───
-    extent_span = max(
+    tol = 1e-6 * max(
         axis_x.hi - axis_x.lo, axis_y.hi - axis_y.lo, axis_z.hi - axis_z.lo,
     )
-    tol = 1e-6 * extent_span
     vols: list[int] = []
     for _d, vt in gmsh.model.getEntities(3):
         ccx, ccy, ccz = queries.center_of_mass(int(vt), dim=3)
@@ -528,7 +666,7 @@ def build_absorbing_shell(
         axis_x=axis_x,
         axis_y=axis_y,
         axis_z=axis_z,
-        to_local=lambda xyz: xyz,   # world frame (AB-1b is axis-aligned)
+        to_local=lambda xyz: xyz,   # world frame (axis-aligned)
         name=name,
         names=names,
         apply_transfinite=apply_transfinite,

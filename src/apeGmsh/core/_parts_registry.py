@@ -503,9 +503,12 @@ class PartsRegistry(_PartsFragmentationMixin):
         ----------
         x, y : (size, n_elements)
             Lateral soil extent (symmetric, centred) and element count.
-        z : (depth, n_elements)
+        z : (depth, n_elements) | list[(depth, n_elements)]
             Vertical soil extent (downward, free surface at the top) and element
-            count.  A ``list`` of layers (stratigraphy) is rejected in this slice.
+            count.  Pass a top → bottom ``list`` of layers for a stratified column
+            (e.g. ``z=[(15, 3), (25, 5)]``); each layer gets its own soil + lateral
+            skin PGs, so it can take its own absorbing material via
+            ``ops.element.absorbing_boundary(materials=[m0, m1, …])`` (ADR 0054 AB-1c).
         skin_thickness : float | (tx, ty, tz) | None
             Absorbing-skin thickness.  ``None`` (default) matches the adjacent
             soil element size per face.
@@ -553,6 +556,7 @@ class PartsRegistry(_PartsFragmentationMixin):
         element_size,
         skin_thickness=None,
         faces: tuple[str, ...] | None = None,
+        layers: list[tuple[float, int]] | None = None,
         name: str | None = None,
         names: dict[str, str] | None = None,
         apply_transfinite: bool = True,
@@ -587,6 +591,12 @@ class PartsRegistry(_PartsFragmentationMixin):
         faces : tuple[str, ...] | None
             Restrict the skin to a subset of ``("L","R","F","K","B")`` (e.g. omit a
             symmetry plane).  ``None`` (default) shells all five truncation faces.
+        layers : list[(depth, n_elements)] | None
+            Stratify the box top → bottom (depths must sum to the box's z-extent).
+            Slices the box into per-layer soil volumes and splits the lateral skin
+            per layer, so each layer can take its own absorbing material via
+            ``ops.element.absorbing_boundary(materials=[m0, m1, …])`` (ADR 0054
+            AB-1c).  ``None`` (default) = homogeneous.
         name, names, apply_transfinite :
             PG-name prefix, per-PG override dict, and transfinite toggle — mirroring
             :meth:`add_plane_wave_box`.  When ``box`` is a name, ``soil_pg`` is
@@ -615,6 +625,7 @@ class PartsRegistry(_PartsFragmentationMixin):
             element_size=element_size,
             skin_thickness=skin_thickness,
             faces=faces,
+            layers=layers,
             name=name,
             names=names,
             apply_transfinite=apply_transfinite,
