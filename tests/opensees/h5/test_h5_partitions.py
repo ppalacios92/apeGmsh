@@ -32,6 +32,8 @@ from apeGmsh.opensees.emitter.h5_reader import (
     PartitionEmittedRecord,
 )
 
+from tests.fixtures.schema import OPENSEES_CURRENT
+
 
 # ---------------------------------------------------------------------------
 # Test 1 — schema bump
@@ -47,7 +49,7 @@ def test_schema_version_bumped() -> None:
     the bridge's :data:`SCHEMA_VERSION` is the single source for the OPENSEES
     zone (``schema_version.reader_version(OPENSEES)`` reads it).
     """
-    assert SCHEMA_VERSION == "2.17.0"
+    assert SCHEMA_VERSION == OPENSEES_CURRENT
 
 
 # ---------------------------------------------------------------------------

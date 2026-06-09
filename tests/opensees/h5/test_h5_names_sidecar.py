@@ -16,6 +16,7 @@ from apeGmsh.opensees import OpenSeesModel, apeSees
 from apeGmsh.opensees._internal._names_h5 import read_names
 from apeGmsh.opensees.emitter.h5 import SCHEMA_VERSION
 
+from tests.fixtures.schema import OPENSEES_CURRENT
 from tests.opensees.h5._opensees_model_fixtures import build_simple_frame_fem
 
 
@@ -75,7 +76,7 @@ def test_schema_stamped_current(tmp_path: Path) -> None:
     _build(named=True).h5(str(p))
     with h5py.File(str(p), "r") as f:
         assert f["meta"].attrs["opensees_schema_version"] == SCHEMA_VERSION
-        assert SCHEMA_VERSION == "2.17.0"
+        assert SCHEMA_VERSION == OPENSEES_CURRENT
 
 
 def test_opensees_model_resolves_names(tmp_path: Path) -> None:
