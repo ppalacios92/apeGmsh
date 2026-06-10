@@ -225,16 +225,34 @@ def test_analysis_emits_call() -> None:
 
 
 def test_analyze_steps_only() -> None:
+    # Fail-loud contract: every analyze emits a per-increment loop whose
+    # rc check aborts the deck on the first failed increment (a batched
+    # ``ops.analyze(20)`` short-circuits internally and the deck would
+    # silently run on with the stage partial — or not applied at all).
     e = PyEmitter()
     ret = e.analyze(steps=20)
     assert ret == 0
-    assert _payload(e) == ["ops.analyze(20)"]
+    lines = _payload(e)
+    assert lines[0] == "for _apesees_i in range(20):"
+    assert lines[1] == "    if ops.analyze(1) != 0:"
+    assert lines[2].lstrip().startswith("raise SystemExit(")
+    assert "FAILED at increment" in lines[2]
+    assert "ops.getTime()" in lines[2]
 
 
 def test_analyze_with_dt() -> None:
     e = PyEmitter()
     e.analyze(steps=100, dt=0.01)
-    assert _payload(e) == ["ops.analyze(100, 0.01)"]
+    lines = _payload(e)
+    assert lines[0] == "for _apesees_i in range(100):"
+    assert lines[1] == "    if ops.analyze(1, 0.01) != 0:"
+
+
+def test_analyze_label_names_the_stage_in_the_banner() -> None:
+    e = PyEmitter()
+    e.analyze(steps=5, dt=0.1, label="Gravity")
+    text = "\n".join(_payload(e))
+    assert "of stage 'Gravity'" in text
 
 
 def test_string_with_quote_is_escaped() -> None:

@@ -398,28 +398,41 @@ class TclEmitter:
     def analysis(self, a_type: str) -> None:
         self._lines.append(_join("analysis", a_type))
 
-    def analyze(self, *, steps: int, dt: float | None = None) -> int:
-        if not self._step_hooks_registered:
-            if dt is None:
-                self._lines.append(f"analyze {steps}")
-            else:
-                self._lines.append(_join("analyze", steps, dt))
-            return 0
-        # Hook-wrapped form: for-loop with dispatcher calls per step.
-        # We use a private loop variable name to avoid clashing with
-        # anything the user might define in their own Tcl.
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int:
+        # Fail-loud per-increment loop (see the Emitter Protocol note):
+        # a batched ``analyze N`` short-circuits internally on the first
+        # failed increment and the deck would silently run on with the
+        # stage partial (or not applied at all).  Every increment is
+        # checked; the first failure aborts the deck (Tcl ``error``)
+        # with a banner naming the loop, increment, and pseudo-time.
+        # The private loop variable name avoids clashing with anything
+        # the user might define in their own Tcl.
+        n = int(steps)
+        where = f" of stage '{label}'".replace('"', "'") if label else ""
+        call = "analyze 1" if dt is None else _join("analyze", 1, dt)
         self._lines.append(
-            f"for {{set _apesees_i 0}} {{$_apesees_i < {steps}}} "
+            f"for {{set _apesees_i 0}} {{$_apesees_i < {n}}} "
             f"{{incr _apesees_i}} {{"
         )
         prev_indent = self._lines.indent
         self._lines.indent = prev_indent + "    "
-        self._lines.append("_apesees_call_before_step")
-        if dt is None:
-            self._lines.append("analyze 1")
-        else:
-            self._lines.append(_join("analyze", 1, dt))
-        self._lines.append("_apesees_call_after_step")
+        if self._step_hooks_registered:
+            self._lines.append("_apesees_call_before_step")
+        self._lines.append(f"if {{[{call}] != 0}} {{")
+        self._lines.indent = prev_indent + "        "
+        self._lines.append(
+            'error "apeGmsh: analyze FAILED at increment '
+            f"[expr {{$_apesees_i + 1}}]/{n}{where} "
+            '(pseudo-time [getTime]) -- aborting, the remaining deck '
+            'would run on a partial state"'
+        )
+        self._lines.indent = prev_indent + "    "
+        self._lines.append("}")
+        if self._step_hooks_registered:
+            self._lines.append("_apesees_call_after_step")
         self._lines.indent = prev_indent
         self._lines.append("}")
         return 0

@@ -365,23 +365,38 @@ class PyEmitter:
     def analysis(self, a_type: str) -> None:
         self._lines.append(_ops_call("analysis", a_type))
 
-    def analyze(self, *, steps: int, dt: float | None = None) -> int:
-        if not self._step_hooks_registered:
-            if dt is None:
-                self._lines.append(_ops_call("analyze", steps))
-            else:
-                self._lines.append(_ops_call("analyze", steps, dt))
-            return 0
-        # Hook-wrapped form: Python for-loop with dispatcher calls.
-        self._lines.append(f"for _apesees_i in range({int(steps)}):")
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int:
+        # Fail-loud per-increment loop (see the Emitter Protocol note):
+        # a batched ``ops.analyze(N)`` short-circuits internally on the
+        # first failed increment and the deck would silently run on
+        # with the stage partial (or not applied at all).  Every
+        # increment is checked; the first failure aborts the deck with
+        # a banner naming the loop, increment, and pseudo-time.
+        n = int(steps)
+        where = f" of stage '{label}'".replace('"', "'") if label else ""
+        call = (
+            _ops_call("analyze", 1) if dt is None
+            else _ops_call("analyze", 1, dt)
+        )
+        self._lines.append(f"for _apesees_i in range({n}):")
         prev_indent = self._lines.indent
         self._lines.indent = prev_indent + "    "
-        self._lines.append("_apesees_call_before_step()")
-        if dt is None:
-            self._lines.append(_ops_call("analyze", 1))
-        else:
-            self._lines.append(_ops_call("analyze", 1, dt))
-        self._lines.append("_apesees_call_after_step()")
+        if self._step_hooks_registered:
+            self._lines.append("_apesees_call_before_step()")
+        self._lines.append(f"if {call} != 0:")
+        self._lines.indent = prev_indent + "        "
+        self._lines.append(
+            'raise SystemExit("apeGmsh: analyze FAILED at increment '
+            f'%d/{n}{where} (pseudo-time %g) -- aborting, the remaining '
+            'deck would run on a partial state" % '
+            "(_apesees_i + 1, ops.getTime()))"
+        )
+        self._lines.indent = prev_indent + "    "
+        if self._step_hooks_registered:
+            self._lines.append("_apesees_call_after_step()")
         self._lines.indent = prev_indent
         return 0
 

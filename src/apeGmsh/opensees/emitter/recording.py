@@ -251,8 +251,14 @@ class RecordingEmitter:
     def analysis(self, a_type: str) -> None:
         self.calls.append(("analysis", (a_type,), {}))
 
-    def analyze(self, *, steps: int, dt: float | None = None) -> int:
-        self.calls.append(("analyze", (), {"steps": steps, "dt": dt}))
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int:
+        kwargs: dict[str, Any] = {"steps": steps, "dt": dt}
+        if label is not None:
+            kwargs["label"] = label
+        self.calls.append(("analyze", (), kwargs))
         return 0
 
     def eigen(

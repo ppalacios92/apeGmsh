@@ -229,16 +229,35 @@ def test_analysis_emits_one_token() -> None:
 
 
 def test_analyze_with_steps_only() -> None:
+    # Fail-loud contract: every analyze emits a per-increment loop whose
+    # rc check aborts the deck (Tcl ``error``) on the first failed
+    # increment — a batched ``analyze 20`` short-circuits internally and
+    # the deck would silently run on with the stage partial.
     e = TclEmitter()
     ret = e.analyze(steps=20)
     assert ret == 0
-    assert _stripped(e) == ["analyze 20"]
+    lines = _stripped(e)
+    assert lines[0].startswith("for {set _apesees_i 0} {$_apesees_i < 20}")
+    assert lines[1].strip() == "if {[analyze 1] != 0} {"
+    assert lines[2].strip().startswith(
+        'error "apeGmsh: analyze FAILED at increment'
+    )
+    assert "[getTime]" in lines[2]
 
 
 def test_analyze_with_steps_and_dt() -> None:
     e = TclEmitter()
     e.analyze(steps=100, dt=0.01)
-    assert _stripped(e) == ["analyze 100 0.01"]
+    lines = _stripped(e)
+    assert lines[0].startswith("for {set _apesees_i 0} {$_apesees_i < 100}")
+    assert lines[1].strip() == "if {[analyze 1 0.01] != 0} {"
+
+
+def test_analyze_label_names_the_stage_in_the_banner() -> None:
+    e = TclEmitter()
+    e.analyze(steps=5, dt=0.1, label="Gravity")
+    text = "\n".join(_stripped(e))
+    assert "of stage 'Gravity'" in text
 
 
 def test_preamble_inserts_comment_at_top() -> None:

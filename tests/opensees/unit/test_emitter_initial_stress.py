@@ -188,9 +188,19 @@ def test_tcl_step_hook_ramp_proc_body_shape() -> None:
 
 
 def test_tcl_analyze_unwrapped_when_no_hooks() -> None:
+    # No hooks → still a fail-loud per-increment loop (no dispatcher
+    # calls), never a bare ``analyze 10`` (which short-circuits on the
+    # first failed increment and lets the deck silently run on).
     e = TclEmitter()
+    n_before = len(e.lines())
     e.analyze(steps=10)
-    assert e.lines()[-1] == "analyze 10"
+    new_lines = e.lines()[n_before:]
+    text = "\n".join(new_lines)
+    assert "analyze 10" not in text
+    assert "for {set _apesees_i 0} {$_apesees_i < 10}" in text
+    assert "if {[analyze 1] != 0} {" in text.replace("    ", "")
+    assert "_apesees_call_before_step" not in text
+    assert "_apesees_call_after_step" not in text
 
 
 def test_tcl_analyze_wraps_when_hooks_registered() -> None:
@@ -231,11 +241,11 @@ def test_tcl_analyze_wraps_without_dt() -> None:
     e.analyze(steps=5)
     new_lines = e.lines()[n_before:]
     text = "\n".join(new_lines)
-    # No dt → bare "analyze 1" inside loop.
+    # No dt → "[analyze 1]" (rc-checked) inside the loop.
     assert "analyze 1" in text
-    # Sanity: make sure "analyze 1" line has no trailing dt.
+    # Sanity: make sure the analyze call has no trailing dt.
     inner_lines = [ln for ln in new_lines if "analyze 1" in ln]
-    assert any(ln.strip() == "analyze 1" for ln in inner_lines)
+    assert any(ln.strip() == "if {[analyze 1] != 0} {" for ln in inner_lines)
 
 
 def test_tcl_after_phase_uses_correct_list() -> None:
@@ -308,9 +318,18 @@ def test_py_step_hook_ramp_function_body_shape() -> None:
 
 
 def test_py_analyze_unwrapped_when_no_hooks() -> None:
+    # No hooks → still a fail-loud per-increment loop (no dispatcher
+    # calls), never a bare ``ops.analyze(10)`` (which short-circuits on
+    # the first failed increment and lets the deck silently run on).
     e = PyEmitter()
+    n_before = len(e.lines())
     e.analyze(steps=10)
-    assert e.lines()[-1] == "ops.analyze(10)"
+    text = "\n".join(e.lines()[n_before:])
+    assert "ops.analyze(10)" not in text
+    assert "for _apesees_i in range(10):" in text
+    assert "if ops.analyze(1) != 0:" in text
+    assert "_apesees_call_before_step()" not in text
+    assert "_apesees_call_after_step()" not in text
 
 
 def test_py_analyze_wraps_when_hooks_registered() -> None:

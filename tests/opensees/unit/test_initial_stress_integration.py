@@ -304,8 +304,9 @@ def test_initial_stress_lambda_install_scales_target_in_emit(tmp_path) -> None:
 
 
 def test_no_initial_stress_means_no_hook_wrap(tmp_path) -> None:
-    """If no initial_stress is registered, analyze emits the bare
-    ``analyze N`` line (no for-loop wrapping)."""
+    """If no initial_stress is registered, the analyze loop carries no
+    hook-dispatcher wrapping (the fail-loud per-increment loop itself is
+    always present)."""
     fem = _make_single_quad_fem()
     ops = apeSees(fem, default_orientation=None)
     ops.model(ndm=2, ndf=2)
@@ -325,9 +326,12 @@ def test_no_initial_stress_means_no_hook_wrap(tmp_path) -> None:
     ops.tcl(tcl_path, analyze_steps=5)
     with open(tcl_path, "r", encoding="utf-8") as f:
         text = f.read()
-    # No dispatcher, no for-loop, no hook calls.
+    # No dispatcher, no hook calls (the fail-loud per-increment loop is
+    # always present, but carries no hook wrapping).
     assert "_apesees_call_before_step" not in text
     assert "_apesees_call_after_step" not in text
     assert "parameter " not in text  # space after to avoid matching "parameters"
-    # Bare analyze line.
-    assert "\nanalyze 5\n" in text or text.rstrip().endswith("analyze 5")
+    # rc-checked per-increment analyze loop, never a bare ``analyze 5``.
+    assert "analyze 5" not in text
+    assert "for {set _apesees_i 0} {$_apesees_i < 5}" in text
+    assert "[analyze 1]" in text
