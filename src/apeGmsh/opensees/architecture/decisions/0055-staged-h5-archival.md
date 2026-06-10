@@ -2,6 +2,21 @@
 
 **Status:** Proposed (2026-06-07). **Builds on** ADR 0021 (lineage chain), ADR 0023 (two-version reader window), ADR 0034 (staged analysis), ADR 0052 (staged reference position / HOLD). **Related to** ADR 0038 (compose model composition, §169 stages = FILTER+warn), ADR 0048 (inferred ndf round-trip). **Closes** the SSI-2 deferral "staged H5 archival" (`staged-analysis.md:570`, `_DEFERRED.md:146-151`) and **inverts** the `test_h5_staged_fail_loud.py` guard.
 
+**Amendment (2026-06-10) — Phase 5 scoped and demand-named.** See
+`internal_docs/plan_staged_h5_phase5_partitioned.md`. Source drift since this
+ADR was written: **partitioned HOLD fan-out SHIPPED** — `_emit_stages_partitioned`
+no longer raises on `support_records` (per-rank `sp_hold` emit, locked by
+`test_emit_partitioned_stage_support_hold.py`), so every body claim below that
+the partitioned path "raises on HOLD" (§Context ¶3, §Guard lift, §Stays
+deferred, Phasing #5) is stale. The remaining Phase-5 surface is purely H5
+capture/replay (the `ops.h5` guard, now at `apesees.py:5841`) plus the
+`ops.domain_capture` `bridge=None` degrade. The named demand (§Open:
+partitioned demand): the stage-aware results viewer (PR #592) and Composed
+lineage for partitioned staged SSI runs consume `/opensees/stages` from the
+run file — feedstock `ops.tcl/py` cannot produce. The plan also records two
+probe-proven baseline defects Phase 5 must fix first (rank-replicated capture
+rows in partitioned archives; no partition restore on re-write).
+
 ## Context
 
 A staged-analysis model (`ops.stage(...)`, ADR 0034) cannot be archived to `model.h5` today. `apeSees.h5()` fails loud **before** building: it raises `NotImplementedError` when `self._stage_records` is non-empty (`apesees.py:5493`) or when `self._initial_stress_records` is non-empty (`apesees.py:5502`). These are two independent guards on two independent buckets. The docstring `Raises` block (`apesees.py:5471-5487`) states the hazard precisely: a silent `h5()` would round-trip a staged model to a **flat** model — dropping every stage's analysis-chain rebinding, per-stage `activated_pgs`, per-stage initial-stress records, and the per-stage `analyze` loop. The guard exists because the H5 emitter's 10 staged Protocol methods (`stage_open`/`stage_close`/`domain_change`/`addToParameter`/`step_hook_ramp`/`set_time`/`set_creep`/`reset`/`remove_sp`/`remove_element`, `h5.py:1327-1374`) are all `del`-and-return no-ops; without them no staged byte payload exists.
