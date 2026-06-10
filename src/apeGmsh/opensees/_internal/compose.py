@@ -865,10 +865,13 @@ def _replay_staged_into(
         if st.pre_analyze_reset:
             emitter.reset()
 
+        # label= mirrors the bridge's _emit_stages_flat call so the
+        # fail-loud analyze banner names the stage (deck equality).
         if st.analyze_dt is None:
-            emitter.analyze(steps=int(st.analyze_steps))
+            emitter.analyze(steps=int(st.analyze_steps), label=st.name)
         else:
             emitter.analyze(
                 steps=int(st.analyze_steps), dt=float(st.analyze_dt),
+                label=st.name,
             )
         emitter.stage_close()
