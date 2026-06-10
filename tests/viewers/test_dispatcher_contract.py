@@ -257,3 +257,158 @@ def test_registry_without_dispatcher_still_works():
     d = _FakeDiagram(visible=True)
     reg.set_visible(d, False)
     assert d.is_visible is False
+
+
+# =====================================================================
+# Mesh-viewer kinds (ADR 0056 V3)
+# =====================================================================
+
+
+def _make_mesh_recorder():
+    """Recorder dispatcher with the mesh pumps bound."""
+    from apeGmsh.viewers.diagrams._dispatch import Dispatcher
+
+    calls: list[tuple] = []
+    disp = Dispatcher(
+        MagicMock(),
+        pump_entities=lambda: calls.append(("entities",)),
+        pump_overlays=lambda key=None: calls.append(("overlays", key)),
+        render=lambda: calls.append(("render",)),
+        defer_fn=lambda fn: fn(),
+    )
+    return disp, calls
+
+
+def test_mesh_entity_visibility_runs_entities_pump():
+    from apeGmsh.viewers.diagrams._dispatch import (
+        MESH_ENTITY_VISIBILITY_CHANGED,
+    )
+
+    disp, calls = _make_mesh_recorder()
+    disp.fire(MESH_ENTITY_VISIBILITY_CHANGED)
+    assert calls == [("entities",), ("render",)]
+
+
+def test_mesh_overlay_changed_passes_key_through():
+    """MESH_OVERLAY_CHANGED is pass-through-scoped: the overlay key
+    rides ``layer`` (None = all), with no skip on None."""
+    from apeGmsh.viewers.diagrams._dispatch import MESH_OVERLAY_CHANGED
+
+    disp, calls = _make_mesh_recorder()
+    disp.fire(MESH_OVERLAY_CHANGED, layer="loads")
+    disp.fire(MESH_OVERLAY_CHANGED)            # no key -> all
+    assert calls == [
+        ("overlays", "loads"), ("render",),
+        ("overlays", None), ("render",),
+    ]
+
+
+def test_mesh_gesture_batch_replays_overlays_unscoped_once():
+    """A cascade of keyed overlay fires inside a gesture batch replays
+    ONE unscoped overlays pump (key=None -> rebuild all) + one render."""
+    from apeGmsh.viewers.diagrams._dispatch import MESH_OVERLAY_CHANGED
+
+    disp, calls = _make_mesh_recorder()
+    with disp.gesture_batch():
+        disp.fire(MESH_OVERLAY_CHANGED, layer="loads")
+        disp.fire(MESH_OVERLAY_CHANGED, layer="mass")
+        disp.fire(MESH_OVERLAY_CHANGED, layer="constraints")
+    assert calls == [("overlays", None), ("render",)]
+
+
+# =====================================================================
+# Owner-fires: VisibilityManager + OverlayVisibilityModel (V3)
+# =====================================================================
+
+
+def test_visibility_manager_owner_fires_and_defers_rebuild():
+    """With a dispatcher injected the mutator fires
+    MESH_ENTITY_VISIBILITY_CHANGED and the rebuild runs as the pump;
+    without one the legacy inline rebuild runs (model viewer until V4)."""
+    from apeGmsh.viewers.core.visibility import VisibilityManager
+    from apeGmsh.viewers.diagrams._dispatch import Dispatcher
+
+    rebuilt: list[str] = []
+
+    # Subclass to stub the heavy internals (the class uses __slots__,
+    # so instance-level method patching is impossible) — we're
+    # testing the propagation shape, not the VTK rebuild.
+    class _StubVM(VisibilityManager):
+        __slots__ = ()
+
+        def _rebuild_actors(self) -> None:
+            rebuilt.append("actors")
+
+        def _reset_colors(self) -> None:
+            rebuilt.append("colors")
+
+    vm = _StubVM(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+
+    # Legacy path (no dispatcher): inline rebuild.
+    vm.set_hidden({(3, 1)})
+    assert rebuilt == ["actors", "colors"]
+
+    # Dispatcher path: the pump does the rebuild, exactly once,
+    # synchronously inside the fire.
+    rebuilt.clear()
+    order: list[str] = []
+    disp = Dispatcher(
+        MagicMock(),
+        pump_entities=vm.rebuild_now,
+        render=lambda: order.append("render"),
+        defer_fn=lambda fn: fn(),
+    )
+    vm.dispatcher = disp
+    vm.on_changed.append(lambda: order.append("observer"))
+    vm.set_hidden({(3, 2)})
+    assert rebuilt == ["actors", "colors"]
+    # Render precedes the on_changed observers (post-rebuild state).
+    assert order == ["render", "observer"]
+
+
+def test_overlay_model_owner_fires_keyed():
+    from apeGmsh.viewers.core.overlay_visibility import OverlayVisibilityModel
+
+    m = OverlayVisibilityModel()
+    fired: list[tuple] = []
+    m.dispatcher = MagicMock()
+    m.dispatcher.fire = lambda kind, layer=None: fired.append((kind, layer))
+
+    m.set_load_patterns({"dead"})
+    m.set_mass_visible(True)
+    m.set_constraint_kinds({"rigid_link"})
+    m.set_boundary_nodes_visible(True)
+    keys = [k for _, k in fired]
+    assert keys == ["loads", "mass", "constraints", "boundary"]
+
+    # Idempotent: re-writing the same state fires nothing.
+    fired.clear()
+    m.set_load_patterns({"dead"})
+    m.set_mass_visible(True)
+    assert fired == []
+
+
+def test_overlay_model_owns_scales():
+    from apeGmsh.viewers.core.overlay_visibility import OverlayVisibilityModel
+
+    m = OverlayVisibilityModel()
+    fired: list[tuple] = []
+    m.dispatcher = MagicMock()
+    m.dispatcher.fire = lambda kind, layer=None: fired.append((kind, layer))
+
+    assert m.scale("force_arrow") == 1.0
+    m.set_scale("force_arrow", 2.5)
+    assert m.scale("force_arrow") == 2.5
+    m.set_scale("mass_sphere", 0.5)
+    m.set_scale("tangent_normal_arrow", 3.0)
+    assert [k for _, k in fired] == ["loads", "mass", "tangent"]
+
+    # Idempotent per call.
+    fired.clear()
+    m.set_scale("force_arrow", 2.5)
+    assert fired == []
+
+    # Unknown keys fail loud (INV-6 — no silent no-op scales).
+    import pytest
+    with pytest.raises(KeyError, match="Unknown overlay scale"):
+        m.set_scale("typo_key", 2.0)
