@@ -61,6 +61,7 @@ from ._internal.build import (
     runtime_rank_from_partition_record,
     topological_order,
     validate_node_ndf_element_compat,
+    validate_absorbing_quad_geometry,
     infer_node_ndf,
     validate_adaptive_element_endpoints,
     resolve_ndf_overlay,
@@ -797,6 +798,12 @@ class BuiltModel:
         # emit path (flat / split / partitioned) is covered before any
         # element is emitted.
         validate_node_ndf_element_compat(self.fem, elements)
+
+        # ADR 0054 (AB-5): ASDAbsorbingBoundary2D has no source-side
+        # distortion handling — a skewed quad runs with silently wrong
+        # dashpot/stiffness terms.  Fail loud here, once, on every emit
+        # path (flat / split / partitioned).
+        validate_absorbing_quad_geometry(self.fem, elements)
 
         # ADR 0048 — per-node ndf is INFERRED from the declared element
         # classes (authoritative). Guard ndm against the elements, then

@@ -71,7 +71,7 @@ jobs:
   static-gates:
     runs-on: ubuntu-latest
     env:
-      MYPY_BASELINE: 178
+      MYPY_BASELINE: 177
     steps:
       - uses: actions/checkout@v4
 

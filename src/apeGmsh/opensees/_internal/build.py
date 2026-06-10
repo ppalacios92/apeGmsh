@@ -95,6 +95,7 @@ __all__ = [
     "emit_element_spec",
     "emit_element_spec_partitioned",
     "validate_node_ndf_element_compat",
+    "validate_absorbing_quad_geometry",
     "infer_node_ndf",
     "validate_adaptive_element_endpoints",
     "resolve_ndf_overlay",
@@ -1850,6 +1851,75 @@ def _node_coord(fem: "FEMData", node_id: int) -> np.ndarray:
     """Return the 3-D coordinates of ``node_id`` from the FEM snapshot."""
     idx = fem.nodes.index(node_id)
     return np.asarray(fem.nodes.coords[idx], dtype=float)
+
+
+def validate_absorbing_quad_geometry(
+    fem: "FEMData", elements: "Iterable[Element]",
+) -> None:
+    """ADR 0054 (AB-5) — fail loud on a distorted 2D absorbing quad.
+
+    ``ASDAbsorbingBoundary2D`` has **no source-side distortion handling**: it
+    sizes its dashpots / free-field column from the sorted nodal x/y
+    coordinates assuming an axis-aligned rectangle
+    (``getElementSizes``, ASDAbsorbingBoundary2D.cpp:986-1003 — no Jacobian
+    check, no normal check), so a skewed / rotated / degenerate quad runs
+    with silently wrong terms.  The 3D element guards itself
+    (``handleDistortion`` + singular-Jacobian exit), so only 2D is checked.
+
+    Every fan-out quad of every ``ASDAbsorbingBoundary2D`` spec must have its
+    4 nodes on exactly 2 distinct x and 2 distinct y stations (the 4 corners
+    of an axis-aligned rectangle), coplanar in z, with non-degenerate spans.
+    """
+    # Deferred import: avoids an _internal -> element import cycle at load.
+    from ..element.absorbing import ASDAbsorbingBoundary2D
+
+    for spec in elements:
+        if not isinstance(spec, ASDAbsorbingBoundary2D):
+            continue
+        bad: list[tuple[int, str]] = []
+        for eid, conn in expand_spec_to_elements(fem, spec):
+            coords = [_node_coord(fem, int(t)) for t in conn]
+            if len(coords) != 4:
+                bad.append((int(eid), f"{len(coords)} nodes (expected 4)"))
+                continue
+            xs = sorted(float(c[0]) for c in coords)
+            ys = sorted(float(c[1]) for c in coords)
+            zs = [float(c[2]) for c in coords]
+            dx, dy = xs[-1] - xs[0], ys[-1] - ys[0]
+            scale = max(dx, dy, 1e-300)
+            tol = 1e-6 * scale
+            if dx <= tol or dy <= tol:
+                bad.append((int(eid), f"degenerate spans dx={dx:.3g} dy={dy:.3g}"))
+                continue
+            if max(zs) - min(zs) > tol:
+                bad.append((int(eid), "nodes not coplanar in z"))
+                continue
+            on_corners = all(
+                min(abs(float(c[0]) - xs[0]), abs(float(c[0]) - xs[-1])) <= tol
+                and min(abs(float(c[1]) - ys[0]), abs(float(c[1]) - ys[-1])) <= tol
+                for c in coords
+            )
+            corners = {
+                (round(float(c[0]) / tol), round(float(c[1]) / tol))
+                for c in coords
+            }
+            if not on_corners or len(corners) != 4:
+                bad.append((int(eid), "skewed / non-axis-aligned quad"))
+        if bad:
+            examples = "; ".join(
+                f"element {eid}: {why}" for eid, why in bad[:3]
+            )
+            more = f" (+{len(bad) - 3} more)" if len(bad) > 3 else ""
+            raise BridgeError(
+                f"ASDAbsorbingBoundary2D over pg {spec.pg!r}: {len(bad)} "
+                f"quad(s) are not axis-aligned rectangles — {examples}{more}. "
+                "The 2D element has NO distortion handling in OpenSees "
+                "(it sizes itself from sorted nodal x/y coordinates), so a "
+                "skewed or rotated skin runs with silently wrong "
+                "dashpot/stiffness terms.  Build the absorbing skin "
+                "axis-aligned (see g.parts.add_plane_wave_box_2d / "
+                "add_absorbing_shell_2d)."
+            )
 
 
 def sweep_asdconcrete_element_size(

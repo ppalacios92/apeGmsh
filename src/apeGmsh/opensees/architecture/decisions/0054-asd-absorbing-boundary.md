@@ -1,9 +1,9 @@
 # ADR 0054 — ASDAbsorbingBoundary as an extruded skin + staged absorbing flip
 
-**Status:** Proposed (2026-06-07). Not implemented. Supersedes the working
-assumption (reached in discussion, then **refuted by an adversarial source
-review**) that the absorbing layer could be the reinterpreted outermost ring of
-the soil box. Grounded in the fork guide
+**Status:** Accepted — IMPLEMENTED (AB-1 … AB-5 shipped; 2026-06-09).
+Supersedes the working assumption (reached in discussion, then **refuted by an
+adversarial source review**) that the absorbing layer could be the
+reinterpreted outermost ring of the soil box. Grounded in the fork guide
 `Ladruno_implementation/absorbing_boundaries_and_pml_guide.md` and direct reads
 of `SRC/element/absorbentBoundaries/ASDAbsorbingBoundary{2D,3D}.cpp/.h`. Pairs
 with the existing `DRMBox` part (`parts/drm_box.py`) and the SSI/staged ADR set
@@ -238,11 +238,29 @@ flip idiom; per-partition flip is the real idiom, not merely a deferral).
   then **radiates out** the quiet base (late-window surface motion < 1 % of peak,
   0.93 %). Registered in the examples index + mkdocs nav, with a surface-velocity
   figure. DRMBox is **not** modified (separate facility).
-- **AB-5:** 2D (`ASDAbsorbingBoundary2D`, with `thickness`).
+- **AB-5:** ✅ **DONE.** 2D plane-strain mirror of the whole stack.
+  Source-verified grammar: ``tag n1..n4 G v rho THICKNESS btype <-fx> <-fy>``
+  — ``thickness`` is the **out-of-plane plane-strain slab thickness** scaling
+  mass/stiffness/dashpots (``2D:1243/1299/1485``), NOT a skin dimension; it
+  sits *before* ``btype``.  2D btypes = ``B L R`` + corners ``BL/BR``
+  (``LR`` *parses* in source but silently mis-sizes → rejected apeGmsh-side
+  like the 3D ``LR``/``FK``).  Mesh: `g.parts.add_plane_wave_box_2d` /
+  `add_absorbing_shell_2d` (X lateral, Y vertical, free surface ``y = 0``,
+  skin on L/R/B; layered-Y stratigraphy; rotation rejected;
+  `AbsorbingSkinResult.ndm = 2`).  Bridge: frozen `ASDAbsorbingBoundary2D` +
+  `ops.element.ASDAbsorbingBoundary2D`; `absorbing_boundary` dispatches on
+  ``skin.ndm`` (2D **requires** ``thickness=``, forbids it for 3D, rejects
+  ``base_dirs`` with ``"z"``).  **Distortion guard:** the 2D element has *no*
+  source-side check at all (``getElementSizes`` reads sorted x/y coords, no
+  Jacobian/normal validation, ``2D:986-1003``) — a build-time gate
+  (`validate_absorbing_quad_geometry`, run on every emit path) fails loud
+  unless every fan-out quad is an axis-aligned rectangle.  `s.activate_absorbing`
+  works unchanged (element-tag generic).  **Run-verified** like AB-4: 2D
+  column, base shear Ricker — arrival 0.198 s vs ``H/Vs`` 0.200 s, late/peak
+  1.12 %.
 
 ## Open / deferred
 
-- 2D distortion has no source-side guard — apeGmsh must guard it entirely.
 - H5 round-trip of the absorbing elements + the tracked flip set (treat like any
   ElementRecord; the flip is a staged record).
 - Cross-partition flip fan-out is part of AB-3 (per-rank `parameter`/`updateParameter`,
