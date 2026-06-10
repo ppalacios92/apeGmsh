@@ -93,6 +93,7 @@ __all__ = [
     "FourNodeQuad",
     "FourNodeTetrahedron",
     "LadrunoBrick",
+    "LadrunoCST",
     "LadrunoQuad",
     "SixNodeTri",
     "TenNodeTetrahedron",
@@ -1134,6 +1135,106 @@ class LadrunoQuad(Element):
         if self.pressure is not None:
             args += ["-pressure", self.pressure]
         emitter.element("LadrunoQuad", tag, *args)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LadrunoCST(Element):
+    """``element LadrunoCST`` — 3-node constant-strain triangle (2D plane).
+
+    The thin 3-node sibling of :class:`LadrunoQuad` (class tag ``33008``) — a
+    Ladruno-fork constant-strain triangle for plane-stress / plane-strain. A
+    1-point triangle is rank-sufficient, so there is **no ``-formulation``
+    axis** (nothing to stabilize / average); it reduces to upstream ``Tri31``
+    and overrides ``getCharacteristicLength`` with ``√(2A)`` (the BezierTri6
+    triangle convention) for crack-band regularization. **Fork-only:** emitting
+    the command works on any build, but ``ops.run()`` needs the fork (gated at
+    run, not emit).
+
+    > A plain CST volumetrically locks and mesh-biases localization — reach for
+    > it deliberately (triangular-mesh fallback / coarse baseline), and prefer
+    > :class:`LadrunoQuad` or ``BezierTri6`` for real 2D work (guide §CST).
+
+    Tcl signature::
+
+        element LadrunoCST $tag $n1 $n2 $n3 $matTag \\
+            [-type PlaneStrain|PlaneStress] [-thick $t] [-rho $r] \\
+            [-body $bx $by] [-pressure $p]
+
+    The 3 nodes are the standard CCW triangle order, byte-identical to Gmsh
+    tri3 (etype 2). The model **must** be ``ndm 2, ndf 2`` (the fork parser
+    refuses anything else); apeGmsh brackets the element block with
+    ``model -ndf 2`` so it survives a mixed-ndf envelope.
+
+    Parameters
+    ----------
+    pg
+        Physical-group label whose surface cells are realized as
+        :class:`LadrunoCST` elements at fan-out time.
+    material
+        The 2D :class:`NDMaterial` constitutive law (must support the requested
+        plane view via ``getCopy("PlaneStrain")`` / ``"PlaneStress"``).
+    thickness
+        Out-of-plane thickness (``-thick``). Must be strictly positive.
+    plane_type
+        ``"PlaneStrain"`` (default) or ``"PlaneStress"``.
+    pressure
+        Optional uniform edge pressure (``-pressure``). Defaults to ``None``.
+    rho
+        Optional mass density override (``-rho``). Defaults to ``None``.
+    body_force
+        Optional ``(bx, by)`` body force per unit volume (``-body``).
+        Defaults to ``None``. Applied **every step**, no load pattern needed
+        (gravity: ``-ρ g``). See *Body-force semantics* in the module
+        docstring.
+    """
+
+    pg: str
+    material: NDMaterial
+    thickness: float
+    plane_type: str = "PlaneStrain"
+    pressure: float | None = None
+    rho: float | None = None
+    body_force: tuple[float, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.thickness <= 0:
+            raise ValueError(
+                f"LadrunoCST: thickness must be > 0, got {self.thickness!r}."
+            )
+        if self.plane_type not in _PLANE_TYPES:
+            raise ValueError(
+                f"LadrunoCST: plane_type must be one of {_PLANE_TYPES}, "
+                f"got {self.plane_type!r}."
+            )
+        if self.rho is not None and self.rho < 0:
+            raise ValueError(
+                f"LadrunoCST: rho must be >= 0 if supplied, got {self.rho!r}."
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return (self.material,)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        nodes = current_element_nodes(emitter)
+        if len(nodes) != 3:
+            raise ValueError(
+                f"LadrunoCST: expected 3 node tags, got {len(nodes)}."
+            )
+        mat_tag = resolve_tag(emitter, self.material)
+        args: list[int | float | str] = [*nodes, mat_tag]
+        # Every option is flag-prefixed and order-independent (the fork factory
+        # scans a while-loop). The PlaneStrain default is elided; the required
+        # thickness is always emitted. There is NO -formulation flag on the CST.
+        if self.plane_type != "PlaneStrain":
+            args += ["-type", self.plane_type]
+        args += ["-thick", self.thickness]
+        if self.rho is not None:
+            args += ["-rho", self.rho]
+        if self.body_force is not None:
+            args += ["-body", *self.body_force]
+        if self.pressure is not None:
+            args += ["-pressure", self.pressure]
+        emitter.element("LadrunoCST", tag, *args)
 
 
 # ---------------------------------------------------------------------------

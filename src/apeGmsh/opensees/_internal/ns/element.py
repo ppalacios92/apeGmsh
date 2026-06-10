@@ -32,6 +32,7 @@ from ...element.solid import (
     FourNodeQuad,
     FourNodeTetrahedron,
     LadrunoBrick,
+    LadrunoCST,
     LadrunoQuad,
     SixNodeTri,
     TenNodeTetrahedron,
@@ -511,6 +512,30 @@ class _ElementNS(_BridgeNamespace):
                 material=material,
                 thickness=thickness,
                 formulation=formulation,
+                plane_type=plane_type,
+                pressure=pressure,
+                rho=rho,
+                body_force=body_force,
+            )
+        )
+
+    def LadrunoCST(
+        self,
+        *,
+        pg: str,
+        material: NDMaterial | str,
+        thickness: float,
+        plane_type: str = "PlaneStrain",
+        pressure: float | None = None,
+        rho: float | None = None,
+        body_force: tuple[float, float] | None = None,
+    ) -> LadrunoCST:
+        material = self._bridge._resolve(material, base=NDMaterial)
+        return self._bridge._register(
+            LadrunoCST(
+                pg=pg,
+                material=material,
+                thickness=thickness,
                 plane_type=plane_type,
                 pressure=pressure,
                 rho=rho,

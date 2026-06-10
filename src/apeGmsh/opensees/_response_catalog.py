@@ -121,6 +121,8 @@ ELE_TAG_BezierTet10 = 33001
 ELE_TAG_LadrunoBrick = 33002
 # Ladruno-fork unified 4-node plane continuum (live from ladruno:SRC/classTags.h).
 ELE_TAG_LadrunoQuad = 33007
+# Ladruno-fork 3-node constant-strain triangle (live from ladruno:SRC/classTags.h).
+ELE_TAG_LadrunoCST = 33008
 # Shells
 ELE_TAG_ShellMITC4 = 53
 ELE_TAG_ShellMITC9 = 54
@@ -886,6 +888,24 @@ RESPONSE_CATALOG: dict[tuple[str, int, str], ResponseLayout] = {
         coord_system="barycentric_tri",
         component_names=STRAIN_2D,
         class_tag=ELE_TAG_Tri31,
+    ),
+
+    # ── LadrunoCST (3-node CST, 1 GP Triangle_GL_1) ──────────────────
+    # Ladruno-fork constant-strain triangle (tag 33008). Strain is constant
+    # over the element, so a single centroid Gauss point is exact —
+    # ``stresses``/``strains`` return Vector(3) = 3 comp × 1 GP, the same
+    # layout as Tri31 (which it reduces to).
+    ("LadrunoCST", IntRule.Triangle_GL_1, "stress"): _continuum_layout(
+        n_gp=1, natural_coords=_TRI_GL_1_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRESS_2D,
+        class_tag=ELE_TAG_LadrunoCST,
+    ),
+    ("LadrunoCST", IntRule.Triangle_GL_1, "strain"): _continuum_layout(
+        n_gp=1, natural_coords=_TRI_GL_1_COORDS,
+        coord_system="barycentric_tri",
+        component_names=STRAIN_2D,
+        class_tag=ELE_TAG_LadrunoCST,
     ),
 
     # ── SixNodeTri (6-node quadratic triangle, 3 GPs Triangle_GL_2) ──

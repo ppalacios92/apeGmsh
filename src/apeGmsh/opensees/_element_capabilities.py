@@ -337,6 +337,21 @@ _ELEM_REGISTRY: dict[str, _ElemSpec] = {
         slots=("nodes", "matTag"),
         has_gauss=True,
     ),
+    # Ladruno-fork 3-node constant-strain triangle (tag 33008), thin 2D sibling
+    # of LadrunoQuad. Token == C++ class name == registry key ("LadrunoCST"),
+    # so no cpp_class_name / alias. Standard CCW triangle order, byte-identical
+    # to Gmsh tri3 (etype 2) → identity reorder. ``-type``/``-thick``/``-rho``/
+    # ``-body``/``-pressure`` are all flag-prefixed, emitted from the dataclass,
+    # NOT slots (no ``-formulation`` axis on a CST). The fork parser hard-gates
+    # on the BUILDER ndf (must be 2) → also listed in ``_BUILDER_NDF_GATED``.
+    "LadrunoCST": _ElemSpec(
+        mat_family="nd", needs_transf=False,
+        ndm_ok=frozenset({2}), ndf_ok=frozenset({2}),
+        gmsh_etypes=frozenset({2}),
+        node_reorder={2: (0,1,2)},
+        slots=("nodes", "matTag"),
+        has_gauss=True,
+    ),
 
     # ── 3-D shell (section-based) ──────────────────────────────────────────
     # Shells use a section; with a layered section they expose
@@ -582,6 +597,7 @@ _BUILDER_NDF_GATED: dict[str, int] = {
     "quad": 2,
     "tri6n": 2,
     "LadrunoQuad": 2,
+    "LadrunoCST": 2,
 }
 
 
