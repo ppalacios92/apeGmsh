@@ -818,6 +818,15 @@ class H5Model:
                 f"{len(names)} stage groups present — corrupt or "
                 "partially-written archive."
             )
+        if not names:
+            # The writer early-returns before creating the group when
+            # no stage exists, so an EMPTY stages group is malformed —
+            # tolerating it would silently route a staged archive
+            # through the flat replay (staged program amputated).
+            raise MalformedH5Error(
+                "/opensees/stages: group present but carries no "
+                "stage_NNN children — corrupt or hand-stripped archive."
+            )
         for idx, gname in enumerate(names):
             if gname != f"stage_{idx:03d}":
                 raise MalformedH5Error(
@@ -826,6 +835,11 @@ class H5Model:
                 )
             g = stages[gname]
             attrs = _attrs_as_dict(g)
+            if "name" not in attrs:
+                raise MalformedH5Error(
+                    f"/opensees/stages/{gname}: missing name attr — "
+                    "malformed stage group."
+                )
             if "analyze_steps" not in attrs:
                 raise MalformedH5Error(
                     f"/opensees/stages/{gname}: missing analyze_steps — "
@@ -858,11 +872,17 @@ class H5Model:
                 for rname in sorted(rgrp):
                     rg = rgrp[rname]
                     rattrs = _attrs_as_dict(rg)
+                    if "tag" not in rattrs or "emit_index" not in rattrs:
+                        raise MalformedH5Error(
+                            f"/opensees/stages/{gname}/regions/{rname}: "
+                            "missing tag or emit_index — corrupt stage "
+                            "region (the writer always stamps both)."
+                        )
                     regions.append(RegionRecord(
-                        tag=int(rattrs.get("tag", 0)),
+                        tag=int(rattrs["tag"]),
                         args=tuple(self._read_param_array(rg, "params")),
                     ))
-                    region_seq.append(int(rattrs.get("emit_index", 0)))
+                    region_seq.append(int(rattrs["emit_index"]))
 
             # -- MP constraints ----------------------------------------
             equal_dofs: "list[EqualDOFRecord]" = []
@@ -873,10 +893,19 @@ class H5Model:
                 cons = g["constraints"]
                 if "equalDOF" in cons:
                     for row in cons["equalDOF"][:]:
+                        # equalDOF dofs are a 1-based dof LIST — the
+                        # compound pads the tail with 0, which is NOT
+                        # a valid dof.  Trim trailing pads so the
+                        # public .stages() surface never exposes
+                        # dof-0 entries (re-write re-pads to the same
+                        # global-ndf width, so the echo stays stable).
+                        raw = [int(d) for d in row["dofs"]]
+                        while raw and raw[-1] == 0:
+                            raw.pop()
                         equal_dofs.append(EqualDOFRecord(
                             master=int(row["master"]),
                             slave=int(row["slave"]),
-                            dofs=tuple(int(d) for d in row["dofs"]),
+                            dofs=tuple(raw),
                             name=str(_decode_bytes(row["name"])),
                         ))
                 if "rigidLink" in cons:
@@ -924,13 +953,23 @@ class H5Model:
                 pgrp = g["patterns"]
                 for pname in pgrp:
                     pg_ = pgrp[pname]
-                    seq = int(_attrs_as_dict(pg_).get("emit_index", 0))
+                    p_attrs = _attrs_as_dict(pg_)
+                    if "emit_index" not in p_attrs:
+                        # The writer always stamps it; a missing stamp
+                        # would silently reorder the staged program
+                        # (and the echo would re-write emit_index=0,
+                        # laundering the corruption permanently).
+                        raise MalformedH5Error(
+                            f"/opensees/stages/{gname}/patterns/{pname}: "
+                            "missing emit_index — corrupt stage pattern."
+                        )
+                    seq = int(p_attrs["emit_index"])
                     pattern_pairs.append((seq, self._pattern_record(pg_)))
                 pattern_pairs.sort(key=lambda t: t[0])
             recorders_ro: "list[Any]" = []
             if "recorders" in g:
                 rgrp2 = g["recorders"]
-                for rname in sorted(rgrp2):
+                for rname in sorted(rgrp2, key=_recorder_group_order):
                     recorders_ro.append(self._recorder_record(rgrp2[rname]))
 
             # -- Rayleigh + removals -----------------------------------
@@ -990,10 +1029,17 @@ class H5Model:
                             None,
                             tuple(int(e) for e in ag["elements"][:]),
                         ))
-                    else:
+                    elif "pg" in _attrs_as_dict(ag):
                         absorb.append((
-                            str(_attrs_as_dict(ag).get("pg", "")), None,
+                            str(_attrs_as_dict(ag)["pg"]), None,
                         ))
+                    else:
+                        raise MalformedH5Error(
+                            f"/opensees/stages/{gname}/"
+                            f"activate_absorbing/{aname}: neither pg "
+                            "attr nor elements dataset — corrupt "
+                            "absorbing-flip record."
+                        )
 
             # -- Tri-state attrs (presence-encoded) --------------------
             set_creep_attr = attrs.get("set_creep_on")
@@ -1071,6 +1117,13 @@ class H5Model:
         record's ``decl_context`` field carries the declaration
         metadata for ``kind="declared"`` entries (None for typed
         primitives).
+
+        Ordered by the numeric suffix of ``recorder_name``
+        (``{kind}_{idx}``, idx unpadded) — h5py's alphabetical
+        iteration would scramble mixed kinds and ``_10`` before
+        ``_2``, silently reordering the replayed declarations and
+        drifting ``model_hash`` across a ``from_h5 → to_h5`` round
+        trip (ADR 0055 gate-2 finding).
         """
         out: list[RecorderRecord] = []
         if "opensees" not in self._f:
@@ -1078,7 +1131,7 @@ class H5Model:
         ops = self._f["opensees"]
         if "recorders" not in ops:
             return out
-        for name in ops["recorders"]:
+        for name in sorted(ops["recorders"], key=_recorder_group_order):
             out.append(self._recorder_record(ops["recorders"][name]))
         return out
 
@@ -1891,6 +1944,21 @@ class H5Model:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _recorder_group_order(name: str) -> "tuple[int, str]":
+    """Sort key recovering recorder emit order from group names.
+
+    ``recorder_name`` is ``{kind}_{idx}`` with an UNPADDED idx, so a
+    plain alphabetical sort scrambles mixed kinds (``Element_1`` before
+    ``Node_0``) and double digits (``Node_10`` before ``Node_2``).  The
+    numeric suffix IS the emit index; the name breaks ties for foreign
+    files without one.
+    """
+    head, _, tail = name.rpartition("_")
+    if head and tail.isdigit():
+        return (int(tail), name)
+    return (0, name)
+
 
 def _attrs_as_dict(group: Any) -> dict[str, Any]:
     """Convert an h5py attrs view to a plain dict, decoding bytes."""

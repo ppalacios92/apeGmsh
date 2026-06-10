@@ -123,3 +123,39 @@ one-partition boundary test.
    keep read-side dofs at the persisted padded width (already in inv #3).
 8. **V3 region names** — persist stage-region names alongside tags when the
    tag-identity decision (item 1) lands.
+
+## Gate-2 outcomes (P2.2 diff review, run wf_6f546d0d — fix-then-ship, all must-fix applied)
+
+**Applied in P2.2:** numeric-suffix recorder sort (stage AND flat readers —
+`recorder_name` is `{kind}_{idx}` unpadded; plain sorted() scrambled mixed
+kinds / `_10` before `_2` and drifted the hash gate); equalDOF trailing-pad
+trim on the `.stages()` surface (dof-0 entries are invalid; re-pad on echo
+keeps the hash stable); fail-loud promotions (empty stages group, missing
+stage `name`, region `tag`/`emit_index`, pattern `emit_index`,
+absorbing-flip discriminant — the writer always stamps all of these, and a
+silent default would launder corruption through the echo);
+`from_compose_buffers` bypass guards mirroring `_write_stages` (unattached
+buckets / open bracket); `opensees_root` honesty note. Backlog items 2
+(probe lifted), 3 (documented), 4 (ModelData warning), 6
+(parallel_runtime_fallback → `_chain_attrs`) closed.
+
+**Backlog → P2.3 (with the replay):**
+- Item 1 region tag identity + allocator seeding (+ item 8 V3 names).
+- chain_attrs int-recovery (`is_integer()` pattern) before replay consumes
+  them — NormDispIncr args read back all-float, which `OPS_GetIntInput`
+  rejects and which would drift tcl deck bytes.
+- `.stages()` shape divergence: from_h5 yields padded records,
+  from_compose_buffers yields unpadded emitter-internal ones — normalize
+  in `_stage_block_to_ro` or add length columns; document which width
+  replay expects.
+- embeddedNode blanket `int()` coercion; `from_compose_buffers` lineage
+  slot (`model_hash=snapshot_id` is wrong); MalformedH5Error wrapping for
+  degenerate dataset shapes; region `kind` into StageRecordRO (stop
+  re-deriving); `numberer_runtime_fallback` through the flat
+  `_replay_analysis_chain`; ModelData re-warn at `write()` time.
+
+**Separate small PR (do NOT fold into P2.3):** `ops.domain_capture`
+`bridge=None` retarget — the "h5() raises" rationale is stale since
+Phase 1/P2.1; every non-partitioned staged or initial-stress capture
+currently produces a run file with no `/opensees` zone and no warning.
+Lift the initial-stress half, narrow the staged half to partitioned.

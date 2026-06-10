@@ -215,7 +215,13 @@ class OpenSeesModel:
             and composed results.h5 files because the composed file
             copies the bridge zone verbatim at root (no nested
             sub-namespace).  Surfaced so callers can override for
-            non-default layouts.
+            non-default layouts.  NOTE: today only the
+            ``/opensees/names`` sidecar read honours this kwarg —
+            every typed accessor in ``h5_reader`` (materials …
+            stages) is root-fixed at ``"opensees"``, so a non-default
+            root yields a model whose bridge zones (including any
+            staged program) are silently empty.  Pass non-default
+            values only for names-sidecar relocation.
 
         Raises
         ------
@@ -365,16 +371,45 @@ class OpenSeesModel:
         """Materialise an :class:`OpenSeesModel` from a populated
         :class:`H5Emitter`'s buffers.
 
-        Used by :meth:`apeSees.h5` (and by future
-        :meth:`apeSees.compose_model` flows) to publish an
-        :class:`OpenSeesModel` for the just-built file without doing
-        a write-then-read round-trip — the buffers already carry the
-        same typed records this class wraps.
+        Publishes an :class:`OpenSeesModel` for a just-built emitter
+        without a write-then-read round-trip — the buffers already
+        carry the same typed records this class wraps.  (No production
+        caller today; kept for future ``compose_model`` flows and
+        exercised by the broker test suite.)
 
         Parameters mirror the emitter's accumulator state directly;
         the helper builds the immutable views.
+
+        Raises
+        ------
+        RuntimeError
+            When the emitter carries captured stage buckets without
+            the declarative complement (``set_stage_records`` never
+            ran) or with a still-open stage bracket — mirroring the
+            ``_write_stages`` bypass guards.  Freezing such buckets
+            would silently drop ``activated_pgs`` / per-stage
+            initial-stress / ``activate_absorbing`` (and skip the
+            phantom-node fail-loud), and ``restore_stage_blocks``
+            would later mark them attached, laundering the truncated
+            state past the write-side guard (ADR 0055 gate-2).
         """
         from .emitter.h5 import _stage_block_to_ro
+
+        if emitter._stage_current is not None:
+            raise RuntimeError(
+                "OpenSeesModel.from_compose_buffers: stage block "
+                f"{emitter._stage_current.name!r} is still open — "
+                "unbalanced stage_open/stage_close."
+            )
+        if emitter._stage_blocks and not emitter._stage_records_attached:
+            raise RuntimeError(
+                "OpenSeesModel.from_compose_buffers: emitter carries "
+                f"{len(emitter._stage_blocks)} captured stage "
+                "bracket(s) but set_stage_records() was never called — "
+                "freezing now would silently drop the declarative "
+                "complement (activated_pgs / per-stage initial_stress "
+                "/ activate_absorbing)."
+            )
 
         materials_by_family: dict[str, tuple[MaterialRecord, ...]] = {}
         if emitter._uniaxial:
