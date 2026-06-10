@@ -243,6 +243,17 @@ _ELEM_REGISTRY: dict[str, _ElemSpec] = {
         node_reorder={5: (0,1,2,3,4,5,6,7)},
         slots=("nodes",),
     ),
+    # 2D plane-strain sibling (ADR 0054, AB-5).  Quad skin cell; same
+    # raw-floats grammar plus an out-of-plane ``thickness``; everything is
+    # emitted from the typed dataclass's ``_emit``.  The element accepts
+    # ndf >= 2 but standard plane-strain soil is ndf=2.
+    "ASDAbsorbingBoundary2D": _ElemSpec(
+        mat_family="none", needs_transf=False,
+        ndm_ok=frozenset({2}), ndf_ok=frozenset({2}),
+        gmsh_etypes=frozenset({3}),
+        node_reorder={3: (0,1,2,3)},
+        slots=("nodes",),
+    ),
 
     # ── 2-D solid ──────────────────────────────────────────────────────────
     "quad": _ElemSpec(

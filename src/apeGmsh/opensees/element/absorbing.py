@@ -1,27 +1,32 @@
 """
-Typed primitive for the ``ASDAbsorbingBoundary3D`` OpenSees element.
+Typed primitives for the ``ASDAbsorbingBoundary3D``/``2D`` OpenSees elements.
 
-ASDEA's staged wave-absorbing boundary brick (Lysmer-Kuhlemeyer dashpots +
-enforced free-field column).  One element per skin-region hex of a plane-wave
-box (see :func:`apeGmsh.parts.plane_wave_box.build_plane_wave_box`).  ADR 0054,
-slice AB-2.
+ASDEA's staged wave-absorbing boundary brick / quad (Lysmer-Kuhlemeyer
+dashpots + enforced free-field column).  One element per skin-region cell of a
+plane-wave box (see :func:`apeGmsh.parts.plane_wave_box.build_plane_wave_box`
+and its 2D sibling).  ADR 0054, slices AB-2 (3D) and AB-5 (2D).
 
-Tcl signature::
+Tcl signatures::
 
     element ASDAbsorbingBoundary3D $tag $n1 ... $n8  $G $v $rho  $btype \\
         <-fx $tsTag> <-fy $tsTag> <-fz $tsTag>
+    element ASDAbsorbingBoundary2D $tag $n1 ... $n4  $G $v $rho  $thickness \\
+        $btype  <-fx $tsTag> <-fy $tsTag>
 
-The element takes **raw** ``G`` (shear modulus), ``v`` (Poisson), ``rho``
-(density) doubles — not a material tag.  The user-facing facade
-(``ops.element.ASDAbsorbingBoundary3D`` / ``ops.element.absorbing_boundary``)
+Both take **raw** ``G`` (shear modulus), ``v`` (Poisson), ``rho`` (density)
+doubles — not a material tag.  The user-facing facade
+(``ops.element.ASDAbsorbingBoundary3D``/``2D`` / ``ops.element.absorbing_boundary``)
 accepts either those raw numbers or an ``ElasticIsotropic`` material it reads
 ``G = E / (2(1+v))`` from at construction; the frozen spec only ever stores the
-three floats, so the material is never emitted and is not a dependency.
+three floats, so the material is never emitted and is not a dependency.  The
+2D element additionally takes ``thickness`` — the **out-of-plane plane-strain
+slab thickness** scaling its mass/stiffness/dashpot terms
+(``ASDAbsorbingBoundary2D.cpp:1243/1299/1485``), not a skin dimension.
 
-``btype`` is the boundary-position string (``L``/``R``/``F``/``K``/``B`` and
-their OR-combinations) the element uses to orient its dashpots and free-field
-column.  The ``-fx/-fy/-fz`` base-input time series are only consumed by the
-element on **bottom** (``B``-containing) boundaries.
+``btype`` is the boundary-position string (``L``/``R``/``F``/``K``/``B`` in 3D,
+``L``/``R``/``B`` in 2D, OR-combined) the element uses to orient its dashpots
+and free-field column.  The ``-fx/-fy(-fz)`` base-input time series are only
+consumed by the element on **bottom** (``B``-containing) boundaries.
 """
 from __future__ import annotations
 
@@ -35,11 +40,13 @@ if TYPE_CHECKING:
     from ..emitter.base import Emitter
 
 
-__all__ = ["ASDAbsorbingBoundary3D"]
+__all__ = ["ASDAbsorbingBoundary2D", "ASDAbsorbingBoundary3D"]
 
 # The OpenSees-accepted face letters and their canonical order.
 _BTYPE_ORDER = "BLRFK"
 _BTYPE_LETTERS = frozenset(_BTYPE_ORDER)
+# 2D accepts only bottom/left/right (no front/back).
+_BTYPE_LETTERS_2D = frozenset("BLR")
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -136,3 +143,99 @@ class ASDAbsorbingBoundary3D(Element):
         if self.fz is not None:
             args += ["-fz", resolve_tag(emitter, self.fz)]
         emitter.element("ASDAbsorbingBoundary3D", tag, *args)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ASDAbsorbingBoundary2D(Element):
+    """``element ASDAbsorbingBoundary2D`` — staged absorbing-boundary quad.
+
+    The 2D plane-strain sibling of :class:`ASDAbsorbingBoundary3D` (ADR 0054,
+    AB-5).  ``thickness`` is the out-of-plane slab thickness; ``btype`` draws
+    from ``B``/``L``/``R`` only.  The element self-sorts its 4 nodes from
+    coordinates (no winding contract) but has **no distortion handling** —
+    skewed quads run with silently wrong sizes, so the bridge guards
+    axis-alignment at build time.
+    """
+
+    pg: str
+    G: float
+    v: float
+    rho: float
+    thickness: float
+    btype: str
+    fx: TimeSeries | None = None
+    fy: TimeSeries | None = None
+
+    def __post_init__(self) -> None:
+        if self.G <= 0.0:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: G (shear modulus) must be > 0, "
+                f"got {self.G}."
+            )
+        if not (0.0 <= self.v < 0.5):
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: v (Poisson) must be in [0, 0.5), "
+                f"got {self.v}."
+            )
+        if self.rho < 0.0:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: rho must be >= 0, got {self.rho}."
+            )
+        if self.thickness <= 0.0:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: thickness (out-of-plane slab "
+                f"thickness) must be > 0, got {self.thickness}."
+            )
+        bt = self.btype
+        if not bt:
+            raise ValueError("ASDAbsorbingBoundary2D: btype must be non-empty.")
+        bad = sorted(set(bt) - _BTYPE_LETTERS_2D)
+        if bad:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: btype {bt!r} has illegal letter(s) "
+                f"{bad} — only {sorted(_BTYPE_LETTERS_2D)} are allowed in 2D."
+            )
+        if len(set(bt)) != len(bt):
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: btype {bt!r} repeats a letter."
+            )
+        # Opposite faces never coexist on a real box cell.  The 2D parser
+        # accepts "LR" but the element then sorts/sizes as a single vertical
+        # boundary — silently wrong, so reject it here (mirrors the 3D LR/FK
+        # rejection).
+        if "L" in bt and "R" in bt:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: btype {bt!r} pairs opposite faces "
+                f"L and R."
+            )
+        # Base-input time series are only consumed on bottom boundaries
+        # (OpenSees gates -fx/-fy on BND_BOTTOM, 2D:192/1583).
+        if "B" not in bt and (self.fx is not None or self.fy is not None):
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: base input (-fx/-fy) is only "
+                f"valid on a bottom boundary (btype containing 'B'), got "
+                f"btype {bt!r}."
+            )
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        # Material numbers are read at the facade, never emitted — only the
+        # (optional) base-input time series are real dependencies.
+        return tuple(ts for ts in (self.fx, self.fy) if ts is not None)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        nodes = current_element_nodes(emitter)
+        if len(nodes) != 4:
+            raise ValueError(
+                f"ASDAbsorbingBoundary2D: expected 4 node tags, got "
+                f"{len(nodes)}."
+            )
+        # Source-verified arg order: G v rho THICKNESS btype
+        # (OPS_ASDAbsorbingBoundary2D parses 4 doubles then the string).
+        args: list[int | float | str] = [
+            *nodes, self.G, self.v, self.rho, self.thickness, self.btype,
+        ]
+        if self.fx is not None:
+            args += ["-fx", resolve_tag(emitter, self.fx)]
+        if self.fy is not None:
+            args += ["-fy", resolve_tag(emitter, self.fy)]
+        emitter.element("ASDAbsorbingBoundary2D", tag, *args)

@@ -634,6 +634,129 @@ class PartsRegistry(_PartsFragmentationMixin):
             apply_transfinite=apply_transfinite,
         )
 
+    def add_plane_wave_box_2d(
+        self,
+        *,
+        x: tuple[float, int],
+        y,
+        skin_thickness=None,
+        center: tuple[float, float] = (0.0, 0.0),
+        rotation_z_deg: float = 0.0,
+        name: str | None = None,
+        names: dict[str, str] | None = None,
+        apply_transfinite: bool = True,
+    ):
+        """Build a 2D plane-strain soil box wrapped by an absorbing skin.
+
+        The 2D sibling of :meth:`add_plane_wave_box` (ADR 0054, AB-5): a
+        structured soil rectangle in the global **X–Y plane at z = 0** (X
+        lateral, Y vertical, free surface at the local top ``y = 0``) plus a
+        one-element-thick absorbing skin on its three truncation faces.
+        Skin regions carry the 2D btypes — ``L`` = min-X, ``R`` = max-X,
+        ``B`` = min-Y, corners ``BL``/``BR`` — and fan out to
+        ``ASDAbsorbingBoundary2D`` quads via
+        ``ops.element.absorbing_boundary(skin=…, thickness=…)`` (the 2D
+        element needs the out-of-plane slab thickness).
+
+        Parameters
+        ----------
+        x : (size, n_elements)
+            Lateral soil extent (symmetric, centred) and element count.
+        y : (depth, n_elements) | list[(depth, n_elements)]
+            Vertical soil extent (downward, free surface at the top).  Pass a
+            top → bottom ``list`` of layers for a stratified column; each
+            layer gets its own soil + lateral skin PGs for per-layer
+            absorbing materials (``materials=[…]``).
+        skin_thickness : float | (tx, ty) | None
+            Absorbing-skin thickness.  ``None`` (default) matches the
+            adjacent soil element size per face.
+        center : (cx, cy)
+            World location of the soil top-face centre (free surface).
+        rotation_z_deg : float
+            Must be ``0`` — the ASDAbsorbingBoundary2D element has **no**
+            distortion handling (it sizes itself from sorted nodal x/y
+            coordinates), so a rotated skin runs with silently wrong terms.
+        name, names, apply_transfinite :
+            PG-name prefix, per-PG override dict, and transfinite toggle.
+
+        Returns
+        -------
+        AbsorbingSkinResult
+            Same shape as the 3D result (``ndm == 2``; ``free_surface_pg``
+            is a dim-1 edge PG).
+
+        Example
+        -------
+        ::
+
+            res = g.parts.add_plane_wave_box_2d(x=(100, 20), y=(50, 10))
+            g.mesh.generation.generate(dim=2)
+            # res.skin_pgs -> {"B": ..., "L": ..., "R": ..., "BL": ..., "BR": ...}
+        """
+        from apeGmsh.parts.plane_wave_box import build_plane_wave_box_2d
+
+        return build_plane_wave_box_2d(
+            self._parent,
+            x=x, y=y,
+            skin_thickness=skin_thickness,
+            center=center,
+            rotation_z_deg=rotation_z_deg,
+            name=name,
+            names=names,
+            apply_transfinite=apply_transfinite,
+        )
+
+    def add_absorbing_shell_2d(
+        self,
+        *,
+        box,
+        element_size,
+        skin_thickness=None,
+        faces: tuple[str, ...] | None = None,
+        layers: list[tuple[float, int]] | None = None,
+        name: str | None = None,
+        names: dict[str, str] | None = None,
+        apply_transfinite: bool = True,
+    ):
+        """Weld a one-element absorbing skin onto your own 2D soil rectangle.
+
+        The bring-your-own-box 2D entry (ADR 0054, AB-5), mirroring
+        :meth:`add_absorbing_shell`: ``box`` must resolve to exactly one
+        axis-aligned rectangular **surface** lying flat in a ``z = const``
+        plane.  The skin goes on the ``L``/``R``/``B`` truncation edges (the
+        top is the free surface); ``faces=`` restricts it (subset of
+        ``("L", "R", "B")``, e.g. drop a symmetry edge).  ``layers``
+        stratifies box + lateral skin top → bottom (depths must sum to the
+        box's y-extent).  Discretization is size-based and (re)applied to
+        box + skin together after the weld, as in 3D.
+
+        Returns
+        -------
+        AbsorbingSkinResult
+            Same shape as the 3D result (``ndm == 2``).
+
+        Example
+        -------
+        ::
+
+            g.model.geometry.add_rectangle(0, -50, 0, 100, 50, label="soil")
+            res = g.parts.add_absorbing_shell_2d(box="soil", element_size=5.0)
+            g.mesh.generation.generate(dim=2)
+        """
+        from apeGmsh.parts.plane_wave_box import build_absorbing_shell_2d
+
+        return build_absorbing_shell_2d(
+            self._parent,
+            box=box,
+            element_size=element_size,
+            skin_thickness=skin_thickness,
+            faces=faces,
+            layers=layers,
+            name=name,
+            names=names,
+            apply_transfinite=apply_transfinite,
+        )
+
     # ------------------------------------------------------------------
     # Entry point 5: Parametric DRM-box primitive
     # ------------------------------------------------------------------
