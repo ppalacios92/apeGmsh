@@ -267,6 +267,9 @@ def _replay_into(
     initial_stress: "Sequence[Any]" = (),
     analysis_attrs: "dict[str, Any] | None" = None,
     analyze_call: "tuple[int, float | None] | None" = None,
+    skip_node_tags: "frozenset[int]" = frozenset(),
+    skip_element_tags: "frozenset[int]" = frozenset(),
+    initial_stress_tags: Any = None,
 ) -> None:
     """Walk a typed-record graph and re-emit it through ``emitter``.
 
@@ -336,6 +339,10 @@ def _replay_into(
         else:
             tag, coords = entry
             node_ndf = None
+        # ADR 0055 P2.3: stage-owned nodes emit INSIDE their stage block
+        # (_replay_staged_into), not in the global prefix — skip here.
+        if int(tag) in skip_node_tags:
+            continue
         if node_ndf is None:
             emitter.node(int(tag), *(float(c) for c in coords))
         else:
@@ -399,6 +406,10 @@ def _replay_into(
     # ignore the calls (their ``set_*`` helpers no-op when the attr
     # is absent).
     for rec in elements:
+        # ADR 0055 P2.3: stage-owned elements emit inside their stage
+        # block (_replay_staged_into); skip them in the global prefix.
+        if int(rec.tag) in skip_element_tags:
+            continue
         if rec.connectivity:
             set_element_nodes(emitter, tuple(int(c) for c in rec.connectivity))
         set_current_fem_element_id(emitter, int(rec.fem_eid))
@@ -428,7 +439,11 @@ def _replay_into(
         )
         from .tag_allocator import TagAllocator
 
-        _is_tags = TagAllocator()
+        # ADR 0055 P2.3: the staged caller threads its SHARED allocator
+        # so global + per-stage parameter tags accumulate on one counter
+        # (the bridge reuses one ``tags`` across everything).  Flat
+        # callers pass None → fresh allocator (unchanged behaviour).
+        _is_tags = initial_stress_tags or TagAllocator()
         fem_eid_to_ops_tag = {
             int(e.fem_eid): int(e.tag)
             for e in elements
@@ -462,28 +477,7 @@ def _replay_into(
     # produced.  Typed primitives (``decl_context is None``) emit
     # bare.
     for rec in recorders:
-        ctx = rec.decl_context
-        if ctx is not None:
-            emitter.recorder_declaration_begin(
-                declaration_name=ctx.declaration_name,
-                record_name=ctx.record_name,
-                category=ctx.category,
-                components=ctx.components,
-                raw=ctx.raw,
-                pg=ctx.pg,
-                label=ctx.label,
-                selection=ctx.selection,
-                ids=ctx.ids,
-                dt=ctx.dt,
-                n_steps=ctx.n_steps,
-                file_root=ctx.file_root,
-            )
-            try:
-                emitter.recorder(rec.kind, *rec.args)
-            finally:
-                emitter.recorder_declaration_end()
-        else:
-            emitter.recorder(rec.kind, *rec.args)
+        _replay_recorder(emitter, rec)
 
     # 12. Analysis chain.  ``analysis_attrs`` is the same flat dict
     # the H5 emitter accumulates via its constraints / numberer /
@@ -498,6 +492,27 @@ def _replay_into(
             emitter.analyze(steps=int(steps), dt=float(dt))
 
 
+def _int_recover(args: "Sequence[Any]") -> "tuple[Any, ...]":
+    """Coerce integral floats back to ``int`` in a chain ``*_args`` tuple.
+
+    ADR 0055 P2.3: an analysis-chain arg tuple with mixed numeric types
+    (``NormDispIncr(tol=1e-4, max_iter=50, p_flag=0, n_type=2)``) is
+    stored by ``_set_attr`` as a single ``float64`` array and read back
+    all-float (``(1e-4, 50.0, 0.0, 2.0)``).  ``OPS_GetIntInput`` rejects
+    a float where it wants an int, and the Tcl deck bytes drift
+    (``50.0`` vs ``50``).  Recover any float that is exactly integral to
+    ``int`` — a genuine float tol like ``1e-4`` is untouched.  Applies
+    to BOTH the flat and staged replay so neither drifts.
+    """
+    out: list[Any] = []
+    for a in args:
+        if isinstance(a, float) and a.is_integer():
+            out.append(int(a))
+        else:
+            out.append(a)
+    return tuple(out)
+
+
 def _replay_analysis_chain(
     emitter: Any, attrs: "dict[str, Any]",
 ) -> None:
@@ -506,22 +521,323 @@ def _replay_analysis_chain(
     Mirrors how :class:`H5Emitter` accumulates analysis-chain calls
     into ``self._analysis_attrs`` — each key maps to one Protocol
     method; ``<key>_args`` carries the trailing positional args when
-    present.
+    present.  ``*_args`` tuples are int-recovered (see
+    :func:`_int_recover`) so a round-tripped ``NormDispIncr`` etc.
+    re-renders byte-identically to the bridge.
     """
     if "handler" in attrs:
-        args = attrs.get("handler_args", ())
+        args = _int_recover(attrs.get("handler_args", ()))
         emitter.constraints(attrs["handler"], *args)
     if "numberer" in attrs:
         emitter.numberer(attrs["numberer"])
     if "system" in attrs:
-        emitter.system(attrs["system"], *attrs.get("system_args", ()))
+        emitter.system(attrs["system"], *_int_recover(attrs.get("system_args", ())))
     if "test" in attrs:
-        emitter.test(attrs["test"], *attrs.get("test_args", ()))
+        emitter.test(attrs["test"], *_int_recover(attrs.get("test_args", ())))
     if "algorithm" in attrs:
-        emitter.algorithm(attrs["algorithm"], *attrs.get("algorithm_args", ()))
+        emitter.algorithm(
+            attrs["algorithm"], *_int_recover(attrs.get("algorithm_args", ())),
+        )
     if "integrator" in attrs:
         emitter.integrator(
-            attrs["integrator"], *attrs.get("integrator_args", ()),
+            attrs["integrator"], *_int_recover(attrs.get("integrator_args", ())),
         )
     if "analysis" in attrs:
         emitter.analysis(attrs["analysis"])
+
+
+def _replay_recorder(emitter: Any, rec: Any) -> None:
+    """Replay one recorder record, wrapping a declared recorder in its
+    declaration begin/end context (shared by flat + staged replay)."""
+    ctx = rec.decl_context
+    if ctx is not None:
+        emitter.recorder_declaration_begin(
+            declaration_name=ctx.declaration_name,
+            record_name=ctx.record_name,
+            category=ctx.category,
+            components=ctx.components,
+            raw=ctx.raw,
+            pg=ctx.pg,
+            label=ctx.label,
+            selection=ctx.selection,
+            ids=ctx.ids,
+            dt=ctx.dt,
+            n_steps=ctx.n_steps,
+            file_root=ctx.file_root,
+        )
+        try:
+            emitter.recorder(rec.kind, *rec.args)
+        finally:
+            emitter.recorder_declaration_end()
+    else:
+        emitter.recorder(rec.kind, *rec.args)
+
+
+def _region_is_scoped(args: "Sequence[Any]") -> bool:
+    """True iff a stage region carries a ``-rayleigh`` / ``-damp`` tail.
+
+    Those region forms emit at slot 11 (after ``domainChange``,
+    interleaved with the global-form rayleighs); a plain ``s.region``
+    (``-node`` / ``-ele`` / ``-eleOnly``) emits at slot 7. Re-derives
+    the kind from the arg tokens exactly as the writer's ``kind`` attr
+    derivation does (ADR 0055 P2.1)."""
+    toks = {a for a in args if isinstance(a, str)}
+    return "-rayleigh" in toks or "-damp" in toks
+
+
+def _replay_staged_into(
+    emitter: Any,
+    *,
+    stages: "Sequence[Any]",
+    **replay_kwargs: Any,
+) -> None:
+    """Re-emit a STAGED archive's deck (ADR 0055 P2.3) onto ``emitter``.
+
+    Sibling of :func:`_replay_into` for tcl / py targets only.  Emits
+    the global prefix (with stage-owned nodes/elements filtered out),
+    then re-drives each stage's emit block in the exact order the
+    bridge's ``_emit_stages_flat`` uses.  The H5 target never reaches
+    here (it round-trips via ``restore_stage_blocks`` + the writer);
+    the Live target raises upfront (``LiveOpsEmitter.stage_open``
+    raises — fail clean, not deep in replay).
+
+    ``replay_kwargs`` are the same keyword arguments :func:`_replay_into`
+    accepts (the global record graph); ``elements`` MUST already be
+    connectivity-rehydrated (the owned-element lookup keys into it).
+    """
+    from .build import (
+        ActivateAbsorbingRecord,
+        emit_activate_absorbing,
+        emit_initial_stress_addtoparameter,
+        emit_initial_stress_global,
+    )
+    from .tag_allocator import TagAllocator
+    from .tag_resolution import set_current_fem_element_id, set_element_nodes
+
+    # 0. Live guard — fail clean before any emit (the live emitter's
+    # stage_open raises; a deep mid-replay crash would be opaque).
+    from ..emitter.live import LiveOpsEmitter
+    if isinstance(emitter, LiveOpsEmitter):
+        raise NotImplementedError(
+            "OpenSeesModel.build('live'): live re-emit of a staged "
+            "archive is not supported (LiveOpsEmitter.stage_open "
+            "raises). Use build('tcl') / build('py') for staged decks."
+        )
+
+    nodes = replay_kwargs.get("nodes", ())
+    elements = replay_kwargs.get("elements", ())
+    # Always supplied by the caller (OpenSeesModel._populate_emitter);
+    # typed Any so the bridge emit helpers (FEMData param) accept it,
+    # exactly as the flat ``_replay_into(fem=...)`` path does.
+    fem: Any = replay_kwargs.get("fem")
+
+    owned_node_tags = frozenset(
+        int(t) for s in stages for t in s.owned_node_ids
+    )
+    owned_element_tags = frozenset(
+        int(t) for s in stages for t in s.owned_element_ids
+    )
+
+    # ONE allocator threaded across the global prefix AND every stage
+    # (the bridge reuses a single ``tags``; a per-stage allocator would
+    # restart parameter counters at stage boundaries — gate-1 FATAL).
+    tags = TagAllocator()
+
+    # 1. Global prefix — _replay_into with stage-owned topology filtered
+    # out and the shared allocator threaded for any GLOBAL initial_stress.
+    _replay_into(
+        emitter,
+        skip_node_tags=owned_node_tags,
+        skip_element_tags=owned_element_tags,
+        initial_stress_tags=tags,
+        **replay_kwargs,
+    )
+
+    # Lookups for owned-topology re-emit inside each stage block.
+    node_map: "dict[int, tuple[tuple[float, ...], int | None]]" = {}
+    for entry in nodes:
+        if len(entry) == 3:
+            t, coords, nndf = entry
+        else:
+            t, coords = entry
+            nndf = None
+        node_map[int(t)] = (coords, nndf)
+    elem_map = {int(r.tag): r for r in elements}
+    fem_eid_to_ops_tag = {
+        int(r.fem_eid): int(r.tag) for r in elements if int(r.fem_eid) >= 0
+    }
+
+    # 2. Per-stage blocks — exact _emit_stages_flat order.
+    for st in stages:
+        emitter.stage_open(st.name)
+        if st.set_time is not None:
+            emitter.set_time(float(st.set_time))
+        if st.set_creep_on is not None:
+            emitter.set_creep(bool(st.set_creep_on))
+
+        # owned nodes (verbatim, ndf elide-on-equal already baked into
+        # the stored node_ndf via _ndf_or_none on the caller side).
+        for nid in st.owned_node_ids:
+            ent = node_map.get(int(nid))
+            if ent is None:
+                continue
+            coords, nndf = ent
+            if nndf is None:
+                emitter.node(int(nid), *(float(c) for c in coords))
+            else:
+                emitter.node(
+                    int(nid), *(float(c) for c in coords), ndf=int(nndf),
+                )
+        # owned elements (look up the rehydrated record by ops tag).
+        for etag in st.owned_element_ids:
+            rec = elem_map.get(int(etag))
+            if rec is None:
+                continue
+            if rec.connectivity:
+                set_element_nodes(
+                    emitter, tuple(int(c) for c in rec.connectivity),
+                )
+            set_current_fem_element_id(emitter, int(rec.fem_eid))
+            emitter.element(rec.type_token, int(rec.tag), *rec.args)
+
+        # SSI-2.E removals (before new BCs).
+        for n_tag, dof in st.remove_sps:
+            emitter.remove_sp(int(n_tag), int(dof))
+        for e_tag in st.remove_elements:
+            emitter.remove_element(int(e_tag))
+
+        # stage fix / mass.
+        for r in st.fixes:
+            emitter.fix(int(r.tag), *(int(d) for d in r.dofs))
+        for r in st.masses:
+            emitter.mass(int(r.tag), *(float(v) for v in r.values))
+        # Stage regions split by kind (bridge emits them at TWO slots):
+        # plain ``s.region`` (node_or_filter) here at slot 7; the
+        # region-scoped ``-rayleigh`` / ``-damp`` forms emit at slot 11
+        # (after domain_change), interleaved with the global-form
+        # rayleighs by their captured emit_index.  Kind is re-derived
+        # from the arg tokens exactly as the writer derived it.
+        scoped_regions = [
+            (seq, r) for seq, r in zip(st.region_seq, st.regions)
+            if _region_is_scoped(r.args)
+        ]
+        for seq, r in zip(st.region_seq, st.regions):
+            if not _region_is_scoped(r.args):
+                emitter.region(int(r.tag), *r.args)
+
+        # stage MP constraints — bridge sub-order rigid_links →
+        # equal_dofs → rigid_diaphragms → embedded_nodes (each preceded
+        # by its name comment, mirroring _emit_name). Reconstructed from
+        # the POST-fan-out RO records (the build-side pool is gone).
+        for r in st.rigid_links:
+            if r.name:
+                emitter.mp_constraint_comment(r.name)
+            emitter.rigidLink(r.kind, int(r.master), int(r.slave))
+        for r in st.equal_dofs:
+            if r.name:
+                emitter.mp_constraint_comment(r.name)
+            emitter.equalDOF(
+                int(r.master), int(r.slave), *(int(d) for d in r.dofs),
+            )
+        for r in st.rigid_diaphragms:
+            if r.name:
+                emitter.mp_constraint_comment(r.name)
+            emitter.rigidDiaphragm(
+                int(r.perp_dir), int(r.master),
+                *(int(s2) for s2 in r.slaves),
+            )
+        for r in st.embedded_nodes:
+            if r.name:
+                emitter.mp_constraint_comment(r.name)
+            emitter.embeddedNode(
+                int(r.ele_tag), int(r.cnode), *(int(a) for a in r.args),
+                stiffness=r.stiffness, stiffness_p=r.stiffness_p,
+                rotational=r.rotational, pressure=r.pressure,
+            )
+
+        # HOLD support patterns (slot 10, BEFORE domain_change) — split
+        # by sp_holds presence (the role attr is not read back).
+        hold_patterns = [p for p in st.patterns if p.sp_holds]
+        load_patterns = [p for p in st.patterns if not p.sp_holds]
+        for p in hold_patterns:
+            emitter.pattern_open(p.type_token, int(p.tag), *p.args)
+            for n_tag, dof in p.sp_holds:
+                emitter.sp_hold(int(n_tag), int(dof))
+            emitter.pattern_close()
+
+        # domain_change — replay the captured bool, do NOT recompute.
+        if st.domain_changed:
+            emitter.domain_change()
+
+        # Slot 11 — rayleigh + region-scoped damping, in the bridge's
+        # interleaved order.  The bridge runs _emit_rayleigh then
+        # _emit_damping_attach after domain_change; the global-form
+        # rayleigh (bare ``rayleigh`` line) and the region-scoped
+        # ``-rayleigh`` / ``-damp`` lines were captured with a shared
+        # per-stage emit_index, so merge-sort by it to reproduce the
+        # exact sequence.
+        slot11: "list[tuple[int, int, Any]]" = []
+        for seq, coeffs in zip(st.rayleigh_seq, st.rayleighs):
+            slot11.append((int(seq), 0, coeffs))
+        for seq, r in scoped_regions:
+            slot11.append((int(seq), 1, r))
+        slot11.sort(key=lambda item: item[0])
+        for _seq, kind, payload in slot11:
+            if kind == 0:
+                emitter.rayleigh(*(float(c) for c in payload))
+            else:
+                emitter.region(int(payload.tag), *payload.args)
+
+        # stage initial_stress — re-run the bridge helpers with the
+        # SHARED allocator (parameter tags accumulate across stages).
+        if st.initial_stress:
+            name_to_param_tags = emit_initial_stress_global(
+                st.initial_stress, emitter, tags,
+            )
+            emit_initial_stress_addtoparameter(
+                st.initial_stress, emitter, fem,
+                name_to_param_tags=name_to_param_tags,
+                fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+            )
+
+        # activate_absorbing — declarative (pg/elements); re-run the
+        # helper (allocates a fresh parameter tag from the shared pool).
+        if st.activate_absorbing:
+            ab_records = tuple(
+                ActivateAbsorbingRecord(pg=pg, elements=els)
+                for pg, els in st.activate_absorbing
+            )
+            emit_activate_absorbing(
+                ab_records, emitter, fem,
+                fem_eid_to_ops_tag=fem_eid_to_ops_tag, tags=tags,
+            )
+
+        # stage analysis chain.
+        if st.chain_attrs:
+            _replay_analysis_chain(emitter, dict(st.chain_attrs))
+
+        # load patterns (slot 16, AFTER the chain).
+        for p in load_patterns:
+            emitter.pattern_open(p.type_token, int(p.tag), *p.args)
+            for load in p.loads:
+                emitter.load(int(load.target), *load.forces)
+            for sp in p.sps:
+                emitter.sp(int(sp.target), int(sp.dof), float(sp.value))
+            for ele_load in p.ele_loads:
+                emitter.eleLoad(*ele_load.args)
+            emitter.pattern_close()
+
+        # stage recorders.
+        for rec in st.recorders:
+            _replay_recorder(emitter, rec)
+
+        if st.pre_analyze_reset:
+            emitter.reset()
+
+        if st.analyze_dt is None:
+            emitter.analyze(steps=int(st.analyze_steps))
+        else:
+            emitter.analyze(
+                steps=int(st.analyze_steps), dt=float(st.analyze_dt),
+            )
+        emitter.stage_close()

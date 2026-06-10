@@ -128,14 +128,15 @@ def test_h5_partitioned_staged_build_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_h5_staged_archive_reads_but_flat_replay_fails_loud(
+def test_h5_staged_archive_reads_and_replays(
     tmp_path: Path,
 ) -> None:
-    """ADR 0055 P2.2: a staged archive LOADS (``.stages()`` exposes the
-    program; the old read probe is lifted), but the flat tcl/py/live
-    replay still fails loud — silently flattening the staged program
-    is the hazard every guard generation has protected against.
-    The full read contract lives in ``test_h5_stages_reader.py``.
+    """ADR 0055 P2.2 + P2.3: a staged archive LOADS (``.stages()``
+    exposes the program; the read probe is lifted) AND re-emits via
+    tcl/py (the staged replay). The deck-equality completeness proof
+    lives in ``test_h5_stages_replay.py``; here we just pin that
+    from_h5 → .stages() → build('tcl') works end-to-end and live
+    stays fail-loud.
 
     Uses a real :class:`FEMData` (not the stub) so the neutral zone
     is valid for ``FEMData.from_h5``.
@@ -167,8 +168,10 @@ def test_h5_staged_archive_reads_but_flat_replay_fails_loud(
     assert stage.name == "insitu"
     assert stage.analyze_steps == 10
 
-    with pytest.raises(NotImplementedError, match="P2.3"):
-        m.build("tcl")
+    deck = m.build("tcl")
+    assert "wipeAnalysis" in deck  # stage_close emitted → replay ran
+    with pytest.raises(NotImplementedError, match="live"):
+        m.build("live")
 
 
 # ---------------------------------------------------------------------------

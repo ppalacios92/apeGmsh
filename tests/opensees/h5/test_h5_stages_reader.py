@@ -318,13 +318,17 @@ def test_malformed_n_stages_mismatch_fails_loud(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_staged_build_tcl_py_live_fail_loud(tmp_path: Path) -> None:
+def test_staged_build_tcl_py_succeed_live_fails_loud(tmp_path: Path) -> None:
+    """ADR 0055 P2.3: tcl/py re-emit a staged archive (deck-equality is
+    pinned in test_h5_stages_replay.py); live stays fail-loud
+    (LiveOpsEmitter.stage_open raises)."""
     out = tmp_path / "staged.h5"
     _real_two_stage_bridge().h5(str(out))
     m = OpenSeesModel.from_h5(str(out))
-    for target in ("tcl", "py", "live"):
-        with pytest.raises(NotImplementedError, match="P2.3"):
-            m.build(target)
+    assert isinstance(m.build("tcl"), str)
+    assert isinstance(m.build("py"), str)
+    with pytest.raises(NotImplementedError, match="live"):
+        m.build("live")
 
 
 def test_staged_build_h5_roundtrips(tmp_path: Path) -> None:

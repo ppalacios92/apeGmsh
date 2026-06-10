@@ -972,24 +972,7 @@ class OpenSeesModel:
         connectivity prefix per
         :meth:`H5Emitter._write_element_argstack`).
         """
-        # ADR 0055 Phase 2: staged models cannot re-emit through the
-        # FLAT replay — it would silently drop every stage's chain
-        # rebinding, owned topology, and analyze loop.  The staged
-        # replay (`_replay_staged_into`) is P2.3; until it lands the
-        # tcl / py / live targets fail loud.  ``to_h5`` is unaffected
-        # (it routes through ``_populate_emitter_h5`` + the
-        # ``restore_stage_blocks`` echo, never through here).
-        if self._stages:
-            raise NotImplementedError(
-                "OpenSeesModel: re-emitting a STAGED archive to "
-                f"tcl/py/live is not implemented yet (ADR 0055 P2.3 "
-                f"staged replay pending; model carries "
-                f"{len(self._stages)} stage(s)).  The staged archive "
-                "round-trips via to_h5/build('h5'), and .stages() "
-                "exposes the records; re-emit decks from the "
-                "authoring session via ops.tcl / ops.py."
-            )
-        from ._internal.compose import _replay_into
+        from ._internal.compose import _replay_into, _replay_staged_into
 
         uniaxial = self._materials_by_family.get("uniaxial", ())
         nd = self._materials_by_family.get("nd", ())
@@ -1027,8 +1010,7 @@ class OpenSeesModel:
         # calls (missing iNode / jNode prefix).
         elements_with_conn = self._rehydrate_element_connectivity(self._elements)
 
-        _replay_into(
-            emitter,
+        replay_kwargs: "dict[str, Any]" = dict(
             ndm=self._ndm,
             ndf=self._ndf,
             nodes=nodes,
@@ -1050,6 +1032,15 @@ class OpenSeesModel:
             analysis_attrs=dict(self._analysis_attrs),
             analyze_call=self._analyze_call,
         )
+
+        # ADR 0055 P2.3: a staged archive re-emits through the staged
+        # replay (global prefix with stage-owned topology filtered out,
+        # then per-stage blocks).  The Live target raises upfront inside
+        # _replay_staged_into.  Non-staged models take the flat path.
+        if self._stages:
+            _replay_staged_into(emitter, stages=self._stages, **replay_kwargs)
+        else:
+            _replay_into(emitter, **replay_kwargs)
 
     def _rehydrate_element_connectivity(
         self, records: tuple[ElementRecord, ...],
