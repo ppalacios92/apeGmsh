@@ -1227,6 +1227,20 @@ class OpenSeesModel:
         ADR 0019 INV-5: tag identity may diverge from a fresh
         :meth:`apeSees.run` for the same FEM.  Documented; not a bug.
         """
+        # ADR 0055 P2.3 — staged guard BEFORE constructing the emitter:
+        # ``LiveOpsEmitter()`` imports openseespy, so on an
+        # openseespy-less interpreter (the curated CI gate) a staged
+        # archive would die with ImportError before ever reaching the
+        # staged-replay guard in ``_replay_staged_into``.  Same message
+        # as that guard (kept there as defense in depth for direct
+        # callers).
+        if self._stages:
+            raise NotImplementedError(
+                "OpenSeesModel.build('live'): live re-emit of a staged "
+                "archive is not supported (LiveOpsEmitter.stage_open "
+                "raises). Use build('tcl') / build('py') for staged "
+                "decks."
+            )
         from .emitter.live import LiveOpsEmitter
 
         emitter = LiveOpsEmitter(wipe=True)

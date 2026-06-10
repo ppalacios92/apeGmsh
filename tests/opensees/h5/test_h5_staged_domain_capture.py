@@ -14,13 +14,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import h5py
+import numpy as np
+import pytest
 
 from apeGmsh.opensees.apesees import apeSees
 from apeGmsh.results import Results
 from apeGmsh.results.capture.spec import DomainCaptureSpec
 
 from tests.conftest import _open_model_from_h5
-from tests.opensees.h5.test_h5_stages_writer import _build_two_stage_bridge
+from tests.opensees.h5.test_h5_stages_writer import (
+    _build_two_stage_bridge,
+    _chain,
+    _make_two_quad_fem_stub,
+)
 from tests.test_results_domain_capture import _FakeOps
 
 
@@ -43,6 +49,100 @@ def test_staged_nonpartitioned_forwards_bridge(tmp_path: Path) -> None:
         _probe_spec(ops, ids=[1]), path=str(tmp_path / "run.h5"),
     )
     assert cap._bridge is ops
+
+
+def test_staged_phantom_constraint_capture_degrades_sidecar_less(
+    tmp_path: Path,
+) -> None:
+    """A stage-claimed ``node_to_surface`` emits phantom nodes, which
+    ``ops.h5()`` still rejects (emitter gate-2 guard) even on a
+    non-partitioned model.  The capture must NOT crash at __enter__ —
+    it warns and degrades to the pre-Composed shape (no sidecar, no
+    ``/opensees/`` zone), exactly what the old blanket ``bridge=None``
+    gate produced for every staged build."""
+    from apeGmsh._kernel.records._constraints import (
+        NodePairRecord,
+        NodeToSurfaceRecord,
+    )
+    from apeGmsh._kernel.records._kinds import ConstraintKind
+
+    fem = _make_two_quad_fem_stub()
+    fem.add_node_constraints([NodeToSurfaceRecord(
+        kind=ConstraintKind.NODE_TO_SURFACE, name="hub",
+        master_node=1, slave_nodes=[5, 6],
+        phantom_nodes=[200, 201],
+        phantom_coords=np.array([[1.0, 2.0, 0.0], [0.0, 2.0, 0.0]]),
+        rigid_link_records=[
+            NodePairRecord(
+                kind=ConstraintKind.RIGID_BEAM,
+                master_node=1, slave_node=200,
+            ),
+            NodePairRecord(
+                kind=ConstraintKind.RIGID_BEAM,
+                master_node=1, slave_node=201,
+            ),
+        ],
+        equal_dof_records=[
+            NodePairRecord(
+                kind=ConstraintKind.EQUAL_DOF,
+                master_node=200, slave_node=5, dofs=[1, 2],
+            ),
+            NodePairRecord(
+                kind=ConstraintKind.EQUAL_DOF,
+                master_node=201, slave_node=6, dofs=[1, 2],
+            ),
+        ],
+        dofs=[1, 2],
+    )])
+    fem.snapshot_id = "stub"
+
+    # FEMStub has no broker write surface; graft the same minimal
+    # ``to_native_h5`` shim _MockFem uses so NativeWriter can embed a
+    # ``/model/`` zone at capture __enter__ (nodes only — elements
+    # aren't read back by this test).
+    def _to_native_h5(group):
+        from types import SimpleNamespace
+
+        from apeGmsh.mesh._femdata_h5_io import (
+            write_neutral_zone_into_group,
+        )
+        mini = SimpleNamespace(
+            nodes=SimpleNamespace(
+                ids=np.asarray(fem.nodes.ids),
+                coords=np.asarray(fem.nodes.coords),
+            ),
+            elements=[],
+            snapshot_id="stub",
+        )
+        write_neutral_zone_into_group(mini, group, ndf=2)
+
+    fem.to_native_h5 = _to_native_h5
+    ops = apeSees(fem, default_orientation=None)
+    ops.model(ndm=2, ndf=2)
+    mat = ops.nDMaterial.ElasticIsotropic(E=1e6, nu=0.3, rho=0.0)
+    ops.element.FourNodeQuad(pg="Rock", thickness=1.0, material=mat)
+    ops.element.FourNodeQuad(pg="Fill", thickness=1.0, material=mat)
+    ops.fix(pg="Base", dofs=(1, 1))
+    with ops.stage(name="construction") as s:
+        s.node_to_surface(name="hub")
+        s.analysis(**_chain(ops))
+        s.run(n_increments=5)
+
+    out = tmp_path / "run.h5"
+    cap = ops.domain_capture(
+        _probe_spec(ops, ids=[1]), path=str(out), ops=_FakeOps(),
+    )
+    assert cap._bridge is ops  # gate forwards; degrade happens at enter
+    with pytest.warns(UserWarning, match="could not archive"):
+        with cap:
+            cap.begin_stage("run", kind="static")
+            cap.step(t=1.0)
+            cap.end_stage()
+
+    assert not out.with_suffix(".model.h5").exists()
+    with h5py.File(str(out), "r") as f:
+        assert "opensees" not in f  # pre-Composed shape
+        assert "model" in f and "stages" in f
 
 
 def test_staged_partitioned_keeps_bridge_none(tmp_path: Path) -> None:
