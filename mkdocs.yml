@@ -192,6 +192,7 @@ nav:
           - "Compose modules": examples/compose-modules.md
           - "Pushover of a steel moment frame": examples/pushover-steel-frame.md
           - "Plane-wave SSI: absorbing soil column": examples/plane-wave-ssi.md
+          - "Staged SSI: gravity then the absorbing flip": examples/staged-gravity-ssi.md
       - Notebook gallery (legacy):
           - "Hello plate": examples/notebooks/01_hello_plate.ipynb
           - "Cantilever beam (2D)": examples/notebooks/02_cantilever_beam_2D.ipynb
