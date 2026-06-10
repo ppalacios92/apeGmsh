@@ -1859,7 +1859,13 @@ class H5Emitter:
     def analysis(self, a_type: str) -> None:
         self._chain_attrs["analysis"] = a_type
 
-    def analyze(self, *, steps: int, dt: float | None = None) -> int:
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int:
+        # ``label`` is a deck-banner concern (py/tcl fail-loud loops);
+        # the archive stores the declarative (steps, dt) only — the
+        # stage name is already archived on the stage record itself.
         call = (int(steps), None if dt is None else float(dt))
         if self._stage_current is not None:
             self._stage_current.analyze_call = call

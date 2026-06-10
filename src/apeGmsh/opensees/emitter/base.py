@@ -336,7 +336,19 @@ class Emitter(Protocol):
     # actually advance between steps.  Tcl emits ``for`` + dispatcher
     # invocations; Py emits ``for`` + dispatcher invocations; LiveOps
     # runs the loop in-process and invokes the captured closures.
-    def analyze(self, *, steps: int, dt: float | None = None) -> int: ...
+    #
+    # Fail-loud contract: the DECK emitters (py/tcl) must emit EVERY
+    # analyze as a per-increment loop that checks the return code and
+    # ABORTS the deck with a loud banner on the first failed increment
+    # (``raise SystemExit`` / Tcl ``error``).  A batched ``analyze N``
+    # short-circuits internally on the first failure and the deck would
+    # otherwise run on, leaving the stage silently partial (or not
+    # applied at all).  ``label`` names the analyze loop in the banner —
+    # the stage emit paths pass the stage name.
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int: ...
 
     # -- Stress control (Phase SSI-1: initial_stress + ramping hooks) ----
     # ``addToParameter`` attaches one element's response to a previously

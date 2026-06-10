@@ -415,7 +415,13 @@ class LiveOpsEmitter:
     def analysis(self, a_type: str) -> None:
         self._ops.analysis(a_type)
 
-    def analyze(self, *, steps: int, dt: float | None = None) -> int:
+    def analyze(
+        self, *, steps: int, dt: float | None = None,
+        label: str | None = None,
+    ) -> int:
+        # ``label`` names the loop in the DECK emitters' fail-loud
+        # banners; live runs in-process and reports failure through the
+        # returned rc instead (the staged orchestrator raises on it).
         if not self._step_hooks_registered:
             if dt is None:
                 ret: Any = self._ops.analyze(steps)

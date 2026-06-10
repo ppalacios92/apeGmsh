@@ -255,15 +255,18 @@ def test_imposed_displacement_runs_on_ladruno(tmp_path: Path) -> None:
 
     ops.tcl(str(deck), analyze_steps=10)
 
-    # Insert a node-displacement recorder at the top so it captures
-    # node 2's uy across the analyze loop.  The Node recorder uses
-    # node tags directly (no fan-out bug — that one only affects
-    # Element recorders).
+    # Insert a node-displacement recorder just before the analyze loop
+    # (the fail-loud per-increment ``for`` form) so it captures node 2's
+    # uy across the loop.  The Node recorder uses node tags directly
+    # (no fan-out bug — that one only affects Element recorders).
+    loop_header = "for {set _apesees_i 0} {$_apesees_i < 10}"
     text = deck.read_text()
+    assert loop_header in text
     text = text.replace(
-        "analyze 10",
+        loop_header,
         f"recorder Node -file {str(disp_out).replace(chr(92), '/')} "
-        "-time -node 2 -dof 2 disp\nanalyze 10",
+        f"-time -node 2 -dof 2 disp\n{loop_header}",
+        1,
     )
     deck.write_text(text)
 

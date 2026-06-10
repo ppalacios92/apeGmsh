@@ -116,7 +116,11 @@ def test_tcl_deck_brackets_analyze_line(tmp_path) -> None:
     lines = (tmp_path / "deck.tcl").read_text(encoding="utf-8").splitlines()
 
     i_start = lines.index("profiler start -deep")
-    i_analyze = lines.index("analyze 5")
+    # analyze is the fail-loud per-increment loop; locate its header.
+    i_analyze = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith("for {set _apesees_i 0} {$_apesees_i < 5}")
+    )
     i_report = lines.index("profiler report profile.h5 -run caseA")
     assert i_start < i_analyze < i_report
 
@@ -130,7 +134,8 @@ def test_py_deck_brackets_analyze_line(tmp_path) -> None:
     lines = (tmp_path / "deck.py").read_text(encoding="utf-8").splitlines()
 
     i_start = lines.index("ops.profiler('start', '-deep')")
-    i_analyze = lines.index("ops.analyze(5)")
+    # analyze is the fail-loud per-increment loop; locate its header.
+    i_analyze = lines.index("for _apesees_i in range(5):")
     i_report = lines.index(
         "ops.profiler('report', 'profile.h5', '-run', 'caseA')"
     )

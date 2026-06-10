@@ -106,11 +106,15 @@ def test_tcl_stage_close_clears_hook_lists_when_hooks_registered() -> None:
     assert "wipeAnalysis" in text
     assert "set _apesees_before_step_hooks {}" in text
     assert "set _apesees_after_step_hooks {}" in text
-    # The flag is now reset — analyze() emits unwrapped until the
-    # next stage's step_hook_ramp.
+    # The flag is now reset — analyze() emits no hook-dispatcher calls
+    # until the next stage's step_hook_ramp (the fail-loud per-increment
+    # loop itself is always present).
     n_after_close = len(e.lines())
     e.analyze(steps=5)
-    assert e.lines()[n_after_close] == "analyze 5"
+    new_text = "\n".join(e.lines()[n_after_close:])
+    assert "for {set _apesees_i 0} {$_apesees_i < 5}" in new_text
+    assert "_apesees_call_before_step" not in new_text
+    assert "_apesees_call_after_step" not in new_text
 
 
 def test_py_stage_open_close_shape() -> None:

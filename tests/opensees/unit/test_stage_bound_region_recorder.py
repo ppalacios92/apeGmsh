@@ -307,9 +307,12 @@ def test_stage_bound_recorder_emits_after_chain_before_analyze() -> None:
         i for i, ln in enumerate(lines)
         if i > stage_idx and ln.strip().startswith("recorder Node")
     )
+    # analyze emits as the fail-loud per-increment loop; its header
+    # marks the analyze slot.
     analyze_idx = next(
         i for i, ln in enumerate(lines)
-        if i > stage_idx and ln.strip().startswith("analyze ")
+        if i > stage_idx
+        and ln.strip().startswith("for {set _apesees_i 0}")
     )
     assert chain_idx < rec_idx < analyze_idx, (
         f"slot order broken: chain={chain_idx} recorder={rec_idx} "

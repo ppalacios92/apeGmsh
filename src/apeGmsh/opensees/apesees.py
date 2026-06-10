@@ -1785,7 +1785,19 @@ class BuiltModel:
                 emitter.reset()
 
             # 9. Analyze loop (auto-wraps with hook dispatcher calls).
-            emitter.analyze(steps=stage.n_increments, dt=stage.dt)
+            # Deck emitters return 0 (their per-increment loops fail
+            # loud at RUN time); the live emitter returns the first
+            # failing rc — raise rather than run the next stage on a
+            # silently partial state.
+            rc = emitter.analyze(
+                steps=stage.n_increments, dt=stage.dt, label=stage.name,
+            )
+            if rc != 0:
+                raise BridgeError(
+                    f"stage {stage.name!r}: analyze FAILED (rc={rc}) — "
+                    f"aborting; running the remaining stages on a "
+                    f"partial state is almost never intended."
+                )
 
             # 10. Stage close — loadConst + wipeAnalysis + hook clear.
             emitter.stage_close()
@@ -2687,7 +2699,18 @@ class BuiltModel:
                 emitter.reset()
 
             # 7. Analyze loop (auto-wraps with hook dispatcher calls).
-            emitter.analyze(steps=stage.n_increments, dt=stage.dt)
+            # See the flat path: deck emitters fail loud at RUN time;
+            # a live rc != 0 raises here rather than running the next
+            # stage on a silently partial state.
+            rc = emitter.analyze(
+                steps=stage.n_increments, dt=stage.dt, label=stage.name,
+            )
+            if rc != 0:
+                raise BridgeError(
+                    f"stage {stage.name!r}: analyze FAILED (rc={rc}) — "
+                    f"aborting; running the remaining stages on a "
+                    f"partial state is almost never intended."
+                )
 
             # 8. Stage close — loadConst + wipeAnalysis + hook clear.
             emitter.stage_close()
