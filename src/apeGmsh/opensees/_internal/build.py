@@ -98,6 +98,8 @@ __all__ = [
     "close_builder_ndf_bracket",
     "validate_node_ndf_element_compat",
     "validate_absorbing_quad_geometry",
+    "validate_body_force_double_count",
+    "WarnBodyForceDoubleCount",
     "infer_node_ndf",
     "validate_adaptive_element_endpoints",
     "resolve_ndf_overlay",
@@ -1969,6 +1971,110 @@ def validate_absorbing_quad_geometry(
                 "axis-aligned (see g.parts.add_plane_wave_box_2d / "
                 "add_absorbing_shell_2d)."
             )
+
+
+class WarnBodyForceDoubleCount(UserWarning):
+    """A continuum element's ``body_force`` overlaps an imported gravity case.
+
+    A continuum element's constructor ``body_force`` (``b1 b2 b3`` /
+    ``-bodyForce``) is applied **unconditionally every step** — it is NOT
+    pattern-gated (verified live + against ``Brick.cpp:1268-1274`` /
+    ``FourNodeQuad.cpp:890-906``: the ``applyLoad == 0`` branch integrates the
+    constructor ``b`` whether or not an ``eleLoad`` exists).  So if a
+    ``p.from_model(case)`` also imports a geometry gravity case whose resolved
+    nodal loads land on the same nodes **along the same axis**, that region
+    carries its self-weight **twice**.  Fail-soft — both may be intentional,
+    but it is almost always a mistake.
+    """
+
+
+def validate_body_force_double_count(
+    fem: "FEMData",
+    elements: "Iterable[Element]",
+    from_model_cases: "Iterable[str]",
+) -> None:
+    """ADR 0054 close-out — warn on silently double-counted self-weight.
+
+    Detects the trap where a continuum element carries a constructor
+    ``body_force`` (always-on, see :class:`WarnBodyForceDoubleCount`) **and**
+    a ``p.from_model(case)`` import drives a gravity load onto the same nodes.
+    To avoid false positives on the legitimate *lateral-load + self-weight*
+    combo, the overlap only counts a node whose imported nodal load is
+    **collinear** with the element's body force (i.e. the same line of action
+    — double self-weight, not an orthogonal push).  Fail-soft (one aggregated
+    warning).
+    """
+    # (pg, class_name, body_force_3d) — pg pulled via getattr so the loop
+    # stays typed against the abstract ``Element`` (no ``.pg`` attribute).
+    bf_specs: list[tuple[str, str, np.ndarray]] = []
+    for spec in elements:
+        bf = getattr(spec, "body_force", None)
+        pg = getattr(spec, "pg", None)
+        if bf is None or pg is None:
+            continue
+        vec = np.zeros(3, dtype=float)
+        vec[: len(bf)] = [float(c) for c in bf]
+        if float(np.linalg.norm(vec)) == 0.0:
+            continue
+        bf_specs.append((str(pg), type(spec).__name__, vec))
+    cases = [c for c in dict.fromkeys(from_model_cases)]  # de-dup, keep order
+    if not bf_specs or not cases:
+        return
+
+    nodes = getattr(fem, "nodes", None)
+    load_set = getattr(nodes, "loads", None) if nodes is not None else None
+    if load_set is None:
+        return
+
+    # case -> {node_id: force_xyz} (only loads carrying a real force).
+    case_loads: dict[str, dict[int, np.ndarray]] = {}
+    for case in cases:
+        per_node: dict[int, np.ndarray] = {}
+        for rec in load_set.by_pattern(case):
+            f = getattr(rec, "force_xyz", None)
+            if f is None:
+                continue
+            fv = np.asarray(f, dtype=float)
+            if float(np.linalg.norm(fv)) == 0.0:
+                continue
+            per_node[int(rec.node_id)] = fv
+        if per_node:
+            case_loads[case] = per_node
+
+    if not case_loads:
+        return
+
+    collisions: list[str] = []
+    for pg, cls_name, vec in bf_specs:
+        bf_dir = vec / np.linalg.norm(vec)
+        spec_nodes = set(expand_pg_to_nodes(fem, pg))
+        for case, per_node in case_loads.items():
+            n_hit = 0
+            for nid in spec_nodes & per_node.keys():
+                fv = per_node[nid]
+                cos = float(abs(np.dot(fv / np.linalg.norm(fv), bf_dir)))
+                if cos > 0.999:        # collinear -> same line of action
+                    n_hit += 1
+            if n_hit:
+                collisions.append(
+                    f"pg {pg!r} ({cls_name}, body_force) "
+                    f"shares {n_hit} loaded node(s) with from_model case "
+                    f"{case!r}"
+                )
+
+    if collisions:
+        joined = "; ".join(collisions)
+        warnings.warn(
+            f"self-weight may be double-counted: {joined}. A continuum "
+            "element's body_force is applied every step regardless of any "
+            "load pattern, so importing a gravity case onto the same region "
+            "applies its weight twice. Drop one — either remove body_force= "
+            "and keep the from_model gravity case (pattern-controlled, "
+            "loadConst-freezable, the staged-SSI idiom), or remove the "
+            "gravity case and keep body_force= (always-on, not rampable).",
+            WarnBodyForceDoubleCount,
+            stacklevel=2,
+        )
 
 
 def sweep_asdconcrete_element_size(

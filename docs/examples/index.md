@@ -52,6 +52,13 @@ Recognizable structural problems, built end to end through the **typed
     the surface at $H/V_s$ and then radiates out (late motion < 1 % of
     peak) instead of reflecting.
 
+-   __[Staged SSI: gravity then the absorbing flip](staged-gravity-ssi.md)__
+    — the canonical sequence: a gravity stage settles the column (5.6 cm)
+    while the skin holds, `loadConst` freezes it, then `s.activate_absorbing`
+    flips and the base wavelet shakes the equilibrated state. Shows why
+    continuum `body_force` (always-on) is the wrong gravity route for a
+    staged model and the `g.loads.gravity` + `from_model` route is right.
+
 </div>
 
 More rungs (shell-on-solid, transient) are landing wave by wave.

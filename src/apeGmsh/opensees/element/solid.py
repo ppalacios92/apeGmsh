@@ -37,6 +37,37 @@ name); the lowercase token is what the OpenSees Tcl parser expects.
 Priority-2 classes (``bbarBrick``, ``SSPbrick``, ``SSPquad``) are
 deferred — their parameters / penalty parameters need an OpenSees-
 expert sign-off before being locked into the typed surface.
+
+Body-force semantics (``body_force=``)
+--------------------------------------
+The optional ``body_force`` triple/​pair becomes the element's constructor
+``b1 b2 b3`` (or ``-bodyForce`` for the Bézier/Ladruno forms).  Verified
+against the OpenSees source (``Brick.cpp:1268-1274`` /
+``FourNodeQuad.cpp:890-906``) and a live single-element probe, its semantics
+are:
+
+* **Always-on.**  The continuum elements integrate the constructor ``b``
+  into the resisting force **every step**, with **no** ``eleLoad`` and **no**
+  load pattern (the ``applyLoad == 0`` branch).  An ``eleLoad -selfWeight``
+  only *replaces* it with a pattern-factored copy; it is not required to
+  switch it on.  So ``body_force`` is **not** rampable, **not** scalable by a
+  time series, and **not** frozen by ``loadConst`` — it is on from the first
+  step of the first stage onward.
+* **Force density, not acceleration.**  ``b`` has units of force per unit
+  volume (2-D: per unit area·thickness).  For gravity supply
+  ``b = (0, 0, -ρ g)`` directly — the element does **not** multiply by the
+  material density.
+* **Consistent load vector.**  The contribution is the full Gauss-quadrature
+  ``∫ Nᵀ b dV`` (the variationally consistent body-force vector), identical to
+  what ``eleLoad -selfWeight`` would assemble.
+
+For a *staged* gravity solve (gravity ramped with — or held before — an
+``s.initial_stress`` K0 install, then frozen by ``loadConst``), prefer the
+pattern-controlled route instead: author ``g.loads.gravity(...)`` at the
+geometry and import it with ``p.from_model(case)`` inside the stage.  Mixing
+the two — a ``body_force`` element whose nodes also receive a ``from_model``
+gravity case — double-counts self-weight and raises
+:class:`~apeGmsh.opensees._internal.build.WarnBodyForceDoubleCount` at build.
 """
 from __future__ import annotations
 
@@ -144,6 +175,9 @@ class FourNodeTetrahedron(Element):
     body_force
         Optional ``(b1, b2, b3)`` body-force vector. Defaults to
         ``None`` (no body-force triple is appended to the command).
+        Applied **every step**, no load pattern needed; ``b`` is a force
+        density (gravity: ``-ρ g``).  See *Body-force semantics* in the
+        module docstring.
     """
 
     pg: str
@@ -183,7 +217,9 @@ class TenNodeTetrahedron(Element):
         The :class:`NDMaterial` that supplies the constitutive law.
     body_force
         Optional ``(b1, b2, b3)`` body-force vector. Defaults to
-        ``None``.
+        ``None``.  Applied **every step**, no load pattern needed; ``b``
+        is a force density (gravity: ``-ρ g``).  See *Body-force
+        semantics* in the module docstring.
     """
 
     pg: str
@@ -224,7 +260,9 @@ class stdBrick(Element):  # noqa: N801 — class name mirrors the OpenSees Tcl t
         The :class:`NDMaterial` that supplies the constitutive law.
     body_force
         Optional ``(b1, b2, b3)`` body-force vector. Defaults to
-        ``None``.
+        ``None``.  Applied **every step**, no load pattern needed; ``b``
+        is a force density (gravity: ``-ρ g``).  See *Body-force
+        semantics* in the module docstring.
     """
 
     pg: str
@@ -298,6 +336,9 @@ class FourNodeQuad(Element):
         this element). Defaults to ``None``.
     body_force
         Optional ``(b1, b2)`` body-force vector. Defaults to ``None``.
+        Applied **every step**, no load pattern needed; ``b`` is a force
+        density (gravity: ``-ρ g``).  See *Body-force semantics* in the
+        module docstring.
 
     Notes
     -----
@@ -390,6 +431,9 @@ class Tri31(Element):
         Optional mass density. Defaults to ``None``.
     body_force
         Optional ``(b1, b2)`` body-force vector. Defaults to ``None``.
+        Applied **every step**, no load pattern needed; ``b`` is a force
+        density (gravity: ``-ρ g``).  See *Body-force semantics* in the
+        module docstring.
 
     Notes
     -----
@@ -477,6 +521,9 @@ class SixNodeTri(Element):
         Optional mass density. Defaults to ``None``.
     body_force
         Optional ``(b1, b2)`` body-force vector. Defaults to ``None``.
+        Applied **every step**, no load pattern needed; ``b`` is a force
+        density (gravity: ``-ρ g``).  See *Body-force semantics* in the
+        module docstring.
 
     Notes
     -----
@@ -572,7 +619,9 @@ class BezierTri6(Element):
         Optional mass density (``-rho``). Defaults to ``None``.
     body_force
         Optional ``(b1, b2)`` body-force vector (``-bodyForce``).
-        Defaults to ``None``.
+        Defaults to ``None``.  Applied **every step**, no load pattern
+        needed; ``b`` is a force density (gravity: ``-ρ g``).  See
+        *Body-force semantics* in the module docstring.
     """
 
     pg: str
@@ -683,7 +732,9 @@ class BezierTet10(Element):
         Defaults to ``None``.
     body_force
         Optional ``(b1, b2, b3)`` body-force vector (``-bodyForce``).
-        Defaults to ``None``.
+        Defaults to ``None``.  Applied **every step**, no load pattern
+        needed; ``b`` is a force density (gravity: ``-ρ g``).  See
+        *Body-force semantics* in the module docstring.
     pressure
         Optional volume-pressure term (``-pressure``). Defaults to
         ``None``. **Rejected** under ``geom="corot"`` or ``"finite"``
@@ -828,7 +879,9 @@ class LadrunoBrick(Element):
         for explicit integrators. Defaults to ``False``.
     body_force
         Optional ``(bx, by, bz)`` body force per unit volume (``-b``).
-        Defaults to ``None``.
+        Defaults to ``None``.  Applied **every step**, no load pattern
+        needed (gravity: ``-ρ g``).  See *Body-force semantics* in the
+        module docstring.
     damp
         Optional :class:`Damping` object attached via the element's
         ``-damp`` flag (ADR 0053 element-flag attach). The fork honours

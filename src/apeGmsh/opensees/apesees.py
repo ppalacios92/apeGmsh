@@ -64,6 +64,7 @@ from ._internal.build import (
     topological_order,
     validate_node_ndf_element_compat,
     validate_absorbing_quad_geometry,
+    validate_body_force_double_count,
     infer_node_ndf,
     validate_adaptive_element_endpoints,
     resolve_ndf_overlay,
@@ -862,6 +863,14 @@ class BuiltModel:
             for _p in _st.pattern_specs:
                 _plains_by_id[id(_p)] = _p
         _plains = list(_plains_by_id.values())
+        # ADR 0054 close-out: warn if a continuum body_force (always-on,
+        # not pattern-gated) overlaps a from_model gravity import on the
+        # same nodes along the same axis — self-weight counted twice.
+        validate_body_force_double_count(
+            self.fem,
+            elements,
+            tuple(c for p in _plains for c in p.from_model_cases),
+        )
         validate_record_ndf_consistency(
             self.fem, effective_ndf, self.ndm, self.ndf,
             fix_records=(

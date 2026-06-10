@@ -259,12 +259,40 @@ flip idiom; per-partition flip is the real idiom, not merely a deferral).
   column, base shear Ricker — arrival 0.198 s vs ``H/Vs`` 0.200 s, late/peak
   1.12 %.
 
-## Open / deferred
+## Close-out items (post-AB-5)
 
-- H5 round-trip of the absorbing elements + the tracked flip set (treat like any
-  ElementRecord; the flip is a staged record).
-- Cross-partition flip fan-out is part of AB-3 (per-rank `parameter`/`updateParameter`,
-  per the STKO reference), not a deferral — but the partitioned skin-extrusion
-  path (AB-1 across a partition cut) may land in a later slice.
+- **H5 round-trip ✅ DONE.** The flat `ASDAbsorbingBoundary3D`/`2D` declarations
+  round-trip `ops.h5` → `from_h5` → `to_h5`/`build("tcl")` like any
+  ElementRecord (3D + 2D tests). Surfaced + fixed a real latent bug: the
+  rectangular per-type `element_meta` args matrix end-pads narrow rows with
+  NaN, and both rehydrate paths replayed the pads as literal `nan` args — the
+  absorbing skin is the first consumer mixing arities in one type group
+  (5-arg side panels vs 7-arg `-fx` bottom rows). Fixed by trimming trailing
+  NaN pads on read (interior NaNs — orientation-inject placeholders — stay).
+  The **flip set** (staged) H5 is out of scope here — it rides ADR 0055
+  Phase 2 staged-bucket archival.
+- **Partitioned skin e2e ✅ DONE.** A real METIS-cut plane-wave box pins the
+  per-rank emit: skin partitions disjointly (union = closed-form count), each
+  rank flips exactly its owned tags, `-fx` rides every bottom cell.
+- **Gravity → in-situ → flip ✅ RESOLVED (no eleLoad carve-out needed).**
+  The premise "brick `body_force` needs an `eleLoad` that ADR 0051 dropped"
+  was **false**: a continuum element's constructor `body_force` is applied
+  **unconditionally every step** (`Brick.cpp:1268-1274` / `FourNodeQuad.cpp:890-906`,
+  `applyLoad == 0` branch; live-probe-verified — a 1×1×1 brick with `b3=-1000`
+  gives base `Rz=+1000` with no `eleLoad`). `eleLoad -selfWeight` only swaps in
+  a pattern-factored copy. So solid-soil gravity already works two ways:
+  *(a)* always-on `body_force=` (not rampable / not `loadConst`-frozen), or
+  *(b)* the staged idiom — `g.loads.gravity(...)` (tributary lumping, exact =
+  consistent vector for affine hex8/quad4/tet4) imported with
+  `p.from_model(case)`, ramped and frozen by `loadConst`. The
+  worked example [`docs/examples/staged-gravity-ssi.md`](../../../../../docs/examples/staged-gravity-ssi.md)
+  run-verifies the full cycle (gravity settles 5.6 cm with the skin holding →
+  flip → wave arrives at `H/Vs`=0.198 s, radiates to 0.93 % of peak). A
+  build-time `WarnBodyForceDoubleCount` guard catches the trap of using both
+  routes on the same region (collinearity-discriminated, so lateral-load +
+  self-weight stays quiet). **Still genuinely deferred (demand-gated):** ramped
+  *consistent* gravity on **quadratic** continuum (tet10/hex20 — corner-node
+  tributary lumping is wrong there; needs the `eleLoad -selfWeight` consumer),
+  and beam/shell self-weight (needs section ρA/ρt — ADR 0051's deferral).
 - STKO-byte-parity of mesh topology is explicitly **not** a goal; equivalence is
   physical, not file-level.
