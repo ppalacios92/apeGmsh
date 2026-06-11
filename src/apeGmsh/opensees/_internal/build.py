@@ -3316,7 +3316,7 @@ def _emit_kinematic_couplings(
         _emit_name(emitter, rec.name)
         slaves = [int(sn) for sn in rec.slave_nodes]
         ele_tag = tags.allocate("element")
-        args: list[int] = [int(rec.master_node), len(slaves), *slaves]
+        args: list[int | str] = [int(rec.master_node), len(slaves), *slaves]
         if rec.dofs:
             args += ["-dof", *(int(d) for d in rec.dofs)]
         emitter.element("LadrunoKinematicCoupling", ele_tag, *args)
