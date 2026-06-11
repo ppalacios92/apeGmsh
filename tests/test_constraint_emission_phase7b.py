@@ -537,7 +537,7 @@ class TestEmitMpConstraintsFanout:
         assert rec.calls[1][1][:3] == ("beam", 1, 3)
         assert rec.calls[2][1][:3] == ("beam", 1, 4)
 
-    def test_kinematic_coupling_dispatches_to_equal_dof(self) -> None:
+    def test_kinematic_coupling_emits_fork_element(self) -> None:
         fem = make_two_column_frame()
         fem.add_node_constraints([
             NodeGroupRecord(
@@ -548,12 +548,14 @@ class TestEmitMpConstraintsFanout:
         ])
         rec = RecordingEmitter()
         emit_mp_constraints(rec, cast(Any, fem), TagAllocator())
-        # equalDOF preserves the per-DOF selectivity.
-        names = [c[0] for c in rec.calls]
-        assert names == ["equalDOF", "equalDOF", "equalDOF"]
-        assert rec.calls[0] == ("equalDOF", (1, 2, 1, 2), {})
-        assert rec.calls[1] == ("equalDOF", (1, 3, 1, 2), {})
-        assert rec.calls[2] == ("equalDOF", (1, 4, 1, 2), {})
+        # RBE2 now emits one fork element (not equalDOF-per-slave); the
+        # restricted dofs become -dof, preserving the per-DOF selectivity.
+        elems = [c for c in rec.calls if c[0] == "element"]
+        assert len(elems) == 1
+        flat = elems[0][1]
+        assert flat[0] == "LadrunoKinematicCoupling"
+        # ref=1, N=3, slaves 2 3 4, -dof 1 2
+        assert flat[2:] == (1, 3, 2, 3, 4, "-dof", 1, 2)
 
     def test_node_to_surface_dispatches_phantoms_links_and_equal_dofs(
         self,
