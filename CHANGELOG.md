@@ -22,7 +22,7 @@ A deform-pipeline audit found that the viewer-side `_sync_layer_grids` walk — 
 - En route: `SpringForceDiagram` anchor collection returned a positions array positionally zipped against the requested element ids — silently misaligned when any spring's node was missing from the view. Now keyed by eid.
 - Endpoint+substrate-row collection is shared (`collect_endpoints_with_substrate_rows` in `_beam_geometry`, used by line-force and fiber-section).
 
-Locked by `tests/viewers/test_diagram_deform_follow.py` — the shift/reset contract per diagram kind (contour ×4 paths, fiber, layer-stack, spring); the already-correct diagrams keep their own coverage.
+Locked by `tests/viewers/test_diagram_deform_follow.py` — the shift/reset contract per diagram kind (contour ×4 paths, fiber, layer-stack, spring); the already-correct diagrams keep their own coverage. **The contract is enforced going forward** by `tests/viewers/test_deform_follow_contract.py` (the ADR 0056 guard pattern): it walks every `Diagram` subclass under `apeGmsh.viewers` and fails on any class inheriting the base no-op `sync_substrate_points` — a new diagram that forgets the hook fails at test time, not silently in a user's deformed view. Exemptions live in an explicit, reason-carrying `_EXEMPT` list (currently only `DeformedShapeDiagram`, which renders its own warp) and are stale-checked against the live class set.
 
 ### FIXED — local-axes overlay triads resolve recorder-first (frame parity with the diagrams)
 
