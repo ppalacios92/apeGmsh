@@ -19,7 +19,7 @@ default — global Z for non-vertical beams, global X for vertical.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Optional
 
 import numpy as np
 from numpy import ndarray
@@ -123,6 +123,39 @@ def axes_from_quaternion(
         np.asarray(quaternion, dtype=np.float64).reshape(1, 4),
     ).matrices[0]
     return m[0], m[1], m[2]
+
+
+def recorder_z_axes(
+    results: Any,
+    element_ids: "Optional[ndarray]" = None,
+) -> dict[int, ndarray]:
+    """``eid -> recorder local z-axis`` for elements with a recorded frame.
+
+    Reads ``results.elements.local_axes()`` (.ladruno
+    ``MODEL/LOCAL_AXES``) with **no selector** — recorded frames only.
+    An explicit ``ids=`` would identity-pad unrecorded elements, which
+    must instead fall back to vecxz / geometry. Non-Ladruno readers
+    raise ``TypeError`` → empty dict (every element falls back).
+
+    The z-axis is the geomTransf-equivalent ``vecxz``: Gram-Schmidted
+    against the chord by :func:`compute_local_axes` it reproduces the
+    recorder's true cross-section roll. Shared by the line-force /
+    fiber-section diagrams and the local-axes overlay so all three
+    render the same frame.
+    """
+    try:
+        la = results.elements.local_axes()
+    except TypeError:
+        return {}
+    wanted = (
+        None if element_ids is None else {int(e) for e in element_ids}
+    )
+    z = la.z_axis
+    return {
+        int(eid): z[k]
+        for k, eid in enumerate(la.element_ids)
+        if wanted is None or int(eid) in wanted
+    }
 
 
 def station_position(
@@ -321,6 +354,8 @@ class LocalFrame:
 def iter_local_frames(
     view: "ViewerData",
     node_coord: Callable[[int], "ndarray | None"],
+    *,
+    vecxz_override: "Optional[Mapping[int, ndarray]]" = None,
 ) -> Iterator[LocalFrame]:
     """Yield a :class:`LocalFrame` for every 1-D (line) element.
 
@@ -338,6 +373,10 @@ def iter_local_frames(
         ``None`` if absent.  Pass a lookup over the *deformed* substrate
         points to make the frames follow a deformed shape; pass a
         reference-coordinate lookup for the undeformed frame.
+    vecxz_override
+        Per-element vecxz that wins over ``vecxz_for`` — the recorder
+        frame channel (:func:`recorder_z_axes`). Elements absent from
+        the mapping fall through to the model / default chain.
 
     Degenerate elements (coincident endpoints, missing nodes) are
     skipped silently — a single bad element never aborts the sweep.
@@ -352,7 +391,12 @@ def iter_local_frames(
             cj = node_coord(int(conn[1]))
             if ci is None or cj is None:
                 continue
-            vecxz = view.elements.vecxz_for(int(eid))
+            vecxz = (
+                vecxz_override.get(int(eid))
+                if vecxz_override is not None else None
+            )
+            if vecxz is None:
+                vecxz = view.elements.vecxz_for(int(eid))
             try:
                 x_local, y_local, z_local, length = compute_local_axes(
                     ci, cj, vecxz,

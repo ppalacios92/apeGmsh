@@ -33,7 +33,11 @@ import numpy as np
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
-from ._beam_geometry import compute_local_axes, station_position
+from ._beam_geometry import (
+    compute_local_axes,
+    recorder_z_axes,
+    station_position,
+)
 from ._scalar_color_support import ScalarColorSupport
 from ._styles import FiberSectionStyle
 from ..scene_ir import (
@@ -457,25 +461,10 @@ class FiberSectionDiagram(ScalarColorSupport, Diagram):
     def _recorder_z_axes(
         results: "Results", element_ids: ndarray,
     ) -> dict[int, ndarray]:
-        """``eid -> recorder local z-axis`` for elements with a recorded frame.
-
-        Reads ``results.elements.local_axes()`` (.ladruno
-        ``MODEL/LOCAL_AXES``) with **no selector** — recorded frames only.
-        An explicit ``ids=`` would identity-pad unrecorded elements, which
-        must instead fall back to vecxz / geometry. Non-Ladruno readers
-        raise ``TypeError`` → empty dict (every element falls back).
-        """
-        try:
-            la = results.elements.local_axes()
-        except TypeError:
-            return {}
-        wanted = {int(e) for e in element_ids}
-        z = la.z_axis
-        return {
-            int(eid): z[k]
-            for k, eid in enumerate(la.element_ids)
-            if int(eid) in wanted
-        }
+        """``eid -> recorder local z-axis`` — see
+        :func:`~apeGmsh.viewers.diagrams._beam_geometry.recorder_z_axes`
+        (shared with the line-force diagram and local-axes overlay)."""
+        return recorder_z_axes(results, element_ids)
 
     @staticmethod
     def _collect_line_element_ids(view: "ViewerData") -> ndarray:
