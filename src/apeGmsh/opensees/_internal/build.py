@@ -68,7 +68,10 @@ if TYPE_CHECKING:
     # Use the fully-qualified module path to disambiguate from the
     # similarly-named submodule ``apeGmsh.mesh.FEMData`` under mypy.
     from apeGmsh.mesh.FEMData import FEMData
-    from apeGmsh._kernel.records._constraints import ConstraintRecord
+    from apeGmsh._kernel.records._constraints import (
+        ConstraintRecord,
+        InterpolationRecord,
+    )
     from apeGmsh._kernel.records._partitions import PartitionRecord
 
     from ..analysis.strategy import Ladder
@@ -3357,7 +3360,7 @@ def _emit_surface_couplings(
 
 
 def _emit_one_interpolation(
-    emitter: "Emitter", rec: object, tags: TagAllocator,
+    emitter: "Emitter", rec: "InterpolationRecord", tags: TagAllocator,
 ) -> None:
     """Emit one :class:`InterpolationRecord` row, branching on its kind.
 
