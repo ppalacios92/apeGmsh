@@ -4,7 +4,8 @@ Mirrors the kind catalog the interactive viewer exposes, but produces
 static matplotlib figures suitable for publication / headless CI.
 
 Available methods: ``mesh``, ``contour``, ``deformed``, ``history``,
-``vector_glyph``, ``reactions``, ``loads``, ``line_force``. Each
+``vector_glyph``, ``reactions``, ``loads``, ``line_force``, ``energy``,
+``node_envelope`` (the last two consume Ladruno-recorder channels). Each
 returns the matplotlib ``Axes`` for chaining or further
 customization. Pass your own ``ax=`` to embed in a larger layout.
 
@@ -210,41 +211,6 @@ class ResultsPlot:
         else:
             plot_coords = coords
 
-        if tris.size == 0 and segs.size == 0:
-            raise RuntimeError(
-                "contour: no renderable elements in mesh."
-            )
-
-        edge_kwargs: dict[str, Any] = {"linewidth": linewidth}
-        if edge_color is None:
-            edge_kwargs["edgecolor"] = "none"
-        else:
-            edge_kwargs["edgecolor"] = edge_color
-
-        # Auto-clim across both surfaces and lines so a beam-+-shell
-        # mesh shares one colour scale.
-        if clim is None:
-            sample_vals: list[ndarray] = []
-            if tris.size:
-                sample_vals.append(node_values[lookup[tris]].mean(axis=1))
-            if segs.size:
-                sample_vals.append(node_values[lookup[segs]].mean(axis=1))
-            stacked = (
-                np.concatenate(sample_vals) if sample_vals
-                else np.array([0.0, 1.0])
-            )
-            finite = stacked[np.isfinite(stacked)]
-            if finite.size == 0:
-                clim = (0.0, 1.0)
-            else:
-                lo, hi = float(finite.min()), float(finite.max())
-                if lo == hi:
-                    hi = lo + 1.0
-                clim = (lo, hi)
-
-        norm = mcolors.Normalize(vmin=clim[0], vmax=clim[1])
-        mappable: Any = None    # the artist we hand to colorbar
-
         if wireframe and deformed and tris.size:
             ghost_verts = coords[lookup[tris]]
             ax.add_collection3d(Poly3DCollection(
@@ -260,40 +226,16 @@ class ResultsPlot:
                 linewidths=max(linewidth * 0.6, 0.5), alpha=0.3,
             ))
 
-        if tris.size:
-            verts = plot_coords[lookup[tris]]
-            face_vals = node_values[lookup[tris]].mean(axis=1)
-            coll = Poly3DCollection(verts, alpha=alpha, **edge_kwargs)
-            coll.set_array(face_vals)
-            coll.set_cmap(cmap)
-            coll.set_norm(norm)
-            ax.add_collection3d(coll)
-            mappable = coll
-
-        if segs.size:
-            seg_verts = plot_coords[lookup[segs]]
-            seg_vals = node_values[lookup[segs]].mean(axis=1)
-            line_coll = Line3DCollection(
-                seg_verts, linewidths=max(linewidth * 5, 1.5),
-            )
-            line_coll.set_array(seg_vals)
-            line_coll.set_cmap(cmap)
-            line_coll.set_norm(norm)
-            ax.add_collection3d(line_coll)
-            if mappable is None:
-                mappable = line_coll
-
-        if scalar_bar and mappable is not None:
-            cbar = ax.figure.colorbar(mappable, ax=ax, shrink=0.6, pad=0.05)
-            cbar.set_label(component)
-
         if title is None:
             title = f"{component} @ step {step}"
             if deformed:
                 title += f"  (deformed × {scale:g})"
-        ax.set_title(title)
-        self._autoscale(ax, plot_coords)
-        return ax
+        return self._paint_node_scalar(
+            ax, node_values, plot_coords,
+            cmap=cmap, clim=clim, edge_color=edge_color,
+            linewidth=linewidth, alpha=alpha, scalar_bar=scalar_bar,
+            bar_label=component, title=title,
+        )
 
     # ------------------------------------------------------------------
     # deformed — warp by displacement, optional scalar overlay
@@ -895,8 +837,223 @@ class ResultsPlot:
         return ax
 
     # ------------------------------------------------------------------
+    # energy — Ladruno energy-balance time history (-G energy)
+    # ------------------------------------------------------------------
+
+    def energy(
+        self,
+        *,
+        region: Optional[int] = None,
+        stage: Optional[str] = None,
+        ax: Optional[Any] = None,
+        title: Optional[str] = None,
+    ) -> Any:
+        """Plot the energy-balance time history (Ladruno ``-G energy``).
+
+        One line per closure component (``KE`` / ``IE`` / ``DW`` / ``ULW``
+        / ``RES``) on the energy axis, and ``ERR`` — the normalized
+        balance error %, the headline solution-quality diagnostic for
+        explicit runs — dashed on a twin axis.
+
+        Parameters
+        ----------
+        region
+            ``None`` (default) plots the whole-domain balance; an
+            OpenSees region tag plots that region's balance.
+        ax
+            Existing **2-D** axes to draw into (this is a time-history
+            plot, not a mesh render). ``None`` creates a new figure.
+
+        Raises the underlying :meth:`Results.energy` errors —
+        ``TypeError`` on non-Ladruno results, ``ValueError`` if energy
+        was not recorded / the region is unknown.
+        """
+        _require_mpl()
+        df = self._r.energy(region=region, stage=stage)
+        if ax is None:
+            _, ax = plt.subplots(figsize=self._figsize)
+        t = np.asarray(df.index.to_numpy(), dtype=np.float64)
+        handles: list[Any] = []
+        for col in df.columns:
+            if col == "ERR":
+                continue
+            (h,) = ax.plot(t, np.asarray(df[col].to_numpy()), label=col)
+            handles.append(h)
+        ax.set_xlabel("time")
+        ax.set_ylabel("energy")
+        if "ERR" in df.columns:
+            ax_err = ax.twinx()
+            (h,) = ax_err.plot(
+                t, np.asarray(df["ERR"].to_numpy()),
+                label="ERR [%]", color="0.35", linestyle="--",
+            )
+            handles.append(h)
+            ax_err.set_ylabel("ERR [%]")
+        ax.legend(handles=handles, loc="best")
+        if title is None:
+            title = "energy balance" + (
+                "" if region is None else f" (region {region})"
+            )
+        ax.set_title(title)
+        return ax
+
+    # ------------------------------------------------------------------
+    # node_envelope — recorder-side node extremes (Ladruno -envelope)
+    # ------------------------------------------------------------------
+
+    def node_envelope(
+        self,
+        component: str,
+        *,
+        measure: str = "absmax",
+        stage: Optional[str] = None,
+        ax: Optional["Axes3D"] = None,
+        cmap: str = "viridis",
+        clim: Optional[tuple[float, float]] = None,
+        edge_color: Optional[str] = "k",
+        linewidth: float = 0.1,
+        alpha: float = 1.0,
+        scalar_bar: bool = True,
+        title: Optional[str] = None,
+    ) -> "Axes3D":
+        """Paint a recorder-side node envelope on the mesh
+        (Ladruno ``-envelope``).
+
+        Colors the undeformed mesh by the per-node time-reduced extreme
+        of ``component`` — the peak-response picture a long run recorded
+        with ``-envelope`` keeps *instead of* a time series (so
+        :meth:`contour` has no step to read there).
+
+        Parameters
+        ----------
+        component
+            Canonical nodal component (``"displacement_x"`` …).
+        measure
+            ``"absmax"`` (default), ``"min"``, or ``"max"`` — the
+            envelope column to paint.
+
+        Raises the underlying :meth:`Results.node_envelope` errors —
+        ``TypeError`` on non-Ladruno results, ``ValueError`` if the file
+        was not recorded with ``-envelope`` / the component is absent.
+        """
+        _require_mpl()
+        if measure not in ("min", "max", "absmax"):
+            raise ValueError(
+                f"measure must be 'min', 'max' or 'absmax' (got {measure!r})."
+            )
+        ax = self._ensure_ax(ax)
+        df = self._r.node_envelope(component, stage=stage)
+        _, _, _, coords = self._facets()
+
+        all_ids = np.asarray(
+            self._r._fem.nodes.ids, dtype=np.int64,    # type: ignore[union-attr]
+        )
+        node_values = self._scatter_node_values(
+            all_ids,
+            np.asarray(df.index.to_numpy(), dtype=np.int64),
+            np.asarray(df[measure].to_numpy(), dtype=np.float64),
+        )
+        if title is None:
+            title = f"{component} envelope ({measure})"
+        return self._paint_node_scalar(
+            ax, node_values, coords,
+            cmap=cmap, clim=clim, edge_color=edge_color,
+            linewidth=linewidth, alpha=alpha, scalar_bar=scalar_bar,
+            bar_label=f"{component} ({measure})", title=title,
+        )
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _paint_node_scalar(
+        self,
+        ax: "Axes3D",
+        node_values: ndarray,
+        plot_coords: ndarray,
+        *,
+        cmap: str,
+        clim: Optional[tuple[float, float]],
+        edge_color: Optional[str],
+        linewidth: float,
+        alpha: float,
+        scalar_bar: bool,
+        bar_label: str,
+        title: str,
+    ) -> "Axes3D":
+        """Paint a per-node scalar on the mesh (surfaces + 1-D lines).
+
+        Shared by :meth:`contour` (per-step slab read) and
+        :meth:`node_envelope` (recorder-side time-reduced extremes).
+        ``node_values`` is ``(N,)`` parallel to ``fem.nodes.ids``.
+        """
+        tris, segs, lookup, _ = self._facets()
+
+        if tris.size == 0 and segs.size == 0:
+            raise RuntimeError(
+                "no renderable elements in mesh."
+            )
+
+        edge_kwargs: dict[str, Any] = {"linewidth": linewidth}
+        if edge_color is None:
+            edge_kwargs["edgecolor"] = "none"
+        else:
+            edge_kwargs["edgecolor"] = edge_color
+
+        # Auto-clim across both surfaces and lines so a beam-+-shell
+        # mesh shares one colour scale.
+        if clim is None:
+            sample_vals: list[ndarray] = []
+            if tris.size:
+                sample_vals.append(node_values[lookup[tris]].mean(axis=1))
+            if segs.size:
+                sample_vals.append(node_values[lookup[segs]].mean(axis=1))
+            stacked = (
+                np.concatenate(sample_vals) if sample_vals
+                else np.array([0.0, 1.0])
+            )
+            finite = stacked[np.isfinite(stacked)]
+            if finite.size == 0:
+                clim = (0.0, 1.0)
+            else:
+                lo, hi = float(finite.min()), float(finite.max())
+                if lo == hi:
+                    hi = lo + 1.0
+                clim = (lo, hi)
+
+        norm = mcolors.Normalize(vmin=clim[0], vmax=clim[1])
+        mappable: Any = None    # the artist we hand to colorbar
+
+        if tris.size:
+            verts = plot_coords[lookup[tris]]
+            face_vals = node_values[lookup[tris]].mean(axis=1)
+            coll = Poly3DCollection(verts, alpha=alpha, **edge_kwargs)
+            coll.set_array(face_vals)
+            coll.set_cmap(cmap)
+            coll.set_norm(norm)
+            ax.add_collection3d(coll)
+            mappable = coll
+
+        if segs.size:
+            seg_verts = plot_coords[lookup[segs]]
+            seg_vals = node_values[lookup[segs]].mean(axis=1)
+            line_coll = Line3DCollection(
+                seg_verts, linewidths=max(linewidth * 5, 1.5),
+            )
+            line_coll.set_array(seg_vals)
+            line_coll.set_cmap(cmap)
+            line_coll.set_norm(norm)
+            ax.add_collection3d(line_coll)
+            if mappable is None:
+                mappable = line_coll
+
+        if scalar_bar and mappable is not None:
+            cbar = ax.figure.colorbar(mappable, ax=ax, shrink=0.6, pad=0.05)
+            cbar.set_label(bar_label)
+
+        ax.set_title(title)
+        self._autoscale(ax, plot_coords)
+        return ax
 
     def _ensure_ax(self, ax: Optional["Axes3D"]) -> "Axes3D":
         if ax is not None:
@@ -970,16 +1127,27 @@ class ResultsPlot:
         slab = self._r.nodes.get(component=component, time=step, stage=stage)
         fem = self._r._fem
         all_ids = np.asarray(fem.nodes.ids, dtype=np.int64)    # type: ignore[union-attr]
+        return self._scatter_node_values(
+            all_ids,
+            np.asarray(slab.node_ids, dtype=np.int64),
+            np.asarray(slab.values[0], dtype=np.float64),
+        )
+
+    @staticmethod
+    def _scatter_node_values(
+        all_ids: ndarray, node_ids: ndarray, values: ndarray,
+    ) -> ndarray:
+        """Scatter per-node ``values`` into a ``(N,)`` array parallel to
+        ``all_ids``, NaN where ``node_ids`` carries no entry."""
         out = np.full(all_ids.size, np.nan, dtype=np.float64)
-        slab_ids = np.asarray(slab.node_ids, dtype=np.int64)
-        if slab_ids.size == 0:
+        if node_ids.size == 0:
             return out
-        max_id = int(max(int(all_ids.max()), int(slab_ids.max())))
+        max_id = int(max(int(all_ids.max()), int(node_ids.max())))
         idx_lookup = np.full(max_id + 1, -1, dtype=np.int64)
         idx_lookup[all_ids] = np.arange(all_ids.size, dtype=np.int64)
-        positions = idx_lookup[slab_ids]
+        positions = idx_lookup[node_ids]
         valid = positions >= 0
-        out[positions[valid]] = np.asarray(slab.values[0])[valid]
+        out[positions[valid]] = values[valid]
         return out
 
     def _deformed_coords(

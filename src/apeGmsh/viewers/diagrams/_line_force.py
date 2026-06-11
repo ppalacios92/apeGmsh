@@ -34,6 +34,7 @@ from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
 from ._beam_geometry import (
+    axes_from_quaternion,
     compute_local_axes,
     normalize_fill_axis_spec,
     resolve_fill_direction,
@@ -83,7 +84,10 @@ class LineForceDiagram(Diagram):
         self._endpoint_subs_idx: dict[int, tuple[int, int]] = {}
 
         # eid -> geomTransf vecxz (3,) or None. Cached at attach from
-        # ViewerData; drives the real fill orientation.
+        # ViewerData; drives the real fill orientation. When the slab
+        # carries a recorder frame (.ladruno MODEL/LOCAL_AXES) the entry
+        # is overlaid with that frame's z-axis — the true cross-section
+        # roll wins over the model's vecxz / geometric default.
         self._element_vecxz: dict[int, "ndarray | None"] = {}
 
         # Mutable runtime overrides
@@ -171,6 +175,23 @@ class LineForceDiagram(Diagram):
             int(e): (_vecxz_for(int(e)) if _vecxz_for is not None else None)
             for e in unique_eids
         }
+
+        # Recorder beam frame (ADR 0056): where the slab carries a finite
+        # per-row quaternion (.ladruno ``MODEL/LOCAL_AXES``), its z-axis is
+        # the geomTransf-equivalent vecxz — compute_local_axes Gram-Schmidts
+        # it against the chord, reproducing the recorder's true cross-section
+        # roll here AND in sync_substrate_points' deformed re-derivation.
+        # This is the frame a model-less ``from_ladruno`` open has no vecxz
+        # for; NaN rows (element without a recorded frame) keep the fallback.
+        if slab.local_axes_quaternion is not None:
+            slab_quat = np.asarray(
+                slab.local_axes_quaternion, dtype=np.float64,
+            )
+            for eid in unique_eids:
+                rows = np.where(slab_eids == eid)[0]
+                if rows.size and np.all(np.isfinite(slab_quat[rows[0]])):
+                    _, _, z_rec = axes_from_quaternion(slab_quat[rows[0]])
+                    self._element_vecxz[int(eid)] = z_rec
 
         # ── Build per-beam geometry ─────────────────────────────────
         n_total = slab_eids.size

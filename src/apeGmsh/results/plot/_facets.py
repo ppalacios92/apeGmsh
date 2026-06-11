@@ -34,7 +34,6 @@ _VOLUME_FACES: dict[str, list[tuple[int, ...]]] = {
 }
 
 _SURFACE_TYPES = {"tri3", "quad4"}
-_LINE_TYPES = {"line2", "line3"}
 
 
 def _quad_to_tris(q: tuple[int, int, int, int]) -> list[tuple[int, int, int]]:
@@ -100,9 +99,12 @@ def extract_facets(
                 ))
 
     # ── 1-D elements: line segments ───────────────────────────────
+    # By dimension, not type name: a .ladruno-synthesized FEMData carries
+    # solver-flavoured 1-D groups ("truss", "beam", …) whose endpoints are
+    # the first two nodes — same convention as line2/line3 (midnodes are
+    # dropped, visually equivalent for static figures).
     for group in fem.elements:
-        tname = group.type_name
-        if tname not in _LINE_TYPES:
+        if group.element_type.dim != 1 or group.element_type.npe < 2:
             continue
         conn = np.asarray(group.connectivity, dtype=np.int64)
         for row in conn:

@@ -104,6 +104,27 @@ def compute_local_axes(
     return x_local, y_local, z_local, L
 
 
+def axes_from_quaternion(
+    quaternion: ndarray,
+) -> tuple[ndarray, ndarray, ndarray]:
+    """``(x_local, y_local, z_local)`` global-coord rows from a scalar-first
+    quaternion.
+
+    Mirrors :attr:`apeGmsh.results._slabs.LocalAxes.matrices` (rows are the
+    local axes — the same convention ``results.plot.line_force`` uses), so a
+    diagram can orient itself from the recorder's true frame: the
+    cross-section roll a ``.ladruno`` ``MODEL/LOCAL_AXES`` carries but node
+    geometry can't recover.
+    """
+    from apeGmsh.results._slabs import LocalAxes
+
+    m = LocalAxes(
+        np.array([0]),
+        np.asarray(quaternion, dtype=np.float64).reshape(1, 4),
+    ).matrices[0]
+    return m[0], m[1], m[2]
+
+
 def station_position(
     coord_i: ndarray,
     coord_j: ndarray,

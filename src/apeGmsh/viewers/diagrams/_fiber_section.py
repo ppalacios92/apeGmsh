@@ -146,13 +146,23 @@ class FiberSectionDiagram(ScalarColorSupport, Diagram):
         endpoints = self._collect_endpoints(view, unique_eids)
 
         # ── Cache per-beam local frames (computed once) ─────────────
+        # Roll source, best first: the recorder's true frame (.ladruno
+        # MODEL/LOCAL_AXES — its z-axis is the geomTransf-equivalent
+        # vecxz), then the model's geomTransf vecxz, then the geometric
+        # default. The fiber (y, z) section coords only land in the
+        # right plane when the roll matches the analysis frame.
+        recorder_z = self._recorder_z_axes(results, unique_eids)
+        _vecxz_for = getattr(view.elements, "vecxz_for", None)
         local_frames: dict[int, tuple[ndarray, ndarray, ndarray, ndarray]] = {}
         for eid_int in (int(e) for e in unique_eids):
             if eid_int not in endpoints:
                 continue
             ci, cj = endpoints[eid_int]
+            vecxz = recorder_z.get(eid_int)
+            if vecxz is None and _vecxz_for is not None:
+                vecxz = _vecxz_for(eid_int)
             try:
-                _, y_local, z_local, _ = compute_local_axes(ci, cj)
+                _, y_local, z_local, _ = compute_local_axes(ci, cj, vecxz)
             except ValueError:
                 continue
             local_frames[eid_int] = (ci, cj, y_local, z_local)
@@ -442,6 +452,30 @@ class FiberSectionDiagram(ScalarColorSupport, Diagram):
             render_points_as_spheres=True,
             pickable=False,
         )
+
+    @staticmethod
+    def _recorder_z_axes(
+        results: "Results", element_ids: ndarray,
+    ) -> dict[int, ndarray]:
+        """``eid -> recorder local z-axis`` for elements with a recorded frame.
+
+        Reads ``results.elements.local_axes()`` (.ladruno
+        ``MODEL/LOCAL_AXES``) with **no selector** — recorded frames only.
+        An explicit ``ids=`` would identity-pad unrecorded elements, which
+        must instead fall back to vecxz / geometry. Non-Ladruno readers
+        raise ``TypeError`` → empty dict (every element falls back).
+        """
+        try:
+            la = results.elements.local_axes()
+        except TypeError:
+            return {}
+        wanted = {int(e) for e in element_ids}
+        z = la.z_axis
+        return {
+            int(eid): z[k]
+            for k, eid in enumerate(la.element_ids)
+            if int(eid) in wanted
+        }
 
     @staticmethod
     def _collect_line_element_ids(view: "ViewerData") -> ndarray:
