@@ -410,3 +410,84 @@ def test_from_h5_session_compose_workflow(
     assert out.exists()
     reloaded = FEMData.from_h5(str(out))
     assert "A" in reloaded.composed_from
+
+
+# ---------------------------------------------------------------------------
+# ADR 0055 Phase 3 — staged-archive FILTER+warn with a REAL staged source
+# (the hand-injected fixture above predates real staged archives; since
+# Phase 2/5 `ops.h5` writes them, the e2e contract is locked here).
+# ---------------------------------------------------------------------------
+
+
+def _write_real_staged_archive(tmp_path: Path) -> Path:
+    """A real `ops.h5`-written staged archive (two stages, HOLD pattern,
+    stage pattern, Linear + Constant time-series)."""
+    from tests.opensees.h5.test_h5_partitioned_staged_capture import (
+        _flat_bridge,
+    )
+
+    src = tmp_path / "staged_module.h5"
+    _flat_bridge().h5(str(src))
+    return src
+
+
+def test_compose_filters_real_staged_archive(
+    host_h5: Path, tmp_path: Path,
+) -> None:
+    """Composing a REAL staged archive (ADR 0055 Phase 2/5 writer
+    output) warns once per droppable kind and the composed file
+    carries ZERO ``/opensees/stages`` bytes — the staged program is
+    never inherited (ADR 0038 §"Merge semantics" FILTER verdict;
+    ADR 0055 Phasing #3)."""
+    src = _write_real_staged_archive(tmp_path)
+    # Pre-condition: the source genuinely carries a staged program.
+    with h5py.File(str(src), "r") as f:
+        assert "stages" in f["opensees"]
+        assert "time_series" in f["opensees"]
+
+    g = apeGmsh.from_h5(host_h5)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        g.compose(src, label="staged_mod", translate=(50.0, 0.0, 0.0))
+        out = tmp_path / "composed.h5"
+        g.save(out)
+    g.end()
+
+    relevant = [
+        w for w in caught if issubclass(w.category, ComposeFilterWarning)
+    ]
+    msgs = [str(w.message) for w in relevant]
+    # Exactly one warning per droppable kind present on this source:
+    # stages + time-series (the stage pattern itself is captured inside
+    # the stage bucket, NOT under /opensees/patterns).
+    assert len([m for m in msgs if "stages" in m]) == 1, msgs
+    assert len([m for m in msgs if "time-series" in m]) == 1, msgs
+    assert len(relevant) == 2, msgs
+
+    # The composed file inherits NOTHING from the staged program.
+    with h5py.File(str(out), "r") as f:
+        if "opensees" in f:
+            assert "stages" not in f["opensees"]
+            assert "time_series" not in f["opensees"]
+
+
+def test_compose_inspect_filtered_audit(
+    host_h5: Path, module_a_h5: Path, tmp_path: Path,
+) -> None:
+    """``compose_inspect`` surfaces the filtered-audit (ADR 0038
+    §195-196 / ADR 0055 Phase 3): droppable warn-kind counts for a
+    staged source, empty dict for a vanilla module."""
+    src = _write_real_staged_archive(tmp_path)
+    with h5py.File(str(src), "r") as f:
+        expected_stages = len(f["opensees"]["stages"].keys())
+        expected_ts = len(f["opensees"]["time_series"].keys())
+
+    g = apeGmsh.from_h5(host_h5)
+    info = g.compose_inspect(src)
+    assert info["filtered"] == {
+        "stages": expected_stages,
+        "time_series": expected_ts,
+    }
+    # Vanilla module: nothing droppable.
+    assert g.compose_inspect(module_a_h5)["filtered"] == {}
+    g.end()
