@@ -73,6 +73,44 @@ class TestStatus:
         assert not JobStatus.UNKNOWN.is_terminal
 
 
+class TestWait:
+    def test_polls_until_terminal(
+        self, job: Job, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess as sp
+
+        from apeGmsh.hpc import _ssh
+
+        # squeue answers RUNNING twice, then the job leaves the queue and
+        # the sentinel says success.
+        states = iter(["RUNNING\n", "RUNNING\n", ""])
+
+        def fake_call(argv, *, check=True, timeout=600.0):
+            joined = " ".join(argv)
+            if "squeue" in joined:
+                return sp.CompletedProcess(argv, 0, next(states), "")
+            if ".exit_code" in joined:
+                return sp.CompletedProcess(argv, 0, "0\n", "")
+            return sp.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(_ssh, "run_local", fake_call)
+        sleeps: list[float] = []
+        monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+
+        assert job.wait(poll=5.0) is JobStatus.COMPLETED
+        assert sleeps == [5.0, 5.0]
+
+    def test_timeout_raises_and_job_keeps_running(
+        self, job: Job, fake_run: FakeRun, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_run.on("squeue", stdout="RUNNING\n")
+        clock = iter([0.0, 100.0, 200.0])
+        monkeypatch.setattr("time.monotonic", lambda: next(clock))
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        with pytest.raises(TimeoutError, match="still RUNNING"):
+            job.wait(poll=1.0, timeout=50.0)
+
+
 class TestTailCancel:
     def test_tail_targets_named_log(self, job: Job, fake_run: FakeRun) -> None:
         fake_run.on("tail", stdout="last lines\n")

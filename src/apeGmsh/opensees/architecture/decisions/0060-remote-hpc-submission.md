@@ -70,7 +70,19 @@ later once proven.
   change away.
 - Unit tests fake the single subprocess seam (no network in CI); the live
   smoke (`APEGMSH_HPC_LIVE=<cluster>`) is opt-in.
-- Deferred: `p.run_remote` bridge sugar, `job.wait()` convenience,
-  memory-tracker opt-in from the legacy `run.sh`, multi-job folder sweeps
-  (`run_folder_v*` parity), and results-side `Results.from_…` auto-open of
-  fetched directories.
+- Deferred: memory-tracker opt-in from the legacy `run.sh`, multi-job folder
+  sweeps (`run_folder_v*` parity), and results-side `Results.from_…`
+  auto-open of fetched directories.
+
+> **Implementation note (sugar, 2026-06-11).** `Job.wait(poll=, timeout=)`
+> and the bridge sugar `ops.run_remote(job_dir, cluster=…, np=…, …)` shipped
+> as the planned thin wrapper: emit via `apeSees.tcl` (with
+> `analyze_steps=`/`analyze_dt=` passthrough) → `Cluster.submit` → `wait` →
+> `fetch`, raising `HPCError` with the stderr tail on any non-`COMPLETED`
+> terminal state (results are fetched *before* the raise — on failure the
+> logs are the evidence). `np` defaults to `len(fem.partitions)` (1 flat);
+> `wait=False` returns the live `Job` right after submission. Run-verified
+> end-to-end on Esmeralda: a real Gmsh-session 3-story frame, METIS
+> 4-partition, auto-emitted parallel numberer/system, Ladruno-fork
+> OpenSeesMP via `srun --mpi=pmix_v3` — one call, `COMPLETED`, artifacts
+> fetched (job 143706).
