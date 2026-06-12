@@ -1793,6 +1793,16 @@ class Compose:
             Sorted label names.
         ``record_counts`` : dict[str, int]
             Counts for the major record kinds present on disk.
+        ``filtered`` : dict[str, int]
+            The filtered-audit (ADR 0055 Phase 3 / ADR 0038 §195-196):
+            warn-kind analysis content this source carries that
+            ``g.compose`` would DROP with a
+            :class:`ComposeFilterWarning` — ``{"stages": n,
+            "time_series": n, "patterns": n}``, present-and-non-zero
+            kinds only.  Empty dict when the source carries no
+            droppable analysis content (or no ``/opensees/`` zone at
+            all).  Mirrors the compose-time warning probe exactly, so
+            a module can be audited BEFORE composing it.
         ``composed_from`` : tuple[ComposeRecord, ...]
             ``ComposeRecord`` entries from ``/composed_from/`` (empty
             for uncomposed sources).
@@ -1829,6 +1839,13 @@ class Compose:
             label_inventory = _read_named_group_inventory(f, "labels")
             record_counts = _read_record_counts(f)
 
+            # ADR 0055 Phase 3 / ADR 0038 §195-196: the filtered-audit —
+            # which warn-kind analysis content this source carries that
+            # compose would DROP (FILTER verdict).  Same counting the
+            # compose-time warning probe uses, surfaced read-only so a
+            # user can audit a module BEFORE composing it.
+            filtered = _filter_kind_counts(f)
+
             # ``_read_composed_from`` is the canonical reader for
             # ``/composed_from/`` and tolerates absence by returning ().
             from ._femdata_h5_io import _read_composed_from
@@ -1849,6 +1866,7 @@ class Compose:
             "pg_inventory": pg_inventory,
             "label_inventory": label_inventory,
             "record_counts": record_counts,
+            "filtered": filtered,
             "composed_from": composed_from,
             "compose_tree": compose_tree,
             "properties": {},
@@ -2903,6 +2921,39 @@ def _merged_mesh_selection(host_store: Any, bundle_store: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+#: Warn-kind FILTER groups under ``/opensees/``: H5 child name →
+#: human noun used in the :class:`ComposeFilterWarning` message.
+#: Recorders / analysis / results are FILTER-silent and deliberately
+#: absent.  Shared by the compose-time warning probe and the
+#: ``compose_inspect`` ``filtered`` audit (ADR 0055 Phase 3).
+_FILTER_WARN_KINDS: "tuple[tuple[str, str], ...]" = (
+    ("stages", "stages"),
+    ("time_series", "time-series"),
+    ("patterns", "load patterns"),
+)
+
+
+def _filter_kind_counts(f: "Any") -> "dict[str, int]":
+    """Count the warn-kind FILTER groups present in an open source H5.
+
+    Returns ``{h5_child_name: n_children}`` for each
+    :data:`_FILTER_WARN_KINDS` group present with at least one child;
+    empty dict when the ``/opensees/`` zone is absent or carries no
+    droppable analysis content.  Metadata-only (no bulk record reads).
+    """
+    counts: "dict[str, int]" = {}
+    ops_zone = f.get("opensees") if "opensees" in f else None
+    if ops_zone is None or not hasattr(ops_zone, "keys"):
+        return counts
+    for child, _noun in _FILTER_WARN_KINDS:
+        if child in ops_zone:
+            grp = ops_zone[child]
+            n = len(list(grp.keys())) if hasattr(grp, "keys") else 0
+            if n > 0:
+                counts[child] = n
+    return counts
+
+
 def _emit_filter_warnings(source_path: "str | Path", label: str) -> None:
     """Emit one :class:`ComposeFilterWarning` per FILTER kind found.
 
@@ -2929,59 +2980,22 @@ def _emit_filter_warnings(source_path: "str | Path", label: str) -> None:
 
     try:
         with h5py.File(str(p), "r") as f:
-            # FILTER-verdict groups live in the ``/opensees/`` zone;
-            # absent zone means no analysis content to filter and the
-            # function silently returns.
-            ops_zone = f.get("opensees") if "opensees" in f else None
-            if ops_zone is None or not hasattr(ops_zone, "keys"):
-                return
-            # ``stages`` — STKO-style stage definitions
-            if "stages" in ops_zone:
-                stages = ops_zone["stages"]
-                n = (
-                    len(list(stages.keys()))
-                    if hasattr(stages, "keys")
-                    else 0
-                )
-                if n > 0:
-                    warnings.warn(
-                        f"module {label!r} carries {n} stages; "
-                        f"stages are analysis-time and not inherited "
-                        f"under compose. Re-declare on the host.",
-                        ComposeFilterWarning,
-                        stacklevel=3,
-                    )
-            # ``time_series`` — independent time-series defs
-            if "time_series" in ops_zone:
-                ts = ops_zone["time_series"]
-                n = len(list(ts.keys())) if hasattr(ts, "keys") else 0
-                if n > 0:
-                    warnings.warn(
-                        f"module {label!r} carries {n} time-series; "
-                        f"time-series are analysis-time and not "
-                        f"inherited under compose. Re-declare on the "
-                        f"host.",
-                        ComposeFilterWarning,
-                        stacklevel=3,
-                    )
-            # ``patterns`` — load patterns
-            if "patterns" in ops_zone:
-                pats = ops_zone["patterns"]
-                n = len(list(pats.keys())) if hasattr(pats, "keys") else 0
-                if n > 0:
-                    warnings.warn(
-                        f"module {label!r} carries {n} load patterns; "
-                        f"load patterns are analysis-time and not "
-                        f"inherited under compose. Re-declare on the "
-                        f"host.",
-                        ComposeFilterWarning,
-                        stacklevel=3,
-                    )
+            counts = _filter_kind_counts(f)
     except (OSError, KeyError):
         # Read errors are non-fatal for the warning probe — the merge
         # engine has already loaded the IMPORT records successfully via
         # the rewrite step.
         return
+    nouns = dict(_FILTER_WARN_KINDS)
+    for child, n in counts.items():
+        noun = nouns[child]
+        warnings.warn(
+            f"module {label!r} carries {n} {noun}; "
+            f"{noun} are analysis-time and not inherited "
+            f"under compose. Re-declare on the host.",
+            ComposeFilterWarning,
+            stacklevel=3,
+        )
 
 
 # ---------------------------------------------------------------------------

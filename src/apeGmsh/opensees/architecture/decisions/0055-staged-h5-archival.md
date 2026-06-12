@@ -1,6 +1,14 @@
 # ADR 0055 — Staged-model H5 archival
 
-**Status:** Proposed (2026-06-07). **Builds on** ADR 0021 (lineage chain), ADR 0023 (two-version reader window), ADR 0034 (staged analysis), ADR 0052 (staged reference position / HOLD). **Related to** ADR 0038 (compose model composition, §169 stages = FILTER+warn), ADR 0048 (inferred ndf round-trip). **Closes** the SSI-2 deferral "staged H5 archival" (`staged-analysis.md:570`, `_DEFERRED.md:146-151`) and **inverts** the `test_h5_staged_fail_loud.py` guard.
+**Status:** Accepted (2026-06-12 — every phase shipped; see the completion ledger below). **Builds on** ADR 0021 (lineage chain), ADR 0023 (two-version reader window), ADR 0034 (staged analysis), ADR 0052 (staged reference position / HOLD). **Related to** ADR 0038 (compose model composition, §169 stages = FILTER+warn), ADR 0048 (inferred ndf round-trip). **Closes** the SSI-2 deferral "staged H5 archival" (`staged-analysis.md:570`, `_DEFERRED.md:146-151`) and **inverts** the `test_h5_staged_fail_loud.py` guard.
+
+**Completion ledger (2026-06-12):**
+- **Phase 1** — global initial-stress archival, schema 2.16.0 (#569).
+- **Phase 2** — non-partitioned staged structure, schema 2.18.0: writer #580, reader #586, tcl/py replay #589. P2.4's items were absorbed along the way (guard-test inversion landed across P2.2/P2.3/P5.1; the replay oracle is a standing gate in `test_h5_stages_replay.py`; the "partitioned-raise fixture" became a write-SUCCESS case when Phase 5 lifted the guard).
+- **Phase 3** — compose FILTER+warn verified against REAL staged archives + `compose_inspect` gains the `filtered` audit (ADR 0038 §195-196) — same PR as this status flip.
+- **Phase 4** — `ops.domain_capture` bridge gate narrowed (#590/#591) and fully retired by P5.3 (#634); the ndf sidecar rides every capture.
+- **Phase 5** — partitioned staged archival, schema 2.19.0: plan #594, baseline fixes #598 (4 latent bugs incl. a rank-spanning-pattern `ops.h5` crash), rank-agnostic stage capture + guard lift #612, flat replay + capture-gate retirement #634. NOTE the Phasing #5 verify bullet ("per-rank bracketing reproduced on replay") was re-scoped at plan time: replay is FLAT by design (the non-staged degrade precedent); true partitioned re-emit from H5 is the only remaining leg, demand-gated (plan §P5.4).
+- The phantom-node degrade (stage-claimed `node_to_surface`) and live staged emit (ADR 0034) remain the two standing fail-louds, both deliberate.
 
 **Amendment (2026-06-10) — Phase 5 scoped and demand-named.** See
 `internal_docs/plan_staged_h5_phase5_partitioned.md`. Source drift since this
