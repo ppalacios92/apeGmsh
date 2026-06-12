@@ -116,3 +116,24 @@ def test_iter_local_frames_skips_degenerate() -> None:
     view = SimpleNamespace(elements=_line_elements(None))
     frames = list(iter_local_frames(view, lambda nid: None))
     assert frames == []
+
+
+def test_iter_local_frames_vecxz_override_wins() -> None:
+    """A ``vecxz_override`` entry (the recorder-frame channel) beats the
+    model's vecxz; elements absent from the mapping fall through."""
+    view = SimpleNamespace(
+        elements=_line_elements({10: np.array([0.0, 0.0, 1.0])}),
+    )
+    # Override with +Y → z_local realigns to +Y instead of the model's +Z.
+    f = list(iter_local_frames(
+        view, _node_coord,
+        vecxz_override={10: np.array([0.0, 1.0, 0.0])},
+    ))[0]
+    np.testing.assert_allclose(f.z, [0.0, 1.0, 0.0], atol=1e-12)
+
+    # Element not in the override → model vecxz (+Z) as before.
+    f2 = list(iter_local_frames(
+        view, _node_coord,
+        vecxz_override={999: np.array([0.0, 1.0, 0.0])},
+    ))[0]
+    np.testing.assert_allclose(f2.z, [0.0, 0.0, 1.0], atol=1e-12)

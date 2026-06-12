@@ -15,11 +15,16 @@ resolver). Coverage:
 * Tri3 (code 2) — linear barycentric, vertices at (0,0)/(1,0)/(0,1)
 * Line2 (code 1) — linear, ξ ∈ ``[-1, +1]``
 
-For element types not in the catalog (higher-order P2/P3, prisms,
-pyramids) we fall back to ``centroid + 0.5 * bbox_span * natural`` —
+For element types not in the catalog (pyramids, P3+; the catalog
+covers lines / tris / quads / tets / hexes / wedges including their
+P2 forms) we fall back to ``centroid + 0.5 * bbox_span * natural`` —
 visualization-faithful for axis-aligned elements while we wait for
 explicit shape-fn coverage. The upcoming-work block in
-``apeGmsh.fem._shape_functions`` lists what's left to add.
+``apeGmsh.fem._shape_functions`` lists what's left to add. Degraded
+reconstructions are LOUD (ADR 0056 INV-6): one aggregated
+:class:`WarnGaussCoordsApproximate` per call reports how many GPs
+took the bbox approximation (and which type codes) or could not be
+resolved at all (left at the origin).
 
 Per-element evaluation: rather than rely on STKO's "all elements
 same IP layout" batched einsum (which doesn't hold across our
@@ -36,6 +41,7 @@ ndarray (sum_GP, 3)
 """
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -49,6 +55,19 @@ from ..fem._shape_functions import (
 if TYPE_CHECKING:
     from ..mesh.FEMData import FEMData
     from ._slabs import GaussSlab
+
+
+class WarnGaussCoordsApproximate(UserWarning):
+    """GP world-coordinate reconstruction was degraded.
+
+    Raised (as a warning, once per reconstruction call) when Gauss
+    points were positioned by the centroid+bbox approximation
+    (element type lacks shape-function coverage) or left at the
+    origin (parent element missing from the FEMData / connectivity
+    references unknown nodes). A silently approximated marker cloud
+    is indistinguishable from a correct one — say so (ADR 0056
+    INV-6).
+    """
 
 
 # Re-export for legacy / test imports — these paths existed before the
@@ -256,10 +275,17 @@ def compute_global_coords_from_arrays(
             eid_info[eid] = (type_code, coords_arr[idxs], basis_spec)
 
     # ── Per-GP: pick shape fn, evaluate, scatter ───────────────────
+    # Degradation counters — aggregated into ONE warning below.
+    n_bbox = 0
+    bbox_codes: set[int] = set()
+    unresolved_eids: set[int] = set()
     for k in range(n_gp):
         eid = int(eids[k])
         info = eid_info.get(eid)
         if info is None:
+            # No parent element / unknown nodes — the GP stays at the
+            # ORIGIN, which is worse than approximate. Counted loud.
+            unresolved_eids.add(eid)
             continue
         type_code, node_coords, basis_spec = info
         # Self-describing Bézier elements: reconstruct via the Bernstein
@@ -279,6 +305,8 @@ def compute_global_coords_from_arrays(
         if catalog_entry is None:
             # Fallback for unsupported types.
             out[k] = _world_via_bbox(nat[k], node_coords)
+            n_bbox += 1
+            bbox_codes.add(type_code)
             continue
 
         N_fn, _, _, n_corner = catalog_entry
@@ -290,6 +318,8 @@ def compute_global_coords_from_arrays(
         if corner_coords.shape[0] != n_corner:
             # Connectivity smaller than expected — fall back.
             out[k] = _world_via_bbox(nat[k], node_coords)
+            n_bbox += 1
+            bbox_codes.add(type_code)
             continue
 
         # Trim natural coord to the right parent dim. line2: 1, tri3/
@@ -310,4 +340,32 @@ def compute_global_coords_from_arrays(
 
         N = N_fn(nat_in)                  # (1, n_nodes)
         out[k] = (N[0] @ corner_coords)
+
+    if n_bbox or unresolved_eids:
+        parts: list[str] = []
+        if n_bbox:
+            parts.append(
+                f"{n_bbox} GP(s) positioned by the centroid+bbox "
+                f"approximation (element type code(s) "
+                f"{sorted(bbox_codes)} have no shape-function "
+                f"coverage; exact only for axis-aligned elements)"
+            )
+        if unresolved_eids:
+            sample = sorted(unresolved_eids)[:5]
+            more = (
+                f", ... ({len(unresolved_eids) - 5} more)"
+                if len(unresolved_eids) > 5 else ""
+            )
+            parts.append(
+                f"{len(unresolved_eids)} element(s) could not be "
+                f"resolved against the FEMData (missing element or "
+                f"unknown nodes) — their GPs sit at the ORIGIN; "
+                f"eids: {sample}{more}"
+            )
+        warnings.warn(
+            "GP world-coordinate reconstruction degraded: "
+            + "; ".join(parts),
+            WarnGaussCoordsApproximate,
+            stacklevel=2,
+        )
     return out

@@ -9,7 +9,10 @@ element as three colour-coded arrow glyphs at the element midpoint:
 
 This is the implementation of the "Local-axis glyph overlay" feature
 specified in ``opensees/architecture/viewer-integration.md`` (the
-x=red / y=green / z=blue convention is taken from there).  The real
+x=red / y=green / z=blue convention is taken from there).  Frame
+precedence matches the line-force / fiber diagrams: the recorder's
+true beam frame (``.ladruno`` ``MODEL/LOCAL_AXES``, via
+:func:`recorder_z_axes`) wins when recorded; otherwise the real
 per-element ``vecxz`` arrives via :class:`ViewerData` (the
 ``transforms`` ↔ ``element_meta`` join lives in
 ``opensees.emitter.h5_reader``); when a model carries no OpenSees
@@ -25,14 +28,20 @@ actors are name-managed so a rebuild is idempotent.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyvista as pv
 
-from ..diagrams._beam_geometry import iter_local_frames
+from ..diagrams._beam_geometry import (
+    LocalFrame,
+    iter_local_frames,
+    recorder_z_axes,
+)
 
 if TYPE_CHECKING:
+    from typing import Iterator
+
     from ..diagrams._director import ResultsDirector
     from ..scene.fem_scene import FEMSceneData
 
@@ -108,11 +117,37 @@ class LocalAxesOverlay:
         except Exception:
             return None
 
-    def _build(self) -> None:
+    def _recorder_override(self) -> "dict[int, np.ndarray]":
+        """Recorder beam frames (.ladruno ``MODEL/LOCAL_AXES``) as a
+        per-element vecxz override.
+
+        Same precedence the line-force / fiber diagrams use since the
+        recorder-frame rewire: the recorded z-axis wins over the model
+        ``vecxz`` / geometric default, so the triads show the roll the
+        diagrams actually render with. Scoped to the director's active
+        stage; any unresolvable scope (combined stage, no stage yet,
+        non-Ladruno reader) falls back to the model-frame behaviour.
+        """
+        results = getattr(self._director, "results", None)
+        sid = getattr(self._director, "stage_id", None)
+        if results is None or sid is None:
+            return {}
+        try:
+            scoped = results.stage(sid)
+        except Exception:
+            return {}    # combined / stale stage id
+        return recorder_z_axes(scoped)
+
+    def _iter_frames(self) -> "Iterator[LocalFrame]":
         view = getattr(self._director, "view", None)
         if view is None:
             return
+        yield from iter_local_frames(
+            view, self._node_coord,
+            vecxz_override=self._recorder_override(),
+        )
 
+    def _build(self) -> None:
         origins: list[np.ndarray] = []
         vecs = {"x": [], "y": [], "z": []}  # type: dict[str, list]
         scales: list[float] = []
@@ -120,7 +155,7 @@ class LocalAxesOverlay:
         diag = float(getattr(self._scene, "model_diagonal", 0.0)) or 1.0
         global_len = diag * self.GLYPH_DIAGONAL_FRACTION
 
-        for frame in iter_local_frames(view, self._node_coord):
+        for frame in self._iter_frames():
             glyph_len = global_len
             if frame.length > 0:
                 glyph_len = min(

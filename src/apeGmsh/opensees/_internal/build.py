@@ -68,7 +68,10 @@ if TYPE_CHECKING:
     # Use the fully-qualified module path to disambiguate from the
     # similarly-named submodule ``apeGmsh.mesh.FEMData`` under mypy.
     from apeGmsh.mesh.FEMData import FEMData
-    from apeGmsh._kernel.records._constraints import ConstraintRecord
+    from apeGmsh._kernel.records._constraints import (
+        ConstraintRecord,
+        InterpolationRecord,
+    )
     from apeGmsh._kernel.records._partitions import PartitionRecord
 
     from ..analysis.strategy import Ladder
@@ -3316,9 +3319,13 @@ def _emit_kinematic_couplings(
         _emit_name(emitter, rec.name)
         slaves = [int(sn) for sn in rec.slave_nodes]
         ele_tag = tags.allocate("element")
-        args: list[int | str] = [int(rec.master_node), len(slaves), *slaves]
+        args: list[int | float | str] = [
+            int(rec.master_node), len(slaves), *slaves,
+        ]
         if rec.dofs:
             args += ["-dof", *(int(d) for d in rec.dofs)]
+        if rec.control is not None:
+            args += rec.control.emit_flags()
         emitter.element("LadrunoKinematicCoupling", ele_tag, *args)
 
 
@@ -3353,26 +3360,57 @@ def _emit_surface_couplings(
     for rec in interps():
         if not isinstance(rec, InterpolationRecord):
             continue
-        _check_embedded_rnode_count(rec)
-        _emit_name(emitter, rec.name)
-        # ASDEmbeddedNodeElement OpenSees signature:
-        #   element ASDEmbeddedNodeElement $tag $Cnode $Rnode1 $Rnode2 $Rnode3 <$Rnode4>
-        # where $Cnode is the CONSTRAINED (embedded / slave) node and
-        # $Rnode* are the host element's corner nodes. The Emitter
-        # Protocol forwards as: embeddedNode(ele_tag, $Cnode, *$Rnodes).
-        # — weights are recorded under the FEM record but not emitted
-        # here; ASDEmbeddedNodeElement uses isoparametric interpolation
-        # over the host element's corners internally.
-        ele_tag = tags.allocate("element")
-        cnode = int(rec.slave_node)
-        master_nodes = [int(mn) for mn in rec.master_nodes]
-        emitter.embeddedNode(
-            ele_tag, cnode, *master_nodes,
-            stiffness=rec.stiffness,
-            stiffness_p=rec.stiffness_p,
-            rotational=rec.rotational,
-            pressure=rec.pressure,
-        )
+        _emit_one_interpolation(emitter, rec, tags)
+
+
+def _emit_one_interpolation(
+    emitter: "Emitter", rec: "InterpolationRecord", tags: TagAllocator,
+) -> None:
+    """Emit one :class:`InterpolationRecord` row, branching on its kind.
+
+    * ``distributing`` (RBE3) → the fork
+      ``element LadrunoDistributingCoupling $tag $refNode $N $i1..iN [-w …]``:
+      the reference (dependent) node R is ``rec.slave_node`` and the
+      independents are ``rec.master_nodes`` (the InterpolationRecord field
+      names read backwards for RBE3 — R is the *dependent*). ``rec.weights``
+      ``None`` ⇒ ``-w`` omitted ⇒ the element's equal-weight default. The
+      independent count is arbitrary (N ≥ 1), so the 3/4-Rnode embedded
+      guard does NOT apply here. **Fork-only:** gated via
+      ``_FORK_ONLY_ELEMENTS`` in the live emitter.
+    * ``tie`` / ``embedded`` → ``element ASDEmbeddedNodeElement $tag $Cnode
+      $Rnode1..`` via ``emitter.embeddedNode`` ($Cnode = the constrained
+      node; $Rnode* = the host element's 3/4 corner nodes — weights survive
+      in the FEM record but aren't emitted, the element interpolates
+      isoparametrically over the corners).
+
+    Each line allocates a fresh element tag from the canonical
+    :class:`TagAllocator` so coupling-element tags share the global
+    element-tag namespace (ADR 0027 §"Tag determinism").
+    """
+    from apeGmsh._kernel.records._kinds import ConstraintKind
+
+    _emit_name(emitter, rec.name)
+    ele_tag = tags.allocate("element")
+    if rec.kind == ConstraintKind.DISTRIBUTING:
+        ref = int(rec.slave_node)
+        independents = [int(mn) for mn in rec.master_nodes]
+        args: list[int | float | str] = [ref, len(independents), *independents]
+        if rec.weights is not None:
+            args += ["-w", *(float(w) for w in rec.weights)]
+        if rec.control is not None:
+            args += rec.control.emit_flags()
+        emitter.element("LadrunoDistributingCoupling", ele_tag, *args)
+        return
+    _check_embedded_rnode_count(rec)
+    cnode = int(rec.slave_node)
+    master_nodes = [int(mn) for mn in rec.master_nodes]
+    emitter.embeddedNode(
+        ele_tag, cnode, *master_nodes,
+        stiffness=rec.stiffness,
+        stiffness_p=rec.stiffness_p,
+        rotational=rec.rotational,
+        pressure=rec.pressure,
+    )
 
 
 def _check_embedded_rnode_count(rec: object) -> None:
@@ -3518,6 +3556,27 @@ def build_node_partition_owners(fem: "FEMData") -> dict[int, set[int]]:
         for nid in rec.node_ids:
             owners.setdefault(int(nid), set()).add(rank)
     return owners
+
+
+def primary_owner_map(node_owners: "dict[int, set[int]]") -> dict[int, int]:
+    """Reduce a multi-rank owner map to ``{node_tag: primary_rank}``.
+
+    **Additive** nodal quantities — ``mass`` lines and pattern ``load``
+    lines — must emit on exactly ONE rank: OpenSeesMP merges shared-node
+    equations across ranks and SUMS each domain's nodal-mass / load
+    contribution during assembly, so the per-owner replication that is
+    correct for idempotent lines (``node`` / ``fix`` / ``sp``)
+    double-counts interface nodes. Run-verified on an 8-partition model:
+    81 massed nodes emitted 177 ``mass`` lines and the partitioned
+    transient diverged from the byte-identical sequential run by ~100 %
+    of peak velocity; with one ``mass`` line per node the two runs agree
+    to machine precision (~5e-15 of peak).
+
+    The primary rank is the **lowest** owning runtime rank — an
+    arbitrary but deterministic choice (ADR 0027 §"Tag determinism"
+    spirit: same snapshot → same deck bytes).
+    """
+    return {nid: min(ranks) for nid, ranks in node_owners.items() if ranks}
 
 
 def build_element_partition_owner(fem: "FEMData") -> dict[int, int]:
@@ -4576,15 +4635,4 @@ def _emit_surface_couplings_for_rank(
     for rec in records:
         if not isinstance(rec, InterpolationRecord):
             continue
-        _check_embedded_rnode_count(rec)
-        _emit_name(emitter, rec.name)
-        ele_tag = tags.allocate("element")
-        cnode = int(rec.slave_node)
-        master_nodes = [int(mn) for mn in rec.master_nodes]
-        emitter.embeddedNode(
-            ele_tag, cnode, *master_nodes,
-            stiffness=rec.stiffness,
-            stiffness_p=rec.stiffness_p,
-            rotational=rec.rotational,
-            pressure=rec.pressure,
-        )
+        _emit_one_interpolation(emitter, rec, tags)

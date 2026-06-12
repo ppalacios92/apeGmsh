@@ -33,8 +33,14 @@ import numpy as np
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
-from ._beam_geometry import compute_local_axes, station_position
-from ._scalar_bar_support import ScalarBarSupport
+from ._beam_geometry import (
+    collect_endpoints_with_substrate_rows,
+    compute_local_axes,
+    recorder_z_axes,
+    station_position,
+)
+from ._kinds import register_diagram_kind
+from ._scalar_color_support import ScalarColorSupport
 from ._styles import FiberSectionStyle
 from ..scene_ir import (
     CellBlocks,
@@ -52,7 +58,10 @@ if TYPE_CHECKING:
     from ..scene.fem_scene import FEMSceneData
 
 
-class FiberSectionDiagram(ScalarBarSupport, Diagram):
+@register_diagram_kind(
+    label="Fiber section", style_class=FiberSectionStyle, order=40,
+)
+class FiberSectionDiagram(ScalarColorSupport, Diagram):
     """Per-fiber dot cloud + 2-D section panel for fiber-section beams."""
 
     kind = "fiber_section"
@@ -89,14 +98,15 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
         # so the panel can look up fibers for a picked GP O(1).
         self._gp_to_indices: dict[tuple[int, int], ndarray] = {}
 
-        self._initial_clim: Optional[tuple[float, float]] = None
-        self._runtime_clim: Optional[tuple[float, float]] = None
-        self._runtime_cmap: Optional[str] = None
-        self._init_scalar_bar_state()
+        # Deformation-following caches (sync_substrate_points): per-beam
+        # endpoint substrate rows, the resolved vecxz (recorder z /
+        # model vecxz / None), and the per-fiber resolved station ξ.
+        self._endpoint_subs: dict[int, tuple[int, int]] = {}
+        self._element_vecxz: dict[int, "ndarray | None"] = {}
+        self._station_xi_res: Optional[ndarray] = None
 
-        # Plan 06 — LUT mirror built at the tail of attach().
-        self._lut: Any = None
-        self._lut_conn: Any = None
+        # Scalar-bar + runtime colour state + LUT mirror (mixin).
+        self._init_scalar_color_state()
 
     # ------------------------------------------------------------------
     # Attach / detach / update
@@ -149,19 +159,35 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
 
         # ── Endpoints lookup for unique beam IDs ────────────────────
         unique_eids = np.unique(slab_eid)
-        endpoints = self._collect_endpoints(view, unique_eids)
+        endpoints, endpoint_subs = collect_endpoints_with_substrate_rows(
+            view, scene, unique_eids,
+        )
+        self._endpoint_subs = endpoint_subs
 
         # ── Cache per-beam local frames (computed once) ─────────────
+        # Roll source, best first: the recorder's true frame (.ladruno
+        # MODEL/LOCAL_AXES — its z-axis is the geomTransf-equivalent
+        # vecxz), then the model's geomTransf vecxz, then the geometric
+        # default. The fiber (y, z) section coords only land in the
+        # right plane when the roll matches the analysis frame. The
+        # resolved vecxz is cached so sync_substrate_points re-derives
+        # the same roll on the deformed chord.
+        recorder_z = self._recorder_z_axes(results, unique_eids)
+        _vecxz_for = getattr(view.elements, "vecxz_for", None)
         local_frames: dict[int, tuple[ndarray, ndarray, ndarray, ndarray]] = {}
         for eid_int in (int(e) for e in unique_eids):
             if eid_int not in endpoints:
                 continue
             ci, cj = endpoints[eid_int]
+            vecxz = recorder_z.get(eid_int)
+            if vecxz is None and _vecxz_for is not None:
+                vecxz = _vecxz_for(eid_int)
             try:
-                _, y_local, z_local, _ = compute_local_axes(ci, cj)
+                _, y_local, z_local, _ = compute_local_axes(ci, cj, vecxz)
             except ValueError:
                 continue
             local_frames[eid_int] = (ci, cj, y_local, z_local)
+            self._element_vecxz[eid_int] = vecxz
 
         # ── Compute world positions for each fiber ──────────────────
         world_pts = np.zeros((n, 3), dtype=np.float64)
@@ -188,6 +214,7 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
             gp_count_per_beam[eid_int] = int(slab_gp[mask].max() + 1)
 
         n_inferred = 0
+        xi_res = np.zeros(n, dtype=np.float64)
         for k in range(n):
             eid = int(slab_eid[k])
             if eid not in local_frames:
@@ -202,6 +229,7 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
                     # Uniform spread: -1 .. +1 (approximation).
                     xi = -1.0 + 2.0 * float(slab_gp[k]) / (n_gp - 1)
                 n_inferred += 1
+            xi_res[k] = xi
             base = station_position(ci, cj, xi)
             world_pts[k] = (
                 base + slab_y[k] * y_local + slab_z[k] * z_local
@@ -228,9 +256,11 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
             slab_y = slab_y[valid_mask]
             slab_z = slab_z[valid_mask]
             slab_area = slab_area[valid_mask]
+            xi_res = xi_res[valid_mask]
             slab_values_step0 = np.asarray(slab.values[0])[valid_mask]
         else:
             slab_values_step0 = np.asarray(slab.values[0])
+        self._station_xi_res = xi_res
 
         n_valid = world_pts.shape[0]
         self._slab_eid = slab_eid
@@ -317,6 +347,73 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
         # actor (perf contract).
         self._backend.update_layer(self._handle, self._layer)
 
+    def sync_substrate_points(
+        self,
+        deformed_pts: "ndarray | None",
+        scene: "FEMSceneData",
+    ) -> None:
+        """Move the fiber cloud with the deformed substrate.
+
+        Re-samples each beam's endpoints from the (deformed) substrate,
+        rebuilds the frame from the new chord + the cached vecxz
+        (recorder z / model vecxz / geometric default), and replaces the
+        cloud points — values are untouched.
+        """
+        if (
+            self._handle is None
+            or self._points is None
+            or self._fiber_values is None
+            or self._slab_eid is None
+            or self._slab_y is None
+            or self._slab_z is None
+            or self._station_xi_res is None
+            or not self._endpoint_subs
+        ):
+            return
+        try:
+            target = (
+                np.asarray(deformed_pts, dtype=np.float64)
+                if deformed_pts is not None
+                else np.asarray(scene.grid.points, dtype=np.float64)
+            )
+        except Exception:
+            return
+
+        frames: dict[int, tuple[ndarray, ndarray, ndarray, ndarray]] = {}
+        for eid, (si, sj) in self._endpoint_subs.items():
+            if si >= target.shape[0] or sj >= target.shape[0]:
+                continue
+            ci = target[si]
+            cj = target[sj]
+            try:
+                _, y_local, z_local, _ = compute_local_axes(
+                    ci, cj, self._element_vecxz.get(int(eid)),
+                )
+            except ValueError:
+                continue
+            frames[int(eid)] = (ci, cj, y_local, z_local)
+        if not frames:
+            return
+
+        pts = np.asarray(self._points.coords, dtype=np.float64).copy()
+        for k in range(self._slab_eid.size):
+            frame = frames.get(int(self._slab_eid[k]))
+            if frame is None:
+                continue
+            ci, cj, y_local, z_local = frame
+            base = station_position(
+                ci, cj, float(self._station_xi_res[k]),
+            )
+            pts[k] = (
+                base
+                + self._slab_y[k] * y_local
+                + self._slab_z[k] * z_local
+            )
+        self._points = PointSet(pts)
+        self._layer = self._build_layer(self._fiber_values)
+        # Same fast path as a step change — points swap in place.
+        self._backend.update_layer(self._handle, self._layer)
+
     def set_visible(self, visible: bool) -> None:
         self._visible = visible
         if self._backend is not None and self._handle is not None:
@@ -324,13 +421,7 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
 
     def detach(self) -> None:
         self._remove_scalar_bar(self._scalar_bar_title())
-        if self._lut is not None and self._lut_conn is not None:
-            try:
-                self._lut.changed.disconnect(self._lut_conn)
-            except (TypeError, RuntimeError):
-                pass
-        self._lut = None
-        self._lut_conn = None
+        self._teardown_lut()
         if self._backend is not None and self._handle is not None:
             self._backend.remove_layer(self._handle)
         self._layer = None
@@ -346,6 +437,9 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
         self._slab_area = None
         self._row_order_locked = False
         self._gp_to_indices = {}
+        self._endpoint_subs = {}
+        self._element_vecxz = {}
+        self._station_xi_res = None
         self._initial_clim = None
         super().detach()
 
@@ -414,85 +508,11 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
         )
 
     # ------------------------------------------------------------------
-    # Runtime style adjustments
+    # Runtime style — clim/cmap/LUT from ScalarColorSupport
     # ------------------------------------------------------------------
 
-    @property
-    def lut(self) -> Any:
-        """Shared lookup-table mirror; ``None`` outside attach."""
-        return self._lut
-
-    def set_clim(self, vmin: float, vmax: float) -> None:
-        if vmin == vmax:
-            vmax = vmin + 1.0
-        if self._lut is not None:
-            self._lut.set_range(float(vmin), float(vmax))
-            return
-        self._runtime_clim = (float(vmin), float(vmax))
-
-    def autofit_clim_at_current_step(self) -> Optional[tuple[float, float]]:
-        if self._fiber_values is None:
-            return None
-        finite = self._fiber_values[np.isfinite(self._fiber_values)]
-        if finite.size == 0:
-            return None
-        lo, hi = float(finite.min()), float(finite.max())
-        if lo == hi:
-            hi = lo + 1.0
-        self.set_clim(lo, hi)
-        return (lo, hi)
-
-    def set_cmap(self, cmap: str) -> None:
-        self._runtime_cmap = cmap
-        if self._lut is not None:
-            self._lut.set_preset(cmap)
-
-    def current_clim(self) -> Optional[tuple[float, float]]:
-        return self._runtime_clim or self._initial_clim
-
-    # ------------------------------------------------------------------
-    # LUT mirror (diagram-side; changes pushed through the backend)
-    # ------------------------------------------------------------------
-
-    def _init_lut(self) -> None:
-        from ..core._lut_manager import LUT
-
-        style: FiberSectionStyle = self.spec.style    # type: ignore[assignment]
-        preset = self._runtime_cmap or style.cmap or "viridis"
-        clim = self._runtime_clim or self._initial_clim or (0.0, 1.0)
-        try:
-            self._lut = LUT(
-                array_name=self.spec.selector.component,
-                preset=preset,
-                vmin=float(clim[0]),
-                vmax=float(clim[1]),
-                show_scalar_bar=self._effective_show_scalar_bar(),
-            )
-            self._lut_conn = self._lut.changed.connect(self._on_lut_changed)
-        except Exception:
-            self._lut = None
-            self._lut_conn = None
-
-    def _on_lut_changed(self) -> None:
-        if self._lut is None or self._handle is None or self._backend is None:
-            return
-        self._runtime_cmap = self._lut.preset
-        self._runtime_clim = (self._lut.vmin, self._lut.vmax)
-        color = ColorSpec(
-            mode="by_array",
-            array_name=self._color_array_name(),
-            lut=self._current_lutspec(),
-        )
-        self._backend.set_layer_color(self._handle, color)
-        if self._effective_show_scalar_bar():
-            self._backend.add_scalar_bar(
-                self._handle,
-                ScalarBarSpec(
-                    layer_id=self._handle.layer_id,
-                    title=self._scalar_bar_title(),
-                    lut=self._current_lutspec(),
-                ),
-            )
+    def _scalar_values_for_autofit(self) -> "ndarray | None":
+        return self._fiber_values
 
     # ------------------------------------------------------------------
     # Internal
@@ -529,13 +549,14 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
             pickable=False,
         )
 
-    def _scoped_results(self) -> "Optional[Results]":
-        if self.spec.stage_id is not None:
-            return self._results.stage(self.spec.stage_id)
-        try:
-            return self._results
-        except Exception:
-            return None
+    @staticmethod
+    def _recorder_z_axes(
+        results: "Results", element_ids: ndarray,
+    ) -> dict[int, ndarray]:
+        """``eid -> recorder local z-axis`` — see
+        :func:`~apeGmsh.viewers.diagrams._beam_geometry.recorder_z_axes`
+        (shared with the line-force diagram and local-axes overlay)."""
+        return recorder_z_axes(results, element_ids)
 
     @staticmethod
     def _collect_line_element_ids(view: "ViewerData") -> ndarray:
@@ -545,35 +566,3 @@ class FiberSectionDiagram(ScalarBarSupport, Diagram):
                 ids.extend(int(x) for x in group.ids)
         return np.asarray(ids, dtype=np.int64)
 
-    @staticmethod
-    def _collect_endpoints(
-        view: "ViewerData", element_ids: ndarray,
-    ) -> dict[int, tuple[ndarray, ndarray]]:
-        eid_set = {int(e) for e in element_ids}
-        node_ids_arr = np.asarray(list(view.nodes.ids), dtype=np.int64)
-        coords_arr = np.asarray(view.nodes.coords, dtype=np.float64)
-        if node_ids_arr.size == 0:
-            return {}
-        max_nid = int(node_ids_arr.max())
-        nid_to_idx = np.full(max_nid + 2, -1, dtype=np.int64)
-        nid_to_idx[node_ids_arr] = np.arange(node_ids_arr.size, dtype=np.int64)
-        out: dict[int, tuple[ndarray, ndarray]] = {}
-        for group in view.elements:
-            if group.element_type.dim != 1:
-                continue
-            ids = np.asarray(group.ids, dtype=np.int64)
-            conn = np.asarray(group.connectivity, dtype=np.int64)
-            for k in range(len(group)):
-                eid = int(ids[k])
-                if eid not in eid_set:
-                    continue
-                nid_i = int(conn[k, 0])
-                nid_j = int(conn[k, 1])
-                ii = nid_to_idx[nid_i]
-                jj = nid_to_idx[nid_j]
-                if ii < 0 or jj < 0:
-                    continue
-                out[eid] = (
-                    coords_arr[ii].copy(), coords_arr[jj].copy(),
-                )
-        return out

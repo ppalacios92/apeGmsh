@@ -29,6 +29,7 @@ import numpy as np
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
+from ._kinds import register_diagram_kind
 from ._styles import DeformedShapeStyle
 from ..scene_ir import ColorSpec, MeshLayer, PointSet
 
@@ -39,6 +40,15 @@ if TYPE_CHECKING:
     from ..scene_ir import CellBlocks
 
 
+@register_diagram_kind(
+    label="Deformed shape",
+    style_class=DeformedShapeStyle,
+    order=20,
+    # Legacy view modifier — absent from the kind-availability catalog
+    # (deformation is per-geometry state there); still offered in the
+    # Add Diagram dialog. Retires entirely at ADR 0058 S4.
+    in_catalog=False,
+)
 class DeformedShapeDiagram(Diagram):
     """Warp the substrate by a displacement vector."""
 
@@ -305,14 +315,6 @@ class DeformedShapeDiagram(Diagram):
             disp_3d = self._displacement_buffer[:, :3]
 
         return self._base_points + self.current_scale() * disp_3d
-
-    def _scoped_results(self) -> "Optional[Results]":
-        if self.spec.stage_id is not None:
-            return self._results.stage(self.spec.stage_id)
-        try:
-            return self._results
-        except Exception:
-            return None
 
     @staticmethod
     def _fem_ids_to_substrate_indices(

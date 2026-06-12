@@ -443,11 +443,16 @@ class ConstraintResolver:
 
         if isinstance(defn, RigidBodyDef):
             dofs = [1, 2, 3, 4, 5, 6]
+            control = None
         else:
             # kinematic_coupling: dofs=None ⇒ "all the slave has" — record an
             # empty list so the LadrunoKinematicCoupling emit omits ``-dof``
             # (the fork element's own default, ragged-layout aware).
             dofs = list(defn.dofs) if defn.dofs else []
+            # Carry the explicit penalty knobs onto the record; store None
+            # when every knob is at its default (no flags to emit).
+            ctrl = getattr(defn, "control", None)
+            control = ctrl if (ctrl is not None and not ctrl.is_default) else None
 
         return NodeGroupRecord(
             kind=defn.kind,
@@ -456,6 +461,7 @@ class ConstraintResolver:
             slave_nodes=slaves,
             dofs=dofs,
             offsets=offsets,
+            control=control,
         )
 
     def resolve_tie(
@@ -557,19 +563,39 @@ class ConstraintResolver:
         master_nodes: set[int],
         slave_nodes: set[int],
     ) -> InterpolationRecord:
-        """Not implemented — raises ``NotImplementedError``.
+        """Resolve an RBE3 distributing coupling to an InterpolationRecord.
 
-        Defence-in-depth: the ``distributing_coupling`` factory
-        already refuses (see ConstraintsComposite).  This guards the
-        case where a ``DistributingCouplingDef`` is hand-constructed
-        and dispatched directly — it must not silently emit the old
-        mechanically-wrong kinematic-mean record.
+        The reference (dependent) node R is the master-side node closest
+        to ``defn.master_point``; the **independents** are the slave-side
+        node set (minus R if it overlaps). The record carries R in
+        ``slave_node`` and the independents in ``master_nodes`` — the
+        field names read backwards for RBE3 (R is the *dependent*, the
+        "master_nodes" are the independents it is fit from), but the
+        geometry maps 1:1 onto the fork emit
+        ``element LadrunoDistributingCoupling $tag $R $N $i1..iN``.
+
+        Weights are left ``None`` ⇒ uniform: the emit omits ``-w`` and the
+        fork element uses equal weights. Tributary-area weighting is a
+        follow-up (apeGmsh would compute per-independent areas).
         """
-        raise NotImplementedError(
-            "resolve_distributing: RBE3 force distribution is not "
-            "implemented; the prior kinematic-mean implementation was "
-            "mechanically wrong.  Use kinematic_coupling / tie / a "
-            "distributed nodal load instead."
+        ref_tag, _ = self._closest_node_in_set(defn.master_point, master_nodes)
+        independents = sorted(slave_nodes - {ref_tag})
+        if not independents:
+            raise ValueError(
+                "distributing_coupling: no independent nodes resolved — the "
+                "slave set is empty or contains only the reference node. The "
+                "reference (master) and independents (slaves) must be distinct "
+                "node sets."
+            )
+        ctrl = getattr(defn, "control", None)
+        control = ctrl if (ctrl is not None and not ctrl.is_default) else None
+        return InterpolationRecord(
+            kind=defn.kind,
+            name=defn.name,
+            slave_node=ref_tag,
+            master_nodes=independents,
+            weights=None,
+            control=control,
         )
 
     def resolve_tied_contact(

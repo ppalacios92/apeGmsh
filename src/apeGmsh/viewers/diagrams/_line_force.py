@@ -34,11 +34,14 @@ from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
 from ._beam_geometry import (
+    axes_from_quaternion,
+    collect_endpoints_with_substrate_rows,
     compute_local_axes,
     normalize_fill_axis_spec,
     resolve_fill_direction,
     station_position,
 )
+from ._kinds import register_diagram_kind
 from ._styles import LineForceStyle
 from ..scene_ir import CellBlocks, ColorSpec, MeshLayer, PointSet
 
@@ -48,6 +51,24 @@ if TYPE_CHECKING:
     from ..scene.fem_scene import FEMSceneData
 
 
+def _default_style(component: str) -> LineForceStyle:
+    """Default style for a line-force diagram.
+
+    Bending moments default to ``flip_sign=True`` so the diagram
+    renders on the tension side of the beam (sagging-positive
+    convention universally used by structural engineers). Axial
+    force, shear, and torsion keep the natural sign — those have no
+    "tension side" tradition to follow.
+    """
+    return LineForceStyle(flip_sign=component.startswith("bending_moment"))
+
+
+@register_diagram_kind(
+    label="Line force diagram",
+    style_class=LineForceStyle,
+    style_factory=_default_style,
+    order=30,
+)
 class LineForceDiagram(Diagram):
     """Per-beam fill diagram driven by a ``LineStationSlab``."""
 
@@ -83,7 +104,10 @@ class LineForceDiagram(Diagram):
         self._endpoint_subs_idx: dict[int, tuple[int, int]] = {}
 
         # eid -> geomTransf vecxz (3,) or None. Cached at attach from
-        # ViewerData; drives the real fill orientation.
+        # ViewerData; drives the real fill orientation. When the slab
+        # carries a recorder frame (.ladruno MODEL/LOCAL_AXES) the entry
+        # is overlaid with that frame's z-axis — the true cross-section
+        # roll wins over the model's vecxz / geometric default.
         self._element_vecxz: dict[int, "ndarray | None"] = {}
 
         # Mutable runtime overrides
@@ -171,6 +195,23 @@ class LineForceDiagram(Diagram):
             int(e): (_vecxz_for(int(e)) if _vecxz_for is not None else None)
             for e in unique_eids
         }
+
+        # Recorder beam frame (ADR 0056): where the slab carries a finite
+        # per-row quaternion (.ladruno ``MODEL/LOCAL_AXES``), its z-axis is
+        # the geomTransf-equivalent vecxz — compute_local_axes Gram-Schmidts
+        # it against the chord, reproducing the recorder's true cross-section
+        # roll here AND in sync_substrate_points' deformed re-derivation.
+        # This is the frame a model-less ``from_ladruno`` open has no vecxz
+        # for; NaN rows (element without a recorded frame) keep the fallback.
+        if slab.local_axes_quaternion is not None:
+            slab_quat = np.asarray(
+                slab.local_axes_quaternion, dtype=np.float64,
+            )
+            for eid in unique_eids:
+                rows = np.where(slab_eids == eid)[0]
+                if rows.size and np.all(np.isfinite(slab_quat[rows[0]])):
+                    _, _, z_rec = axes_from_quaternion(slab_quat[rows[0]])
+                    self._element_vecxz[int(eid)] = z_rec
 
         # ── Build per-beam geometry ─────────────────────────────────
         n_total = slab_eids.size
@@ -526,14 +567,6 @@ class LineForceDiagram(Diagram):
         new_pts[self._n_stations:] = top_points
         self._current_points = new_pts
 
-    def _scoped_results(self) -> "Optional[Results]":
-        if self.spec.stage_id is not None:
-            return self._results.stage(self.spec.stage_id)
-        try:
-            return self._results
-        except Exception:
-            return None
-
     @staticmethod
     def _collect_line_element_ids(view: "ViewerData") -> ndarray:
         """Return all 1-D element IDs in the FEM."""
@@ -549,52 +582,9 @@ class LineForceDiagram(Diagram):
         scene: "FEMSceneData",
         element_ids: ndarray,
     ) -> "tuple[dict[int, tuple[ndarray, ndarray]], dict[int, tuple[int, int]]]":
-        """Return ``(eid -> (ci, cj), eid -> (i_sub, j_sub))``.
-
-        ``i_sub`` / ``j_sub`` are row indices into ``scene.grid.points``
-        (and ``scene.node_ids``) — what ``sync_substrate_points``
-        re-samples from to follow the deformed substrate.
-        """
-        eid_set = {int(e) for e in element_ids}
-        node_ids_arr = np.asarray(list(view.nodes.ids), dtype=np.int64)
-        coords_arr = np.asarray(view.nodes.coords, dtype=np.float64)
-        if node_ids_arr.size == 0:
-            return {}, {}
-        max_nid = int(node_ids_arr.max())
-        nid_to_idx = np.full(max_nid + 2, -1, dtype=np.int64)
-        nid_to_idx[node_ids_arr] = np.arange(
-            node_ids_arr.size, dtype=np.int64,
+        """``(eid -> (ci, cj), eid -> (i_sub, j_sub))`` — see
+        :func:`~apeGmsh.viewers.diagrams._beam_geometry.collect_endpoints_with_substrate_rows`
+        (shared with the fiber-section diagram)."""
+        return collect_endpoints_with_substrate_rows(
+            view, scene, element_ids,
         )
-
-        # Substrate lookup: FEM node id -> row in scene.grid.points.
-        scene_ids = np.asarray(scene.node_ids, dtype=np.int64)
-        max_sid = int(scene_ids.max()) if scene_ids.size else -1
-        nid_to_sub = np.full(max(max_sid, max_nid) + 2, -1, dtype=np.int64)
-        nid_to_sub[scene_ids] = np.arange(scene_ids.size, dtype=np.int64)
-
-        coords_out: dict[int, tuple[ndarray, ndarray]] = {}
-        subs_out: dict[int, tuple[int, int]] = {}
-        for group in view.elements:
-            if group.element_type.dim != 1:
-                continue
-            ids = np.asarray(group.ids, dtype=np.int64)
-            conn = np.asarray(group.connectivity, dtype=np.int64)
-            for k in range(len(group)):
-                eid = int(ids[k])
-                if eid not in eid_set:
-                    continue
-                nid_i = int(conn[k, 0])
-                nid_j = int(conn[k, 1])
-                ii = nid_to_idx[nid_i]
-                jj = nid_to_idx[nid_j]
-                if ii < 0 or jj < 0:
-                    continue
-                coords_out[eid] = (
-                    coords_arr[ii].copy(),
-                    coords_arr[jj].copy(),
-                )
-                si = int(nid_to_sub[nid_i]) if nid_i <= nid_to_sub.size - 1 else -1
-                sj = int(nid_to_sub[nid_j]) if nid_j <= nid_to_sub.size - 1 else -1
-                if si >= 0 and sj >= 0:
-                    subs_out[eid] = (si, sj)
-        return coords_out, subs_out

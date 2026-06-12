@@ -48,6 +48,7 @@ from apeGmsh.core.constraints.defs import (
     TieDef,
     TiedContactDef,
 )
+from apeGmsh._kernel._coupling_control import CouplingControl
 from apeGmsh._kernel.resolvers._constraint_resolver import ConstraintResolver
 from apeGmsh._kernel.record_sets import NodeConstraintSet as ConstraintSet
 from apeGmsh._kernel.records._constraints import ConstraintRecord
@@ -769,6 +770,8 @@ class ConstraintsComposite:
 
     def kinematic_coupling(self, master_label, slave_label, *,
                            master_point=(0., 0., 0.), dofs=None,
+                           k=None, kr=None, enforce="penalty",
+                           bipenalty_dtcr=None, absolute=False,
                            name=None) -> KinematicCouplingDef:
         """RBE2 / kinematic coupling — a reference node rigidly drives a
         node set.
@@ -804,6 +807,24 @@ class ConstraintsComposite:
             choice for a mixed 3/6-DOF slave set; pass an explicit list to
             restrict, e.g. ``[1, 2, 3]`` for translations only or
             ``[3]`` for a vertical-only follower.
+        k : float, optional
+            Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
+            default (``1e12``).
+        kr : float, optional
+            Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived
+            ``K_t·ℓ²`` (keeps the translation/rotation conditioning matched).
+        enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
+            ``"al"`` = augmented Lagrangian (near-exact rigidity at moderate
+            ``k``; **implicit only** — cannot combine with ``bipenalty_dtcr``).
+        bipenalty_dtcr : float, optional
+            Explicit-dynamics critical-time-step target (``-bipenalty
+            -dtcr``); lumps a penalty mass on any massless tied DOF so the
+            stiff tie doesn't collapse the explicit step. ``None`` ⇒ off
+            (the master is usually a massed node).
+        absolute : bool, default False
+            Keep the **absolute** tie (``-absolute``) — skip the default
+            ``g0`` stress-free birth (a coupling added to a deformed model
+            is otherwise born force-free).
         name : str, optional
             Friendly name (also the stage-claim key for ``s.kinematic_coupling``).
 
@@ -815,10 +836,18 @@ class ConstraintsComposite:
         ------
         KeyError
             If either label is not in ``g.parts``.
+        ValueError
+            On an invalid knob (``enforce`` not in {penalty, al};
+            non-positive ``k``/``kr``/``bipenalty_dtcr``; ``al`` +
+            ``bipenalty_dtcr``).
         """
         return self._add_def(KinematicCouplingDef(
             master_label=master_label, slave_label=slave_label,
             master_point=master_point, dofs=dofs,
+            control=CouplingControl(
+                k=k, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, absolute=absolute,
+            ),
             name=name))
 
     # ── Tier 3 — Node-to-Surface ─────────────────────────────────────
@@ -918,48 +947,98 @@ class ConstraintsComposite:
             rotational=rotational, pressure=pressure))
 
     def distributing_coupling(self, master_label, slave_label, *,
-                              master_point=(0., 0., 0.), dofs=None,
+                              master_point=(0., 0., 0.),
                               weighting="uniform",
+                              k=None, kr=None, enforce="penalty",
+                              bipenalty_dtcr=None, absolute=False,
                               name=None) -> DistributingCouplingDef:
-        """**Not implemented — raises ``NotImplementedError``.**
+        """RBE3 / distributing coupling — distribute a load at a reference
+        point over a node set while the set stays flexible.
 
-        A true distributing coupling (RBE3) distributes a master
-        force/moment to the slave nodes so that ``Σ Fᵢ = F`` **and**
-        ``Σ rᵢ × Fᵢ = M`` while leaving the surface free to deform —
-        a *force* relation, not a kinematic one.
+        Emits the Ladruno-fork ``element LadrunoDistributingCoupling``
+        (class tag 33011): the reference (dependent) node R is the
+        weighted-average rigid-body fit of the independent set, and a
+        force/moment at R is distributed to the set as a
+        statically-equivalent pattern (``Σ Fᵢ = F``, ``Σ rᵢ × Fᵢ = M``)
+        **adding no stiffness** to the independents. This is the proper
+        RBE3 — it replaces the prior `NotImplementedError` stub (whose
+        predecessor emitted a mechanically-wrong kinematic mean). It is
+        the flexible counterpart of :meth:`kinematic_coupling` (RBE2,
+        which holds the set rigid). **Fork-only:** the deck emits on any
+        build, but running it needs the Ladruno fork — stock OpenSees
+        fails loud at the element line (it does not know class tag 33011).
 
-        The previous implementation did **not** do this: it emitted a
-        *kinematic* mean constraint (``u_ref = Σ wᵢ u_surfᵢ``) and its
-        ``weighting="area"`` option was inverse-distance-from-centroid
-        (physically meaningless — the opposite of tributary area),
-        with no moment-equilibrium term.  It silently produced a
-        mechanically wrong model under a correct-looking API, so it is
-        refused rather than shipped.
+        Reach for this to **introduce/transmit a load or BC at a point
+        while the region stays flexible** (a column base on a footing, an
+        actuator head on a face, a beam/shell moment into a solid face);
+        use :meth:`kinematic_coupling` (RBE2) when the region must move as
+        a rigid body, or :meth:`tie` for a compatible face interpolation.
 
-        Use instead, depending on intent:
+        Parameters
+        ----------
+        master_label : str
+            Part label owning the reference (dependent) node R. R must
+            carry the rotational DOFs (ndf 6 in 3D / 3 in 2D) to transmit
+            a moment; the fork refuses a too-small reference at
+            ``setDomain``.
+        slave_label : str
+            Part label whose nodes form the **independent** set
+            (translations-only is fine — no rotational stiffness is
+            injected).
+        master_point : (x, y, z), default (0, 0, 0)
+            Coordinates of the reference node R.
+        weighting : str, default ``"uniform"``
+            v1 supports only ``"uniform"`` (equal weights). Tributary-area
+            weighting (`-w`) is a follow-up — apeGmsh would compute
+            per-independent areas.
+        k : float, optional
+            Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
+            default (``1e12``). Note the **force distribution is exact for
+            any penalty** (the RBE3 property); ``k`` only relaxes the
+            *kinematic* fit of the reference node.
+        kr : float, optional
+            Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived.
+        enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
+            ``"al"`` = augmented Lagrangian — recovers a near-exact weighted
+            fit of R at moderate ``k`` (**implicit only**; cannot combine
+            with ``bipenalty_dtcr``).
+        bipenalty_dtcr : float, optional
+            Explicit-dynamics critical-time-step target (``-bipenalty
+            -dtcr``). The reference node is **massless** by construction, so
+            an explicit run needs this (or it has a zero stable step).
+            ``None`` ⇒ off.
+        absolute : bool, default False
+            Keep the **absolute** tie (``-absolute``) — skip the default
+            ``g0`` stress-free birth.
+        name : str, optional
+            Friendly name (also the stage-claim key for `s.distributing`).
 
-        * :meth:`kinematic_coupling` — a DOF-selective rigid coupling
-          of the surface to a reference node.
-        * :meth:`tie` — shape-function interpolation onto a master
-          face (compatible, non-rigid).
-        * a distributed nodal load (``g.loads``) — to introduce a
-          statically-equivalent load without any kinematic tie.
+        Returns
+        -------
+        DistributingCouplingDef
 
         Raises
         ------
-        NotImplementedError
-            Always.  Parameters are accepted only so the message is
-            actionable.
+        ValueError
+            On an invalid knob (``enforce`` not in {penalty, al};
+            non-positive ``k``/``kr``/``bipenalty_dtcr``; ``al`` +
+            ``bipenalty_dtcr``).
         """
-        raise NotImplementedError(
-            "distributing_coupling (RBE3 force distribution) is not "
-            "implemented.  The prior implementation silently emitted a "
-            "kinematic mean with a physically-meaningless 'area' "
-            "weighting and no moment equilibrium.  Use "
-            "kinematic_coupling (DOF-selective rigid coupling), tie "
-            "(shape-function interpolation), or a distributed nodal "
-            "load instead."
-        )
+        if weighting != "uniform":
+            raise NotImplementedError(
+                "distributing_coupling: only weighting='uniform' is supported "
+                f"in v1 (got {weighting!r}). Tributary-area '-w' weighting is a "
+                "follow-up — apeGmsh would compute per-independent areas and "
+                "emit -w. Use 'uniform' for now."
+            )
+        return self._add_def(DistributingCouplingDef(
+            master_label=master_label, slave_label=slave_label,
+            master_point=master_point, weighting=weighting,
+            control=CouplingControl(
+                k=k, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, absolute=absolute,
+            ),
+            name=name))
 
     def embedded(self, host_label, embedded_label, *, tolerance=1.0,
                  host_entities=None, embedded_entities=None,

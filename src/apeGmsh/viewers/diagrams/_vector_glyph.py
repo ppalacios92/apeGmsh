@@ -21,7 +21,8 @@ import numpy as np
 from numpy import ndarray
 
 from ._base import Diagram, DiagramSpec
-from ._scalar_bar_support import ScalarBarSupport
+from ._kinds import register_diagram_kind
+from ._scalar_color_support import ScalarColorSupport
 from ._styles import VectorGlyphStyle
 from ..scene_ir import ColorSpec, GlyphLayer, LutSpec, PointSet, ScalarBarSpec
 
@@ -31,7 +32,29 @@ if TYPE_CHECKING:
     from ..scene.fem_scene import FEMSceneData
 
 
-class VectorGlyphDiagram(ScalarBarSupport, Diagram):
+def _default_style(component: str) -> VectorGlyphStyle:
+    """Build a default ``VectorGlyphStyle`` for the user's selection.
+
+    The catalog offers each vector prefix plus its per-axis options
+    (``displacement``, ``displacement_x``, ...). Either form names a
+    field; we resolve both back to the prefix so ``components`` reads
+    the *correct* x/y/z triple — picking ``velocity`` reads velocity,
+    not a hardcoded displacement default.
+    """
+    from ._kind_catalog import resolve_vector_prefix
+    prefix = resolve_vector_prefix(component) if component else "displacement"
+    return VectorGlyphStyle(components=(
+        f"{prefix}_x", f"{prefix}_y", f"{prefix}_z",
+    ))
+
+
+@register_diagram_kind(
+    label="Vector glyph (arrows)",
+    style_class=VectorGlyphStyle,
+    style_factory=_default_style,
+    order=60,
+)
+class VectorGlyphDiagram(ScalarColorSupport, Diagram):
     """Arrows at nodes, oriented and scaled by an N-component vector field."""
 
     kind = "vector_glyph"
@@ -52,17 +75,10 @@ class VectorGlyphDiagram(ScalarBarSupport, Diagram):
         self._submesh_pos_of_id: Optional[ndarray] = None
         self._substrate_idx: Optional[ndarray] = None
         self._initial_scale: float = 1.0
-        self._initial_clim: Optional[tuple[float, float]] = None
-
         self._runtime_scale: Optional[float] = None
-        self._runtime_clim: Optional[tuple[float, float]] = None
-        self._runtime_cmap: Optional[str] = None
-        self._init_scalar_bar_state()
-
-        # Diagram-side LUT mirror (Qt). Built only when colouring by
-        # magnitude; the ColorMapEditor binds to it.
-        self._lut: Any = None
-        self._lut_conn: Any = None
+        # Scalar-bar + runtime colour state + LUT mirror (mixin; the
+        # LUT is built only when colouring by magnitude).
+        self._init_scalar_color_state()
 
         comp = getattr(spec.selector, "component", "") or ""
         style: VectorGlyphStyle = spec.style    # type: ignore[assignment]
@@ -202,15 +218,9 @@ class VectorGlyphDiagram(ScalarBarSupport, Diagram):
 
     def detach(self) -> None:
         self._remove_scalar_bar(self._scalar_bar_title())
-        if self._lut is not None and self._lut_conn is not None:
-            try:
-                self._lut.changed.disconnect(self._lut_conn)
-            except (TypeError, RuntimeError):
-                pass
+        self._teardown_lut()
         if self._backend is not None and self._handle is not None:
             self._backend.remove_layer(self._handle)
-        self._lut = None
-        self._lut_conn = None
         self._layer = None
         self._handle = None
         self._coords = None
@@ -247,89 +257,19 @@ class VectorGlyphDiagram(ScalarBarSupport, Diagram):
             self._layer = self._build_layer(vecs, mags, self.current_scale())
             self._backend.update_layer(self._handle, self._layer)
 
-    @property
-    def lut(self) -> Any:
-        """Shared LUT mirror; ``None`` when not colouring by magnitude."""
-        return self._lut
+    # clim/cmap/LUT handling comes from ScalarColorSupport; the LUT is
+    # built only when colouring by magnitude (the _init_lut call site
+    # in attach is gated on ``use_magnitude_colors``).
 
-    def set_clim(self, vmin: float, vmax: float) -> None:
-        if vmin == vmax:
-            vmax = vmin + 1.0
-        if self._lut is not None:
-            self._lut.set_range(float(vmin), float(vmax))
-            return
-        self._runtime_clim = (float(vmin), float(vmax))
-
-    def autofit_clim_at_current_step(self) -> Optional[tuple[float, float]]:
-        if self._layer is None or self._layer.color_scalar is None:
+    def _scalar_values_for_autofit(self) -> "ndarray | None":
+        if self._layer is None:
             return None
-        mags = np.asarray(self._layer.color_scalar)
-        finite = mags[np.isfinite(mags)]
-        if finite.size == 0:
-            return None
-        lo, hi = float(finite.min()), float(finite.max())
-        if lo == hi:
-            hi = lo + 1.0
-        self.set_clim(lo, hi)
-        return (lo, hi)
-
-    def set_cmap(self, cmap: str) -> None:
-        self._runtime_cmap = cmap
-        if self._lut is not None:
-            self._lut.set_preset(cmap)
-
-    # ------------------------------------------------------------------
-    # LUT mirror (diagram-side; changes pushed through the backend)
-    # ------------------------------------------------------------------
-
-    def _init_lut(self) -> None:
-        from ..core._lut_manager import LUT
-
-        style: VectorGlyphStyle = self.spec.style    # type: ignore[assignment]
-        preset = self._runtime_cmap or style.cmap or "viridis"
-        clim = self._runtime_clim or self._initial_clim or (0.0, 1.0)
-        try:
-            self._lut = LUT(
-                array_name=self.spec.selector.component,
-                preset=preset,
-                vmin=float(clim[0]),
-                vmax=float(clim[1]),
-                show_scalar_bar=self._effective_show_scalar_bar(),
-            )
-            self._lut_conn = self._lut.changed.connect(self._on_lut_changed)
-        except Exception:
-            self._lut = None
-            self._lut_conn = None
-
-    def _on_lut_changed(self) -> None:
-        if self._lut is None or self._handle is None or self._backend is None:
-            return
-        self._runtime_cmap = self._lut.preset
-        self._runtime_clim = (self._lut.vmin, self._lut.vmax)
-        color = ColorSpec(
-            mode="by_array",
-            array_name=self._color_array_name(),
-            lut=self._current_lutspec(),
-        )
-        self._backend.set_layer_color(self._handle, color)
-        # Refresh the bar so it reflects the new LUT.
-        if self._effective_show_scalar_bar():
-            self._backend.add_scalar_bar(
-                self._handle,
-                ScalarBarSpec(
-                    layer_id=self._handle.layer_id,
-                    title=self._scalar_bar_title(),
-                    lut=self._current_lutspec(),
-                ),
-            )
+        return self._layer.color_scalar
 
     def current_scale(self) -> float:
         if self._runtime_scale is not None:
             return self._runtime_scale
         return self._initial_scale
-
-    def current_clim(self) -> Optional[tuple[float, float]]:
-        return self._runtime_clim or self._initial_clim
 
     # ------------------------------------------------------------------
     # Internal
@@ -369,14 +309,6 @@ class VectorGlyphDiagram(ScalarBarSupport, Diagram):
             color_scalar=color_scalar,
             color=color,
         )
-
-    def _scoped_results(self) -> "Optional[Results]":
-        if self.spec.stage_id is not None:
-            return self._results.stage(self.spec.stage_id)
-        try:
-            return self._results
-        except Exception:
-            return None
 
     def _read_vectors(self, step_index: int) -> Optional[ndarray]:
         """Read each component for ``step_index``, return ``(N, 3)``."""

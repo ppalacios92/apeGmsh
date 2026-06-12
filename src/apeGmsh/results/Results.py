@@ -577,6 +577,9 @@ class Results:
         :class:`TypeError` on a non-Ladruno results object (MPCO / native
         carry no energy balance) and ``ValueError`` if energy was not
         recorded / the region is unknown.
+
+        ``results.plot.energy(...)`` renders this as a matplotlib
+        time-history figure.
         """
         read_energy = getattr(self._reader, "read_energy", None)
         if read_energy is None:
@@ -612,6 +615,9 @@ class Results:
         neutral name like ``"displacement_x"``). Raises :class:`TypeError`
         on a non-Ladruno results object, and :class:`ValueError` if the file
         was not recorded with ``-envelope`` or the component is absent.
+
+        ``results.plot.node_envelope(...)`` paints a chosen measure on
+        the mesh as a matplotlib figure.
         """
         read_node_envelope = getattr(self._reader, "read_node_envelope", None)
         if read_node_envelope is None:
