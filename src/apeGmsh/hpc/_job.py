@@ -127,6 +127,31 @@ class Job:
             return JobStatus.UNKNOWN
         return JobStatus.COMPLETED if code == "0" else JobStatus.FAILED
 
+    def wait(
+        self, *, poll: float = 15.0, timeout: float | None = None
+    ) -> JobStatus:
+        """Block until the job reaches a terminal state; return it.
+
+        Polls :meth:`status` every ``poll`` seconds. With ``timeout``
+        (seconds), raises :class:`TimeoutError` if the job is still
+        non-terminal when it elapses — the job itself keeps running;
+        use :meth:`cancel` if you also want it gone.
+        """
+        import time
+
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        status = self.status()
+        while not status.is_terminal:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"job {self.name!r} (slurm {self.slurm_id}) still "
+                    f"{status.value} after {timeout}s; it keeps running on "
+                    "the cluster — poll later with Job.load(...).status()"
+                )
+            time.sleep(poll)
+            status = self.status()
+        return status
+
     def tail(self, n: int = 50, *, stream: str = "out") -> str:
         """Last ``n`` lines of the remote stdout (``stream="out"``) or stderr."""
         if stream not in ("out", "err"):
