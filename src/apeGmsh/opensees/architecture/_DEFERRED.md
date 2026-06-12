@@ -218,8 +218,10 @@ the five new Protocol methods (`set_time` / `set_creep` /
 
 Live execution of staged models that use these verbs is still
 deferred (the live emitter raises at `stage_open`); the verbs
-work for the Tcl / Py emit paths and are no-ops on H5
-(staged-H5 archival remains fail-loud at `apeSees.h5(path)`).
+work for the Tcl / Py emit paths and capture into the per-stage
+H5 buckets (ADR 0055 Phase 2, schema 2.18.0 — the old
+"staged-H5 stays fail-loud" remark here predates the lift;
+partitioned staged archives followed at Phase 5 / 2.19.0).
 
 ### MPCO recorders with filters under stages
 
@@ -441,13 +443,14 @@ The deferral is architectural, not mechanical.
 - **ADR 0021 lineage chain.** `model_hash = blake2b(fem_hash ||
   canonical_opensees_zone_bytes)`. Stage-local nodes / elements
   not in FEMData would either widen the canonical opensees
-  zone (requiring the still-unshipped `/opensees/stages/`
-  schema bump per ADR 0023 / ADR 0029 INV-8) or silently lose
-  chain-of-custody on a class of deck mutations.
-- **ADR 0014 viewer-pure-H5-consumer.** The viewer can already
-  not open staged-model H5 (the `apeSees.h5(path)` fail-loud
-  guard, #313). Adding stage-local topology pushes the
-  eventual `/opensees/stages/` schema and the matching
+  zone (the `/opensees/stages/` schema — unshipped when this
+  was written, since landed as ADR 0055 Phase 2 / 2.18.0) or
+  silently lose chain-of-custody on a class of deck mutations.
+- **ADR 0014 viewer-pure-H5-consumer.** At decision time the
+  viewer could not open staged-model H5 at all (the since-
+  lifted `apeSees.h5(path)` fail-loud guard, #313 → ADR 0055).
+  Adding stage-local topology pushes the now-shipped
+  `/opensees/stages/` schema and the matching
   `ViewerData.from_h5` surface even wider.
 
 **The use-case skeptic found ZERO consumers in the codebase**:
