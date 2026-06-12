@@ -7,5 +7,5 @@ is a one-file edit.  Per ADR 0023's two-version reader window,
 """
 OPENSEES_CURRENT     = "2.19.0"  # ADR 0055 Phase 5 P5.1 (partitioned staged archival; no layout change)
 OPENSEES_PRIOR_MINOR = "2.18.0"  # ADR 0055 Phase 2 (/opensees/stages staged archival)
-NEUTRAL_CURRENT      = "2.12.0"  # fork coupling knobs (CouplingControl: cpl_* columns on node_group + interpolation payloads; sr_cpl_* mirror on surface_coupling)
-NEUTRAL_PRIOR_MINOR  = "2.11.0"  # ADR 0049 PR-4: /nodes/provenance (decoupled nodes); snapshot_id hash folds provenance
+NEUTRAL_CURRENT      = "2.13.0"  # coupling host auto-scalers (cpl_k_auto/cpl_k_alpha/cpl_host/cpl_wcap + sr_cpl_* mirrors)
+NEUTRAL_PRIOR_MINOR  = "2.12.0"  # fork coupling knobs (CouplingControl: cpl_* columns on node_group + interpolation payloads; sr_cpl_* mirror on surface_coupling)

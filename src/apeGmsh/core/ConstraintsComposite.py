@@ -770,8 +770,10 @@ class ConstraintsComposite:
 
     def kinematic_coupling(self, master_label, slave_label, *,
                            master_point=(0., 0., 0.), dofs=None,
-                           k=None, kr=None, enforce="penalty",
-                           bipenalty_dtcr=None, absolute=False,
+                           k=None, k_alpha=None, host=None,
+                           kr=None, enforce="penalty",
+                           bipenalty_dtcr=None, bipenalty_wcap=None,
+                           absolute=False,
                            name=None) -> KinematicCouplingDef:
         """RBE2 / kinematic coupling — a reference node rigidly drives a
         node set.
@@ -807,20 +809,37 @@ class ConstraintsComposite:
             choice for a mixed 3/6-DOF slave set; pass an explicit list to
             restrict, e.g. ``[1, 2, 3]`` for translations only or
             ``[3]`` for a vertical-only follower.
-        k : float, optional
+        k : float | ``"auto"``, optional
             Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
-            default (``1e12``).
+            default (``1e12``). ``"auto"`` scales it off a representative
+            host element's stiffness diagonal
+            (``K_t = k_alpha · max|K_host(i,i)|``) — requires ``host``.
+        k_alpha : float, optional
+            Multiplier for ``k="auto"`` (``-kAlpha``; fork default ``1e3``).
+            Only valid together with ``k="auto"``.
+        host : int, optional
+            Representative host element for ``k="auto"`` / ``bipenalty_wcap``
+            (``-host``) as a **FEM element id** — the bridge translates it to
+            the emitted OpenSees tag at emit time. Pick a typical element of
+            the coupled part (e.g. one touching the slave surface).
         kr : float, optional
             Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived
             ``K_t·ℓ²`` (keeps the translation/rotation conditioning matched).
         enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
             ``"al"`` = augmented Lagrangian (near-exact rigidity at moderate
-            ``k``; **implicit only** — cannot combine with ``bipenalty_dtcr``).
+            ``k``; **implicit only** — cannot combine with the bipenalty
+            knobs).
         bipenalty_dtcr : float, optional
             Explicit-dynamics critical-time-step target (``-bipenalty
             -dtcr``); lumps a penalty mass on any massless tied DOF so the
             stiff tie doesn't collapse the explicit step. ``None`` ⇒ off
             (the master is usually a massed node).
+        bipenalty_wcap : float, optional
+            Bipenalty via the host frequency (``-bipenalty -wcap``):
+            ``m_p = K_t/(β·ω_host)²`` with ``β`` = this value — sets the
+            penalty-mode frequency at ``β·ω_host`` instead of a hard ``dt``
+            budget. Requires ``host``; mutually exclusive with
+            ``bipenalty_dtcr``.
         absolute : bool, default False
             Keep the **absolute** tie (``-absolute``) — skip the default
             ``g0`` stress-free birth (a coupling added to a deformed model
@@ -838,15 +857,18 @@ class ConstraintsComposite:
             If either label is not in ``g.parts``.
         ValueError
             On an invalid knob (``enforce`` not in {penalty, al};
-            non-positive ``k``/``kr``/``bipenalty_dtcr``; ``al`` +
-            ``bipenalty_dtcr``).
+            non-positive ``k``/``kr``/``bipenalty_dtcr``/``bipenalty_wcap``;
+            ``al`` + a bipenalty knob; ``k="auto"`` or ``bipenalty_wcap``
+            without ``host``; ``k_alpha`` without ``k="auto"``; a dangling
+            ``host`` no knob consumes; ``bipenalty_dtcr`` + ``bipenalty_wcap``).
         """
         return self._add_def(KinematicCouplingDef(
             master_label=master_label, slave_label=slave_label,
             master_point=master_point, dofs=dofs,
             control=CouplingControl(
-                k=k, kr=kr, enforce=enforce,
-                bipenalty_dtcr=bipenalty_dtcr, absolute=absolute,
+                k=k, k_alpha=k_alpha, host=host, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, bipenalty_wcap=bipenalty_wcap,
+                absolute=absolute,
             ),
             name=name))
 
@@ -949,8 +971,10 @@ class ConstraintsComposite:
     def distributing_coupling(self, master_label, slave_label, *,
                               master_point=(0., 0., 0.),
                               weighting="uniform",
-                              k=None, kr=None, enforce="penalty",
-                              bipenalty_dtcr=None, absolute=False,
+                              k=None, k_alpha=None, host=None,
+                              kr=None, enforce="penalty",
+                              bipenalty_dtcr=None, bipenalty_wcap=None,
+                              absolute=False,
                               name=None) -> DistributingCouplingDef:
         """RBE3 / distributing coupling — distribute a load at a reference
         point over a node set while the set stays flexible.
@@ -991,22 +1015,38 @@ class ConstraintsComposite:
             v1 supports only ``"uniform"`` (equal weights). Tributary-area
             weighting (`-w`) is a follow-up — apeGmsh would compute
             per-independent areas.
-        k : float, optional
+        k : float | ``"auto"``, optional
             Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
-            default (``1e12``). Note the **force distribution is exact for
-            any penalty** (the RBE3 property); ``k`` only relaxes the
-            *kinematic* fit of the reference node.
+            default (``1e12``). ``"auto"`` scales it off a representative
+            host element's stiffness diagonal
+            (``K_t = k_alpha · max|K_host(i,i)|``) — requires ``host``.
+            Note the **force distribution is exact for any penalty** (the
+            RBE3 property); ``k`` only relaxes the *kinematic* fit of the
+            reference node.
+        k_alpha : float, optional
+            Multiplier for ``k="auto"`` (``-kAlpha``; fork default ``1e3``).
+            Only valid together with ``k="auto"``.
+        host : int, optional
+            Representative host element for ``k="auto"`` / ``bipenalty_wcap``
+            (``-host``) as a **FEM element id** — the bridge translates it to
+            the emitted OpenSees tag at emit time. RBE3 has no single host
+            by construction; name ONE typical element among the independents'
+            parents — it is read ONLY to scale the penalties.
         kr : float, optional
             Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived.
         enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
             ``"al"`` = augmented Lagrangian — recovers a near-exact weighted
             fit of R at moderate ``k`` (**implicit only**; cannot combine
-            with ``bipenalty_dtcr``).
+            with the bipenalty knobs).
         bipenalty_dtcr : float, optional
             Explicit-dynamics critical-time-step target (``-bipenalty
             -dtcr``). The reference node is **massless** by construction, so
             an explicit run needs this (or it has a zero stable step).
             ``None`` ⇒ off.
+        bipenalty_wcap : float, optional
+            Bipenalty via the host frequency (``-bipenalty -wcap``):
+            ``m_p = K_t/(β·ω_host)²`` with ``β`` = this value. Requires
+            ``host``; mutually exclusive with ``bipenalty_dtcr``.
         absolute : bool, default False
             Keep the **absolute** tie (``-absolute``) — skip the default
             ``g0`` stress-free birth.
@@ -1021,8 +1061,10 @@ class ConstraintsComposite:
         ------
         ValueError
             On an invalid knob (``enforce`` not in {penalty, al};
-            non-positive ``k``/``kr``/``bipenalty_dtcr``; ``al`` +
-            ``bipenalty_dtcr``).
+            non-positive ``k``/``kr``/``bipenalty_dtcr``/``bipenalty_wcap``;
+            ``al`` + a bipenalty knob; ``k="auto"`` or ``bipenalty_wcap``
+            without ``host``; ``k_alpha`` without ``k="auto"``; a dangling
+            ``host`` no knob consumes; ``bipenalty_dtcr`` + ``bipenalty_wcap``).
         """
         if weighting != "uniform":
             raise NotImplementedError(
@@ -1035,8 +1077,9 @@ class ConstraintsComposite:
             master_label=master_label, slave_label=slave_label,
             master_point=master_point, weighting=weighting,
             control=CouplingControl(
-                k=k, kr=kr, enforce=enforce,
-                bipenalty_dtcr=bipenalty_dtcr, absolute=absolute,
+                k=k, k_alpha=k_alpha, host=host, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, bipenalty_wcap=bipenalty_wcap,
+                absolute=absolute,
             ),
             name=name))
 

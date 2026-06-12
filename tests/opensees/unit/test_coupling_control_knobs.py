@@ -69,6 +69,79 @@ def test_rejects_al_with_bipenalty() -> None:
         CouplingControl(enforce="al", bipenalty_dtcr=1e-6)
 
 
+# ── Host auto-scalers (-k auto / -kAlpha / -host / -wcap) ────────────────
+
+def test_rejects_auto_without_host() -> None:
+    with pytest.raises(ValueError, match="k='auto' needs a representative"):
+        CouplingControl(k="auto")
+
+
+@pytest.mark.parametrize("bad", ["Auto", "AUTO", "", "automatic"])
+def test_rejects_bad_k_string(bad: str) -> None:
+    with pytest.raises(ValueError, match="positive number or 'auto'"):
+        CouplingControl(k=bad, host=7)
+
+
+def test_rejects_k_alpha_without_auto() -> None:
+    with pytest.raises(ValueError, match="k_alpha only scales k='auto'"):
+        CouplingControl(k=1e9, k_alpha=1e3)
+    with pytest.raises(ValueError, match="k_alpha only scales k='auto'"):
+        CouplingControl(k_alpha=1e3)
+
+
+def test_rejects_wcap_without_host() -> None:
+    with pytest.raises(ValueError, match="bipenalty_wcap needs the host"):
+        CouplingControl(bipenalty_wcap=0.1)
+
+
+def test_rejects_wcap_with_dtcr() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        CouplingControl(host=7, bipenalty_wcap=0.1, bipenalty_dtcr=1e-6)
+
+
+def test_rejects_al_with_wcap() -> None:
+    with pytest.raises(ValueError, match="enforce='al'.*bipenalty"):
+        CouplingControl(enforce="al", host=7, bipenalty_wcap=0.1)
+
+
+def test_rejects_dangling_host() -> None:
+    with pytest.raises(ValueError, match="host has no consumer"):
+        CouplingControl(k=1e9, host=7)
+    with pytest.raises(ValueError, match="host has no consumer"):
+        CouplingControl(host=7)
+
+
+@pytest.mark.parametrize("bad", [0, -3, 2.5, True])
+def test_rejects_bad_host(bad: object) -> None:
+    with pytest.raises(ValueError, match="host must be a positive"):
+        CouplingControl(k="auto", host=bad)
+
+
+def test_host_control_is_not_default() -> None:
+    assert not CouplingControl(k="auto", host=7).is_default
+    assert not CouplingControl(host=7, bipenalty_wcap=0.1).is_default
+
+
+def test_emit_flags_auto_host_order() -> None:
+    c = CouplingControl(k="auto", k_alpha=5e2, host=7)
+    assert c.emit_flags(host_ops_tag=1234) == [
+        "-k", "auto", "-kAlpha", 5e2, "-host", 1234,
+    ]
+
+
+def test_emit_flags_wcap() -> None:
+    c = CouplingControl(k=1e8, host=7, bipenalty_wcap=0.1)
+    assert c.emit_flags(host_ops_tag=42) == [
+        "-k", 1e8, "-host", 42, "-bipenalty", "-wcap", 0.1,
+    ]
+
+
+def test_emit_flags_hosted_requires_ops_tag() -> None:
+    c = CouplingControl(k="auto", host=7)
+    with pytest.raises(ValueError, match="host=7.*fem_eid_to_ops_tag"):
+        c.emit_flags()
+
+
 # ── Emit: knobs reach the element line ───────────────────────────────────
 
 def test_kinematic_emit_appends_control_flags() -> None:
@@ -108,6 +181,74 @@ def test_distributing_emit_appends_control_flags() -> None:
     assert flat[2:] == (
         1, 3, 2, 3, 4, "-k", 5e8, "-bipenalty", "-dtcr", 1e-6,
     )
+
+
+# ── Emit: hosted controls translate the FEM eid → ops tag ────────────────
+
+def test_kinematic_emit_translates_host_eid() -> None:
+    rec = NodeGroupRecord(
+        kind="kinematic_coupling", master_node=1, slave_nodes=[2, 3], dofs=[],
+        control=CouplingControl(k="auto", k_alpha=1e3, host=7),
+    )
+    e = RecordingEmitter()
+    _emit_kinematic_couplings(
+        e, [rec], TagAllocator(), fem_eid_to_ops_tag={7: 1234},
+    )
+    flat = [c for c in e.calls if c[0] == "element"][0][1]
+    assert flat[2:] == (
+        1, 2, 2, 3, "-k", "auto", "-kAlpha", 1e3, "-host", 1234,
+    )
+
+
+def test_distributing_emit_translates_host_eid_wcap() -> None:
+    rec = InterpolationRecord(
+        kind="distributing", slave_node=1, master_nodes=[2, 3, 4],
+        weights=None,
+        control=CouplingControl(host=9, bipenalty_wcap=0.1),
+    )
+    e = RecordingEmitter()
+    _emit_one_interpolation(
+        e, rec, TagAllocator(), fem_eid_to_ops_tag={9: 55},
+    )
+    flat = [c for c in e.calls if c[0] == "element"][0][1]
+    assert flat[2:] == (
+        1, 3, 2, 3, 4, "-host", 55, "-bipenalty", "-wcap", 0.1,
+    )
+
+
+def test_hosted_control_fails_loud_without_map() -> None:
+    rec = NodeGroupRecord(
+        kind="kinematic_coupling", master_node=1, slave_nodes=[2], dofs=[],
+        control=CouplingControl(k="auto", host=7), name="lid",
+    )
+    e = RecordingEmitter()
+    with pytest.raises(ValueError, match="'lid'.*host=7.*got none"):
+        _emit_kinematic_couplings(e, [rec], TagAllocator())
+
+
+def test_hosted_control_fails_loud_on_unknown_eid() -> None:
+    rec = InterpolationRecord(
+        kind="distributing", slave_node=1, master_nodes=[2, 3, 4],
+        control=CouplingControl(k="auto", host=999),
+    )
+    e = RecordingEmitter()
+    with pytest.raises(ValueError, match="host=999 is not an emitted"):
+        _emit_one_interpolation(
+            e, rec, TagAllocator(), fem_eid_to_ops_tag={7: 1234},
+        )
+
+
+def test_unhosted_control_ignores_missing_map() -> None:
+    # A control without a host never touches the map — legacy direct
+    # callers that pass no map keep working.
+    rec = NodeGroupRecord(
+        kind="kinematic_coupling", master_node=1, slave_nodes=[2], dofs=[],
+        control=CouplingControl(k=1e10),
+    )
+    e = RecordingEmitter()
+    _emit_kinematic_couplings(e, [rec], TagAllocator())
+    flat = [c for c in e.calls if c[0] == "element"][0][1]
+    assert flat[2:] == (1, 1, 2, "-k", 1e10)
 
 
 # ── H5 round-trip ────────────────────────────────────────────────────────
@@ -152,6 +293,57 @@ def test_h5_roundtrip_distributing_control_with_bipenalty() -> None:
     )
     out = _roundtrip(rec)
     assert out.control == CouplingControl(k=5e8, bipenalty_dtcr=2e-6)
+
+
+def test_h5_roundtrip_host_autoscalers() -> None:
+    rec = NodeGroupRecord(
+        kind="kinematic_coupling", master_node=1, slave_nodes=[2, 3], dofs=[],
+        control=CouplingControl(k="auto", k_alpha=5e2, host=7),
+    )
+    out = _roundtrip(rec)
+    assert out.control == CouplingControl(k="auto", k_alpha=5e2, host=7)
+
+
+def test_h5_roundtrip_wcap() -> None:
+    rec = InterpolationRecord(
+        kind="distributing", slave_node=1, master_nodes=[2, 3, 4],
+        control=CouplingControl(k=1e8, host=9, bipenalty_wcap=0.1),
+    )
+    out = _roundtrip(rec)
+    assert out.control == CouplingControl(k=1e8, host=9, bipenalty_wcap=0.1)
+
+
+def test_h5_decode_pre_2_13_payload_lacks_autoscaler_columns() -> None:
+    # A 2.12.0 file carries only the six v1 cpl_* columns — the reader
+    # probes ``cpl_k_auto`` and decodes the v1 knobs with the
+    # auto-scalers at their defaults.
+    from apeGmsh.mesh import _femdata_h5_io as io
+
+    old_dtype = np.dtype([
+        ("master_node", np.int64),
+        ("slave_nodes", np.dtype("O")),
+        ("dofs", np.dtype("O")),
+        ("offsets", np.dtype("O")),
+        ("plane_normal", np.float64, (3,)),
+        ("name", np.dtype("O")),
+        ("cpl_has", np.uint8),
+        ("cpl_k", np.float64),
+        ("cpl_kr", np.float64),
+        ("cpl_enforce", np.uint8),
+        ("cpl_dtcr", np.float64),
+        ("cpl_absolute", np.uint8),
+    ])
+    nan = float("nan")
+    payload = np.array([(
+        1, np.array([2, 3], dtype=np.int64), np.array([], dtype=np.int64),
+        np.array([], dtype=np.float64), (nan, nan, nan), "",
+        np.uint8(1), 1e10, nan, np.uint8(0), nan, np.uint8(0),
+    )], dtype=old_dtype)[0]
+    out = io._decode_node_group(
+        {"payload": payload, "payload_kind": "kinematic_coupling"},
+        NodeGroupRecord,
+    )
+    assert out.control == CouplingControl(k=1e10)
 
 
 def test_h5_roundtrip_none_control_stays_none() -> None:

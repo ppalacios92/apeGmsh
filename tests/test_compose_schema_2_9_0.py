@@ -96,15 +96,23 @@ def _make_simple_fem(
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_2_12_0(tmp_path: Path) -> None:
-    """Fresh save stamps the current neutral schema version (coupling-knob cpl_* bump 2.11 → 2.12)."""
+def test_schema_version_is_current(tmp_path: Path) -> None:
+    """Fresh save stamps the current neutral schema version.
+
+    Asserts against the test-fixture single source of truth
+    (``tests/fixtures/schema.py``) so the next minor bump stays a
+    one-file edit — the prior literal-pinned variant silently went
+    stale across the 2.12.0 (coupling knobs) bump.
+    """
+    from tests.fixtures.schema import NEUTRAL_CURRENT
+
     fem = _make_simple_fem()
     out = tmp_path / "model.h5"
     fem.to_h5(str(out))
     with h5py.File(out, "r") as f:
-        assert NEUTRAL_SCHEMA_VERSION == "2.12.0"
-        assert f["meta"].attrs["neutral_schema_version"] == "2.12.0"
-        assert f["meta"].attrs["schema_version"] == "2.12.0"
+        assert NEUTRAL_SCHEMA_VERSION == NEUTRAL_CURRENT
+        assert f["meta"].attrs["neutral_schema_version"] == NEUTRAL_CURRENT
+        assert f["meta"].attrs["schema_version"] == NEUTRAL_CURRENT
 
 
 def test_tag_span_max_written_on_save(tmp_path: Path) -> None:

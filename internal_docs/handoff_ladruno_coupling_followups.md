@@ -52,7 +52,17 @@ declare → resolve → emit, all by record *type*.
 
 ---
 
-## Deferred item A — host-element auto-scalers (`-k auto` / `-kAlpha` / `-host` / `-wcap`)
+## ~~Deferred item A~~ — host-element auto-scalers (`-k auto` / `-kAlpha` / `-host` / `-wcap`) — **SHIPPED 2026-06-11**
+
+> Implemented as planned below: `CouplingControl` gained `k="auto"` /
+> `k_alpha` / `host` (FEM eid) / `bipenalty_wcap`; `fem_eid_to_ops_tag` is
+> threaded through `emit_mp_constraints` (+ partitioned + stage variants)
+> with fail-loud FEM-eid → ops-tag translation at the emit site; H5 added
+> `cpl_k_auto` / `cpl_k_alpha` / `cpl_host` / `cpl_wcap` (neutral schema
+> 2.13.0). The 2.12.0-stale schema-pin/parity suites
+> (`test_record_h5_dtype` / `test_record_schema_parity` /
+> `test_compose_schema_2_9_0`) were repaired in the same PR. See the
+> CHANGELOG "coupling host auto-scalers" entry.
 
 **What.** The fork elements support penalty auto-scaling off a representative
 host element: `-k auto` (`K_t = kAlpha · max|K_host(i,i)|`), `-kAlpha`, `-host
