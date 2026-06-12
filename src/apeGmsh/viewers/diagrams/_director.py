@@ -35,6 +35,7 @@ import numpy as np
 from numpy import ndarray
 
 from ._compositions import CompositionManager
+from ._dispatch import GEOMETRY_REMOVED
 from ._geometries import GeometryManager
 from ._registry import DiagramRegistry
 
@@ -137,6 +138,22 @@ class ResultsDirector:
         ] = []
 
         self._render_callback: Optional[Callable[[], None]] = None
+        # ADR 0058 S1 — the substrate scene bound at bind_plotter().
+        # Fallback for ``scene_for(geometry)`` when no per-geometry
+        # scene factory is bound (headless / S1 behaviour).
+        self._bound_scene: Any = None
+        # ADR 0058 S2a — per-geometry scene cache + viewer-injected
+        # factory. The director never builds scenes itself (the
+        # diagrams package stays pyvista-free, ADR 0042 INV-2): the
+        # viewer hands ``bind_plotter`` a ``scene_factory`` that clones
+        # the bound scene and wires the render-side fields; the cache
+        # maps ``geometry.id`` to its materialized ``FEMSceneData``.
+        self._scenes: dict[str, Any] = {}
+        self._scene_factory: "Optional[Callable[[Any], Any]]" = None
+        # Drop a removed geometry's cached scene. Registered first so
+        # the entry is gone before the viewer's dispatcher subscriber
+        # (which removes that scene's actors) runs in the same chain.
+        self._geometries.subscribe_typed(self._drop_scene_for_geometry)
 
         # ADR 0056 Part 3 — the dispatcher ALWAYS exists. Constructed
         # here with no-op pumps; ``ResultsViewer.show()`` rebinds the
@@ -639,6 +656,7 @@ class ResultsDirector:
         *,
         scene: "FEMSceneData | None" = None,
         render_callback: Optional[Callable[[], None]] = None,
+        scene_factory: "Optional[Callable[[Any], Any]]" = None,
     ) -> None:
         """Bind the Director (and its registry) to a plotter.
 
@@ -657,6 +675,13 @@ class ResultsDirector:
             all UI / overlay state coalesces into one ``plotter.render()``
             per event. If ``None``, the registry is bound but no
             auto-render fires (test mode).
+        scene_factory
+            ADR 0058 S2a — ``factory(geometry) -> FEMSceneData``
+            invoked on the first :meth:`scene_for` miss for a geometry.
+            Supplied by the viewer (it clones the bound scene AND wires
+            the render-side fields — actors, ElementVisibility, …); the
+            director only caches. ``None`` keeps S1 behaviour: every
+            geometry resolves to the single bound ``scene``.
         """
         view = self.view
         if view is None:
@@ -664,12 +689,94 @@ class ResultsDirector:
                 "Cannot bind a ResultsDirector without a bound FEMData. "
                 "Construct Results with fem= or call results.bind(fem)."
             )
-        self._registry.bind(plotter, view, scene)
+        self._bound_scene = scene
+        self._scene_factory = scene_factory
+        # Seed the cache: the active (boot) geometry owns the bound
+        # scene — its actors are already built by the viewer.
+        self._scenes = {}
+        if scene is not None:
+            geoms = self._geometries.geometries
+            seed = self._geometries.active or (geoms[0] if geoms else None)
+            if seed is not None:
+                self._scenes[seed.id] = scene
+        self._registry.bind(
+            plotter, view, scene,
+            scene_resolver=self._scene_for_diagram,
+        )
         self._render_callback = render_callback
 
     def unbind_plotter(self) -> None:
         self._registry.unbind()
+        self._bound_scene = None
+        self._scenes = {}
+        self._scene_factory = None
         self._render_callback = None
+
+    # ------------------------------------------------------------------
+    # Geometry → scene resolution (ADR 0058 S1 seam, S2a per-geometry)
+    # ------------------------------------------------------------------
+
+    def scene_for(self, geometry: Any) -> "FEMSceneData | None":
+        """Substrate scene for ``geometry``.
+
+        ADR 0058 S2a: each geometry owns its own ``FEMSceneData``.
+        The cache is seeded at :meth:`bind_plotter` with the bound
+        (boot) scene; a miss materializes lazily through the
+        viewer-injected ``scene_factory``. Without a factory (headless
+        binds, S1-era tests) every geometry resolves to the single
+        bound scene — the S1 contract is the documented fallback.
+        Callers (the DEFORM pump, diagram attach) resolve scenes
+        through this method rather than holding a scene directly.
+        """
+        bound = getattr(self, "_bound_scene", None)
+        if geometry is None:
+            return bound
+        geom_id = getattr(geometry, "id", None)
+        if geom_id is None:
+            return bound
+        cached = self._scenes.get(geom_id)
+        if cached is not None:
+            return cached
+        factory = self._scene_factory
+        if factory is None:
+            return bound
+        scene = factory(geometry)
+        if scene is None:
+            return bound
+        self._scenes[geom_id] = scene
+        return scene
+
+    def materialized_scenes(self) -> "list[FEMSceneData]":
+        """Every per-geometry scene materialized so far (ADR 0058 S2a).
+
+        Includes the seeded boot scene. The viewer loops this to
+        re-apply view-global state (dim filter, stage activation) when
+        that state changes; scenes not yet materialized pick the
+        current state up at materialization instead.
+        """
+        return list(self._scenes.values())
+
+    def _drop_scene_for_geometry(
+        self, kind: str, payload: Optional[str],
+    ) -> None:
+        """Typed GeometryManager observer — forget a removed
+        geometry's cached scene (ADR 0058 S2a). The viewer removes the
+        scene's actors via its own ``GEOMETRY_REMOVED`` subscriber."""
+        if kind == GEOMETRY_REMOVED and payload is not None:
+            self._scenes.pop(payload, None)
+
+    def _scene_for_diagram(self, diagram: Any) -> "FEMSceneData | None":
+        """Resolve the scene a diagram attaches against.
+
+        The owning geometry's scene when the layer already belongs to
+        one; the active geometry's otherwise (a freshly-built diagram
+        attaches before its composition membership is recorded — same
+        targeting the Add flow uses).
+        """
+        geom = self._geometries.geometry_for_layer(diagram)
+        if geom is None:
+            geom = self._geometries.active
+        return self.scene_for(geom)
 
     # ------------------------------------------------------------------
     # Stage / step actions

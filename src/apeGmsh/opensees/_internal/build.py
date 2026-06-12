@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     # Use the fully-qualified module path to disambiguate from the
     # similarly-named submodule ``apeGmsh.mesh.FEMData`` under mypy.
     from apeGmsh.mesh.FEMData import FEMData
+    from apeGmsh._kernel._coupling_control import CouplingControl
     from apeGmsh._kernel.records._constraints import (
         ConstraintRecord,
         InterpolationRecord,
@@ -2877,6 +2878,7 @@ def _sanitize_raw_token(token: str) -> str:
 def emit_mp_constraints(
     emitter: "Emitter", fem: "FEMData", tags: TagAllocator,
     *, claimed_ids: "frozenset[int]" = frozenset(),
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Fan out the broker's MP-constraint records onto ``emitter``.
 
@@ -2934,6 +2936,12 @@ def emit_mp_constraints(
     ``emitter.mp_constraint_comment(name)`` so the user's declaration
     label round-trips into emitted Tcl / Py via the ``# {name}`` line
     (INV-2).
+
+    ``fem_eid_to_ops_tag`` is the bridge-built ``{fem_eid: ops_tag}``
+    map — a :class:`CouplingControl` carrying a ``host`` element (the
+    ``-k auto`` / ``-wcap`` scalers) stores it as a **FEM eid** and the
+    coupling emitters translate it to the emitted OpenSees element tag
+    here. Hosted controls fail loud without the map.
 
     No-op when the FEM snapshot exposes no ``nodes.constraints`` or
     ``elements.constraints`` accessors — broker constraints are
@@ -3017,7 +3025,10 @@ def emit_mp_constraints(
     #    (offset reference). Allocates element tags, so it takes ``tags``.
     # -------------------------------------------------------------------
     if node_constraints is not None:
-        _emit_kinematic_couplings(emitter, node_constraints, tags)
+        _emit_kinematic_couplings(
+            emitter, node_constraints, tags,
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
 
     # -------------------------------------------------------------------
     # 6. Surface couplings — InterpolationRecord (tie / distributing /
@@ -3026,7 +3037,10 @@ def emit_mp_constraints(
     #    ASDEmbeddedNodeElement.
     # -------------------------------------------------------------------
     if surface_constraints is not None:
-        _emit_surface_couplings(emitter, surface_constraints, tags)
+        _emit_surface_couplings(
+            emitter, surface_constraints, tags,
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
 
 
 def emit_reinforce_ties(
@@ -3273,10 +3287,47 @@ def _emit_rigid_diaphragms(
         )
 
 
+def _coupling_control_flags(
+    rec: object,
+    fem_eid_to_ops_tag: "dict[int, int] | None",
+) -> "list[int | float | str]":
+    """Flag tail for a coupling record's :class:`CouplingControl`.
+
+    Translates a hosted control's ``host`` (stored as a **FEM eid** so it
+    survives H5 round-trips) into the emitted OpenSees element tag through
+    the bridge-built ``fem_eid_to_ops_tag`` map.  Fails loud when the
+    control names a host but the map is absent (a legacy direct caller) or
+    doesn't contain the eid (the host element never emitted) — emitting the
+    raw FEM eid would silently scale the penalty off the wrong element.
+    """
+    control: "CouplingControl | None" = getattr(rec, "control", None)
+    if control is None:
+        return []
+    host = getattr(control, "host", None)
+    if host is None:
+        return control.emit_flags()
+    name = getattr(rec, "name", None) or "<unnamed>"
+    if fem_eid_to_ops_tag is None:
+        raise ValueError(
+            f"coupling {name!r}: control.host={host} (a FEM element id) "
+            "needs the bridge's fem_eid_to_ops_tag map to translate into "
+            "the emitted OpenSees tag, but this emit pass got none."
+        )
+    ops_tag = fem_eid_to_ops_tag.get(int(host))
+    if ops_tag is None:
+        raise ValueError(
+            f"coupling {name!r}: control.host={host} is not an emitted "
+            "element — the FEM eid is missing from fem_eid_to_ops_tag. "
+            "Name a real element of the coupled part as the host."
+        )
+    return control.emit_flags(host_ops_tag=int(ops_tag))
+
+
 def _emit_kinematic_couplings(
     emitter: "Emitter", node_constraints: Iterable[object],
     tags: TagAllocator,
     *, allowed_ids: frozenset[int] | None = None,
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Emit ``element LadrunoKinematicCoupling`` (RBE2) per
     :class:`NodeGroupRecord` row with ``kind == 'kinematic_coupling'``.
@@ -3319,14 +3370,18 @@ def _emit_kinematic_couplings(
         _emit_name(emitter, rec.name)
         slaves = [int(sn) for sn in rec.slave_nodes]
         ele_tag = tags.allocate("element")
-        args: list[int | str] = [int(rec.master_node), len(slaves), *slaves]
+        args: list[int | float | str] = [
+            int(rec.master_node), len(slaves), *slaves,
+        ]
         if rec.dofs:
             args += ["-dof", *(int(d) for d in rec.dofs)]
+        args += _coupling_control_flags(rec, fem_eid_to_ops_tag)
         emitter.element("LadrunoKinematicCoupling", ele_tag, *args)
 
 
 def _emit_surface_couplings(
     emitter: "Emitter", surface_constraints: object, tags: TagAllocator,
+    *, fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Emit ``element ASDEmbeddedNodeElement`` per
     :class:`InterpolationRecord` row (covers ``tie`` / ``distributing``
@@ -3356,11 +3411,14 @@ def _emit_surface_couplings(
     for rec in interps():
         if not isinstance(rec, InterpolationRecord):
             continue
-        _emit_one_interpolation(emitter, rec, tags)
+        _emit_one_interpolation(
+            emitter, rec, tags, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
 
 
 def _emit_one_interpolation(
     emitter: "Emitter", rec: "InterpolationRecord", tags: TagAllocator,
+    *, fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Emit one :class:`InterpolationRecord` row, branching on its kind.
 
@@ -3393,6 +3451,7 @@ def _emit_one_interpolation(
         args: list[int | float | str] = [ref, len(independents), *independents]
         if rec.weights is not None:
             args += ["-w", *(float(w) for w in rec.weights)]
+        args += _coupling_control_flags(rec, fem_eid_to_ops_tag)
         emitter.element("LadrunoDistributingCoupling", ele_tag, *args)
         return
     _check_embedded_rnode_count(rec)
@@ -4151,6 +4210,8 @@ def emit_stage_mp_constraints(
     stage_records: "Iterable[ConstraintRecord]",
     emitter: "Emitter",
     tags: TagAllocator,
+    *,
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Emit a stage's MP constraints inside the stage block (flat path).
 
@@ -4186,8 +4247,12 @@ def emit_stage_mp_constraints(
     _emit_rigid_links(emitter, adapter)
     _emit_equal_dofs(emitter, adapter)
     _emit_rigid_diaphragms(emitter, adapter)
-    _emit_kinematic_couplings(emitter, adapter, tags)
-    _emit_surface_couplings(emitter, adapter, tags)
+    _emit_kinematic_couplings(
+        emitter, adapter, tags, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+    )
+    _emit_surface_couplings(
+        emitter, adapter, tags, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+    )
 
 
 def emit_stage_mp_constraints_partitioned(
@@ -4200,6 +4265,8 @@ def emit_stage_mp_constraints_partitioned(
     foreign_node_ndf: int | None,
     inferred_ndf: "dict[int, int]",
     tags: TagAllocator,
+    *,
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Per-rank stage-bound MP-constraint fan-out.
 
@@ -4259,11 +4326,15 @@ def emit_stage_mp_constraints_partitioned(
     _emit_rigid_links(emitter, adapter, allowed_ids=ids)
     _emit_equal_dofs(emitter, adapter, allowed_ids=ids)
     _emit_rigid_diaphragms(emitter, adapter, allowed_ids=ids)
-    _emit_kinematic_couplings(emitter, adapter, tags, allowed_ids=ids)
+    _emit_kinematic_couplings(
+        emitter, adapter, tags, allowed_ids=ids,
+        fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+    )
 
     if plan.embedded_records:
         _emit_surface_couplings_for_rank(
             emitter, plan.embedded_records, tags,
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
         )
 
 
@@ -4278,6 +4349,7 @@ def emit_mp_constraints_partitioned(
     tags: TagAllocator,
     *,
     claimed_ids: "frozenset[int]" = frozenset(),
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Per-rank MP-constraint fan-out (ADR 0027 §"Decision").
 
@@ -4385,12 +4457,16 @@ def emit_mp_constraints_partitioned(
         _emit_rigid_links(emitter, node_constraints, allowed_ids=ids)
         _emit_equal_dofs(emitter, node_constraints, allowed_ids=ids)
         _emit_rigid_diaphragms(emitter, node_constraints, allowed_ids=ids)
-        _emit_kinematic_couplings(emitter, node_constraints, tags, allowed_ids=ids)
+        _emit_kinematic_couplings(
+            emitter, node_constraints, tags, allowed_ids=ids,
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
 
     # ASDEmbeddedNodeElement: only the host-element-owning rank emits.
     if surface_constraints is not None and plan.embedded_records:
         _emit_surface_couplings_for_rank(
             emitter, plan.embedded_records, tags,
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
         )
 
 
@@ -4475,24 +4551,29 @@ def _plan_rank_constraints(
                 # The full command line is emitted verbatim on each
                 # such rank; slaves are not sharded.
                 #
-                # kinematic_coupling now emits a fork *element*
+                # kinematic_coupling emits a fork *element*
                 # (LadrunoKinematicCoupling), not a replicable equalDOF
                 # command — replicating it verbatim on N owning ranks
-                # would create N distinct coupling elements (one per
-                # rank-allocated tag) ⇒ an N-fold over-constraint. A
-                # single-canonical-rank rule (like ASDEmbeddedNodeElement,
-                # below) is the proper fix; until then, fail loud rather
-                # than emit a silently-doubled parallel constraint.
+                # would allocate N distinct element tags ⇒ an N-fold
+                # over-constraint. It routes through the SINGLE-
+                # canonical-rank rule instead, mirroring the
+                # ASDEmbeddedNodeElement ownership below: the one rank
+                # where every slave node is present emits the element;
+                # the reference node is ghost-declared there when
+                # foreign (exactly like the embedded path's constrained
+                # node). A slave set split across partitions fails loud.
                 from apeGmsh._kernel.records._kinds import ConstraintKind
                 if rec.kind == ConstraintKind.KINEMATIC_COUPLING:
-                    raise NotImplementedError(
-                        "kinematic_coupling (LadrunoKinematicCoupling / RBE2) is "
-                        "not yet supported under partitioned (MPI) emit: the fork "
-                        "coupling element cannot be safely replicated across ranks "
-                        "the way the old equalDOF expansion was. Use serial emit, "
-                        "or keep the coupling's reference + slave nodes on one "
-                        "partition. (Single-canonical-rank handling is a follow-up.)"
+                    slaves = [int(s) for s in rec.slave_nodes]
+                    canonical = _canonical_coupling_rank(
+                        rec, slaves, node_owners,
                     )
+                    if partition_rank == canonical:
+                        allowed_ids.add(id(rec))
+                        _add_foreign_or_phantom(int(rec.master_node))
+                        for s in slaves:
+                            _add_foreign_or_phantom(s)
+                    continue
                 m = int(rec.master_node)
                 slaves = [int(s) for s in rec.slave_nodes]
                 touches = _owns(m) or any(_owns(s) for s in slaves)
@@ -4567,6 +4648,54 @@ def _plan_rank_constraints(
     )
 
 
+def _canonical_coupling_rank(
+    rec: object,
+    slaves: list[int],
+    node_owners: dict[int, set[int]],
+) -> int:
+    """Return the single rank that emits a kinematic coupling's
+    ``LadrunoKinematicCoupling`` element (RBE2).
+
+    Mirrors :func:`_canonical_host_rank`: the canonical rank is
+    ``min(intersection(node_owners[s] for s in slaves))`` — every tied
+    slave must be present (locally owned or boundary-shared) on the
+    chosen rank, and ``min`` picks one deterministic rank when several
+    qualify, so every rank's planner agrees on the single emitter.  The
+    reference node is NOT required to co-locate: the emit pass declares
+    it as a foreign/ghost node when it lives on another rank (the same
+    mechanism as the embedded path's constrained node).
+
+    Raises
+    ------
+    ValueError
+        When the intersection is empty — the slave set is split across
+        partitions and no single rank can assemble the one coupling
+        element.  Same partitioner-input-bug stance as
+        :func:`_canonical_host_rank`.
+    """
+    intersection: set[int] | None = None
+    for s in slaves:
+        owners = node_owners.get(int(s), set())
+        intersection = (
+            set(owners) if intersection is None
+            else intersection & owners
+        )
+    if not intersection:
+        ref = getattr(rec, "master_node", "?")
+        name = getattr(rec, "name", None) or "<unnamed>"
+        raise ValueError(
+            f"kinematic_coupling {name!r} (ref={ref}, slaves={slaves}) "
+            f"has no rank where every slave node is present — the slave "
+            f"set is split across partitions, so the single "
+            f"LadrunoKinematicCoupling element cannot be assembled on "
+            f"one rank. Repartition so the coupled node set stays on "
+            f"one rank (the reference node may live anywhere — it is "
+            f"ghost-declared), or emit unpartitioned. Per-slave owners: "
+            f"{ {s: sorted(node_owners.get(int(s), set())) for s in slaves} }"
+        )
+    return min(intersection)
+
+
 def _canonical_host_rank(
     rec: object,
     masters: list[int],
@@ -4613,6 +4742,8 @@ def _emit_surface_couplings_for_rank(
     emitter: "Emitter",
     records: tuple[object, ...],
     tags: TagAllocator,
+    *,
+    fem_eid_to_ops_tag: "dict[int, int] | None" = None,
 ) -> None:
     """Emit ASDEmbeddedNodeElement lines for the host-rank surface couplings.
 
@@ -4629,4 +4760,6 @@ def _emit_surface_couplings_for_rank(
     for rec in records:
         if not isinstance(rec, InterpolationRecord):
             continue
-        _emit_one_interpolation(emitter, rec, tags)
+        _emit_one_interpolation(
+            emitter, rec, tags, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )

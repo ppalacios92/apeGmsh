@@ -79,6 +79,7 @@ from ._internal.tag_resolution import (
     MISSING_FEM_ELEMENT_ID,
     set_current_fem_element_id,
     set_element_nodes,
+    set_stage_owned_node_tags,
 )
 from ._internal.compose import _compose_model_h5, _path_stem
 from ._internal.ns import (
@@ -142,10 +143,12 @@ if TYPE_CHECKING:
     from apeGmsh.mesh.FEMData import FEMData
     from apeGmsh._kernel.records._constraints import ConstraintRecord
     from .analysis.strategy import Ladder
+    from .emitter.tcl import PartitionSpan
     from ._target import OpenSeesCapabilities, OpenSeesTarget
     from .pattern.pattern import Plain
     from apeGmsh.results.capture._domain import DomainCapture
     from apeGmsh.results.capture.spec import DomainCaptureSpec
+    from apeGmsh.hpc import Cluster, Job
 
     from .analysis.eigen import EigenResult
 
@@ -424,6 +427,61 @@ def _write_split_tcl(
         + [""]
         + lines[layout.module_end:]
     )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(driver) + "\n")
+
+
+def _write_per_rank_tcl(
+    path: str, lines: "list[str]", spans: "list[PartitionSpan]",
+) -> None:
+    """Write a Tcl driver at ``path`` + ``ranks/rank<K>_<seq>.tcl``
+    fragments (ADR 0061).
+
+    Each recorded ``if {[getPID] == K} { ... }`` block body moves to a
+    rank-local fragment; the driver keeps everything global and
+    sequential (materials, analysis chains, stage skeleton) and
+    replaces the block with a one-line guard that ``source``s the
+    fragment — so at runtime each rank parses only the driver plus its
+    own fragments (a brace-quoted ``if`` body is never evaluated on
+    non-matching ranks, and ``source`` reads the file only when
+    executed). A rank gets one fragment per block it appears in: its
+    base-model block plus one per stage (``<seq>`` is the rank's
+    0-based block counter).
+    """
+    out_dir = os.path.dirname(os.path.abspath(path))
+    ranks_dir = os.path.join(out_dir, "ranks")
+    os.makedirs(ranks_dir, exist_ok=True)
+
+    seq: dict[int, int] = {}
+    driver: list[str] = []
+    cursor = 0
+    for span in spans:
+        driver.extend(lines[cursor:span.header])
+        n = seq.get(span.rank, 0)
+        seq[span.rank] = n + 1
+        fname = f"rank{span.rank}_{n}.tcl"
+        # Body lines carry the block's one-level (4-space) indent —
+        # strip it; lines without the prefix pass through unchanged.
+        body = [
+            ln.removeprefix("    ")
+            for ln in lines[span.body_start:span.body_end]
+        ]
+        with open(
+            os.path.join(ranks_dir, fname), "w", encoding="utf-8",
+        ) as f:
+            f.write(
+                f"# apeGmsh per-rank fragment (ADR 0061): "
+                f"rank {span.rank}, block {n}\n"
+            )
+            if body:
+                f.write("\n".join(body) + "\n")
+        driver.append(
+            f"if {{[getPID] == {span.rank}}} {{ source [file join "
+            f"[file dirname [info script]] ranks {fname}] }}"
+        )
+        driver.append("")
+        cursor = span.end
+    driver.extend(lines[cursor:])
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(driver) + "\n")
 
@@ -1145,6 +1203,7 @@ class BuiltModel:
         emit_mp_constraints(
             emitter, self.fem, tags,
             claimed_ids=frozenset(self._claimed_constraint_ids()),
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
         )
 
         # 7b'. Embedded reinforcement ties (g.reinforce, ADR 20 / R2b).
@@ -1408,6 +1467,7 @@ class BuiltModel:
         emit_mp_constraints(
             emitter, self.fem, tags,
             claimed_ids=frozenset(self._claimed_constraint_ids()),
+            fem_eid_to_ops_tag=fem_eid_to_ops_tag,
         )
         emit_reinforce_ties(
             emitter, self.fem, tags, name_to_tag=self.name_to_tag,
@@ -1529,13 +1589,12 @@ class BuiltModel:
            ``stage.fix_records`` / ``stage.mass_records``.  Validators
            V1 / V2 (PR-A) already gated these at build time.  PR-C
            will add stage-bound ``region`` emit at this same slot.
-        5. ``domain_change()`` — fires if this stage added ANY
-           topology OR any stage-bound BC (Phase SSI-2.D unifies the
-           gate).  Single barrier per stage; the next analysis-chain
-           bind post-``wipeAnalysis`` reads the Domain fresh so the
-           dirty flag is decorative for chain rebuild but load-
-           bearing for any in-place mid-stage mutation we may add
-           later.
+        5. ``domain_change()`` — UNCONDITIONAL stage barrier (one per
+           stage).  The MPCO/Ladruno recorders open a new
+           ``MODEL_STAGE`` group only when the domain-change stamp
+           moves; a pure-loading stage never moves it on its own, so
+           without the barrier its steps merge into the previous
+           stage's group.
         6. Stage's initial_stress records (parameter declarations +
            step_hook_ramp procs + addToParameter calls, exactly the
            same shape as the Phase SSI-1 non-staged global emit).
@@ -1697,6 +1756,7 @@ class BuiltModel:
             if stage.stage_constraint_records:
                 emit_stage_mp_constraints(
                     stage.stage_constraint_records, emitter, tags,
+                    fem_eid_to_ops_tag=fem_eid_to_ops_tag,
                 )
 
             # ADR 0052: stage-bound HOLD supports — emit AFTER the MP
@@ -1721,26 +1781,17 @@ class BuiltModel:
                                 emitter.sp_hold(int(node_tag), dof_idx)
                 emitter.pattern_close()
 
-            # 5. domainChange — unified gate: fires if this stage added
-            # ANY topology OR any stage-bound BC OR any stage-bound
-            # constraint.  Phase SSI-2.E widens the gate to include
-            # ``s.remove_sp`` / ``s.remove_element`` removals: they
-            # too mutate the Domain's SP / element set and therefore
-            # need the renumbered DOF map rebuild before the stage's
-            # analysis chain binds.  ADR 0052 adds HOLD supports.
-            # Single barrier per stage.
-            if (
-                owned_nodes
-                or owned_specs
-                or stage.fix_records
-                or stage.mass_records
-                or stage.region_records
-                or stage.stage_constraint_records
-                or stage.support_records
-                or stage.remove_sp_records
-                or stage.remove_element_records
-            ):
-                emitter.domain_change()
+            # 5. domainChange — unconditional stage barrier.  Earlier
+            # phases gated this on the stage mutating the domain, but
+            # the MPCO/Ladruno recorders open a new MODEL_STAGE group
+            # only when the domain-change stamp moves — a pure-loading
+            # stage (nodal-load pattern + analyze) never moves it, so
+            # its steps were silently appended into the PREVIOUS
+            # stage's MODEL_STAGE (stages "lost" in results/viewer).
+            # A nodal load does not set the Domain's changed flag
+            # (Domain::addNodalLoad), so the barrier must fire every
+            # stage.  Single barrier per stage.
+            emitter.domain_change()
 
             # 5b. Stage-bound damping (ADR 0053 D5).  Emitted AFTER
             # domainChange so the stage's elements are in the renumbered
@@ -2191,6 +2242,7 @@ class BuiltModel:
                     inferred_ndf=inferred_ndf,
                     tags=tags,
                     claimed_ids=stage_claimed_constraint_ids,
+                    fem_eid_to_ops_tag=fem_eid_to_ops_tag,
                 )
 
                 # 7d. Initial stress — per-rank ``addToParameter`` fan-
@@ -2319,9 +2371,11 @@ class BuiltModel:
            owned stage-bound elements + per-rank-filtered stage-bound
            ``fix`` / ``mass`` lines (Phase SSI-2.D PR-B); ``partition_close()``.
            Then a single GLOBAL ``domain_change()`` so every rank
-           rebuilds its DOF map.  Per-rank brackets are SKIPPED for
-           ranks with no content (Phase SSI-2.D) so the Py emitter
-           never produces an empty ``if getPID() == K:`` block.
+           rebuilds its DOF map — UNCONDITIONAL per stage (recorder
+           MODEL_STAGE boundaries key off the domain-change stamp).
+           Per-rank brackets are SKIPPED for ranks with no content
+           (Phase SSI-2.D) so the Py emitter never produces an empty
+           ``if getPID() == K:`` block.
         3. **(only if the stage carries initial-stress records)**
            Initial-stress globals (parameter declarations + step_hook
            procs) emit GLOBALLY, then a per-rank loop emits the
@@ -2384,6 +2438,14 @@ class BuiltModel:
 
             owned_nodes_this_stage = stage_owned_nodes.get(stage_idx, set())
             owned_specs_this_stage = stage_owned_specs.get(stage_idx, [])
+            # ADR 0055 Phase 5 (P5.1): tell the capture emitter which
+            # node declarations inside this stage's rank brackets are
+            # the stage's OWN topology — the stage MP pass also
+            # declares foreign ghost nodes (ADR 0027 INV-2) that must
+            # not enter the stage bucket's ``owned_node_ids``.
+            # Cleared at stage close below; non-capture emitters
+            # ignore the attribute.
+            set_stage_owned_node_tags(emitter, owned_nodes_this_stage)
             has_activation = bool(
                 owned_nodes_this_stage or owned_specs_this_stage
             )
@@ -2629,6 +2691,7 @@ class BuiltModel:
                                 foreign_node_ndf=int(self.ndf),
                                 inferred_ndf=inferred_ndf,
                                 tags=tags,
+                                fem_eid_to_ops_tag=fem_eid_to_ops_tag,
                             )
                         # ADR 0052: stage-bound HOLD supports — emit AFTER
                         # the MP constraints, mirroring the flat path
@@ -2652,10 +2715,15 @@ class BuiltModel:
                     finally:
                         emitter.partition_close()
 
-                # 3. Global ``domain_change`` — rebuild DOF map on every
-                # rank after topology+BC activation.  Single global call;
-                # OpenSeesMP executes it locally on each rank.
-                emitter.domain_change()
+            # 3. Global ``domain_change`` — rebuild DOF map on every
+            # rank.  UNCONDITIONAL (outside the content gate above):
+            # the MPCO/Ladruno recorders open a new MODEL_STAGE only
+            # when the domain-change stamp moves, and a pure-loading
+            # stage never moves it on its own — without this barrier
+            # such a stage's steps merge into the previous stage's
+            # MODEL_STAGE group.  Single global call; OpenSeesMP
+            # executes it locally on each rank.
+            emitter.domain_change()
 
             # 3b. Stage-bound damping (ADR 0053 D5) — single global emit
             # after domainChange, mirroring the global partitioned damping
@@ -2789,6 +2857,7 @@ class BuiltModel:
                 )
 
             # 8. Stage close — loadConst + wipeAnalysis + hook clear.
+            set_stage_owned_node_tags(emitter, None)
             emitter.stage_close()
 
     # -- Model-level fix / mass fan-out -----------------------------------
@@ -4919,19 +4988,16 @@ class apeSees:
         # ndf onto ``/model/meta`` so mixed-ndf models round-trip through
         # ``Results.from_native``.
         #
-        # BUT the sidecar is written via ``self.h5(...)``, which raises
-        # ``NotImplementedError`` for PARTITIONED staged builds (ADR
-        # 0055 Phase 5 deferred — see :meth:`h5`).  Mirror that guard
-        # exactly: only those builds keep the pre-Composed behaviour
-        # (no sidecar, no ``/opensees/`` zone) so ``ops.domain_capture``
-        # still works there.  Non-partitioned staged builds and global
-        # initial-stress builds archive fine (ADR 0055 Phases 1-2), so
-        # they forward the bridge and the Composed run file carries
-        # ``/opensees/stages`` + the envelope ndf.
-        bridge: "apeSees | None" = self
-        if self._stage_records and is_partitioned(self._fem):
-            bridge = None
-        return DomainCapture(resolved, path, self._fem, ops=ops, bridge=bridge)
+        # The sidecar is written via ``self.h5(...)``.  Every build
+        # forwards the bridge now: ADR 0055 Phase 5 lifted the
+        # partitioned-staged ``h5()`` guard (P5.1), so the Composed run
+        # file carries ``/opensees/stages`` + ``/opensees/partitions``
+        # + the envelope ndf for partitioned staged captures too
+        # (P5.3) — the feedstock the stage-aware viewer reads.  The
+        # one remaining staged raise site (stage-claimed phantom
+        # nodes, emitter gate-2) is handled by ``DomainCapture``'s
+        # __enter__ degrade: it warns and proceeds sidecar-less.
+        return DomainCapture(resolved, path, self._fem, ops=ops, bridge=self)
 
     def fix(
         self,
@@ -5725,6 +5791,7 @@ class apeSees:
         analyze_steps: int | None = None,
         analyze_dt: float | None = None,
         split: bool = False,
+        per_rank: bool = False,
     ) -> None:
         """Emit a Tcl deck to ``path``; optionally subprocess OpenSees.
 
@@ -5744,9 +5811,25 @@ class apeSees:
         byte-identical to the pre-0043 output.  Requires a composed
         model; partitioned / staged / ``initial_stress`` models are not
         supported under ``split``.
+
+        ``per_rank=True`` (ADR 0061) writes a driver deck at ``path``
+        plus one ``ranks/rank<K>_<seq>.tcl`` fragment per
+        ``if {[getPID] == K} { ... }`` block; the driver guards each
+        fragment behind a one-line ``source`` so every MPI rank parses
+        only the driver plus its own fragments — O(global + model/np)
+        instead of O(model) per rank.  Layout-only: the deck semantics
+        (including the single-process rank-0 fallback) are unchanged.
+        Requires a partitioned model (``len(fem.partitions) > 1``);
+        mutually exclusive with ``split``.
         """
         from .emitter.tcl import TclEmitter
 
+        if split and per_rank:
+            raise ValueError(
+                "apeSees.tcl: split=True and per_rank=True are mutually "
+                "exclusive — split carves by compose module (ADR 0043), "
+                "per_rank by partition rank (ADR 0061)."
+            )
         bm = self.build()
         emitter = TclEmitter()
         pre_prof, post_prof = self._split_profiler_records()
@@ -5758,8 +5841,20 @@ class apeSees:
                 emitter.analyze(steps=int(analyze_steps), dt=analyze_dt)
             for _verb, _vargs in post_prof:
                 emitter.profiler(_verb, *_vargs)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(emitter.lines()) + "\n")
+            if per_rank:
+                spans = emitter.partition_spans()
+                if not spans:
+                    raise ValueError(
+                        "apeSees.tcl: per_rank=True requires a "
+                        "partitioned model (len(fem.partitions) > 1) — "
+                        "the emitted deck has no per-rank blocks to "
+                        "split out. Partition the mesh "
+                        "(g.mesh.partitioning) or drop per_rank."
+                    )
+                _write_per_rank_tcl(path, emitter.lines(), spans)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(emitter.lines()) + "\n")
         else:
             layout = bm.emit(emitter, split=True)
             for _verb, _vargs in pre_prof:
@@ -5864,6 +5959,98 @@ class apeSees:
         emitter = LiveOpsEmitter(wipe=wipe)
         bm.emit(emitter)
 
+    def run_remote(
+        self,
+        job_dir: str,
+        *,
+        cluster: "str | Cluster",
+        np: int | None = None,
+        name: str | None = None,
+        deck: str = "main.tcl",
+        binary: str | None = None,
+        walltime: str | None = None,
+        analyze_steps: int | None = None,
+        analyze_dt: float | None = None,
+        wait: bool = True,
+        poll: float = 15.0,
+        timeout: float | None = None,
+        overwrite: bool = False,
+    ) -> "Job":
+        """Emit the Tcl deck and run it on a SLURM cluster (ADR 0060 sugar).
+
+        One call for the whole loop: emit into ``job_dir`` -> push ->
+        ``sbatch`` -> poll to completion -> fetch results back into
+        ``job_dir``. Wraps :class:`apeGmsh.hpc.Cluster` /
+        :class:`apeGmsh.hpc.Job`; use those directly for finer control
+        (or pass ``wait=False`` to get the live :class:`Job` handle back
+        right after submission).
+
+        Parameters
+        ----------
+        job_dir
+            Local directory the deck is emitted into and results are
+            fetched back into. Created if missing.
+        cluster
+            Cluster name in ``~/.apegmsh/clusters.toml`` (e.g.
+            ``"esmeralda"``) or a constructed ``Cluster``.
+        np
+            MPI ranks. Defaults to the model's partition count
+            (``len(fem.partitions)``), or 1 for a flat model.
+        analyze_steps / analyze_dt
+            Forwarded to :meth:`tcl` — appends the ``analyze`` drive
+            line exactly as the local emit would.
+        wait
+            ``True`` (default) blocks until the job ends and fetches.
+            ``False`` returns the submitted ``Job`` immediately;
+            poll/fetch it yourself (it survives sessions via
+            ``Job.load(job_dir)``).
+
+        Raises
+        ------
+        HPCError
+            If the job ends in any state other than ``COMPLETED``
+            (results and logs are still fetched first; the message
+            carries the stderr tail).
+        """
+        from pathlib import Path as _Path
+
+        from ..hpc import Cluster as _Cluster
+        from ..hpc import HPCError as _HPCError
+        from ..hpc import JobStatus as _JobStatus
+
+        resolved = (
+            _Cluster.load(cluster) if isinstance(cluster, str) else cluster
+        )
+        ranks = np if np is not None else max(1, len(self._fem.partitions))
+        path = _Path(job_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        self.tcl(
+            str(path / deck),
+            analyze_steps=analyze_steps,
+            analyze_dt=analyze_dt,
+        )
+        job = resolved.submit(
+            path,
+            np=ranks,
+            name=name,
+            deck=deck,
+            binary=binary,
+            walltime=walltime,
+            overwrite=overwrite,
+        )
+        if not wait:
+            return job
+        status = job.wait(poll=poll, timeout=timeout)
+        # Fetch BEFORE the verdict: on failure the logs are the evidence.
+        job.fetch()
+        if status is not _JobStatus.COMPLETED:
+            raise _HPCError(
+                f"remote job {job.name!r} (slurm {job.slurm_id}) ended "
+                f"{status.value}; logs fetched into {job.local_dir}.\n"
+                f"--- stderr tail ---\n{job.tail(30, stream='err')}"
+            )
+        return job
+
     def h5(
         self,
         path: str,
@@ -5915,36 +6102,22 @@ class apeSees:
             sweep group carries its own ``cuts/`` sub-group in sweep
             order (see ``apeGmsh/cuts/ARCHITECTURE.md`` "## v4").
 
-        Raises
-        ------
-        NotImplementedError
-            When the bridge carries staged-analysis records
-            (``ops.stage(...)`` blocks) on a PARTITIONED model.
-            ADR 0055 Phase 2 (schema 2.18.0) archives non-partitioned
-            staged builds to ``/opensees/stages``; the partitioned
-            staged emit shape (per-rank bracketing, single global
-            ``domain_change``, per-rank pattern fan-out) has no
-            capture or replay path yet (Phase 5).  Fail loud here so
-            callers route to ``ops.tcl(path)`` / ``ops.py(path)``
-            (both of which fully support partitioned staged decks).
         """
-        # ADR 0055 Phase 2: NON-PARTITIONED staged builds archive —
-        # the H5 emitter captures the per-stage emit stream into
-        # ``/opensees/stages`` (see ``set_stage_records`` below).
-        # PARTITIONED staged builds stay fail-loud (Phase 5): the
-        # partitioned emit shape (per-rank bracketing, single global
-        # domain_change, per-rank pattern fan-out) has no capture or
-        # replay path yet, and ``_emit_stages_partitioned`` itself
-        # never raises — this guard is the ONLY fail-loud boundary.
-        if self._stage_records and is_partitioned(self._fem):
-            raise NotImplementedError(
-                "ops.h5: H5 archival of PARTITIONED staged builds is "
-                f"not yet supported (got {len(self._stage_records)} "
-                f"stage(s) on a {len(self._fem.partitions)}-partition "
-                "model; ADR 0055 Phase 5 deferred).  Use ops.tcl(path) "
-                "or ops.py(path) for partitioned staged decks; H5 "
-                "supports non-staged and non-partitioned staged builds."
-            )
+        # ADR 0055 Phase 2 + Phase 5 (P5.1, schema 2.19.0): staged
+        # builds archive — the H5 emitter captures the per-stage emit
+        # stream into ``/opensees/stages`` (see ``set_stage_records``
+        # below).  For PARTITIONED staged builds the capture is
+        # rank-agnostic by construction: replicated per-rank emission
+        # dedupes on record identity, per-rank pattern/region
+        # fragments merge by tag, and foreign ghost-node declarations
+        # are filtered out of the stage buckets via the
+        # ``set_stage_owned_node_tags`` side-channel — the stage zone
+        # carries the flat logical program (rank-major capture order),
+        # while the per-rank shape stays derivable from the neutral
+        # ``/partitions`` zone.  The one staged remainder is the
+        # phantom-node degrade (stage-claimed ``node_to_surface``),
+        # which ``set_stage_records`` keeps fail-loud for flat and
+        # partitioned builds alike.
         # ADR 0055 Phase 1: GLOBAL ``ops.initial_stress(...)`` archival is
         # supported — the records persist declaratively to
         # ``/opensees/initial_stress`` and replay re-runs the emit helpers

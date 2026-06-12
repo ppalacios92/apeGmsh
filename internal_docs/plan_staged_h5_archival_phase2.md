@@ -66,7 +66,8 @@ All plan-changing findings are folded in below; verdict after edits = **go**.
 - `element_tag_map` re-validation per inv#4.
 - **Verify (load-bearing):** recording-emitter oracle = normalized `(name, arity, kwargs)` sequence equality with **re-allocated tag positions normalized** (region/parameter tags diverge, `compose.py:307-317`), replay vs original `BuiltModel.emit`, for flat + staged fixtures; **`step_hook_ramp` before `analyze` PER STAGE iff that stage has initial_stress** (flag resets per `stage_close`) — add a **mixed-stage fixture** (one with, one without). `model_hash` stability: `from_h5→to_h5` identical; **two fresh builds match** (multi-stage non-trivial ownership); staged ≠ one-stage-removed. Add a **stage-bound `s.region` + `s.damping`** fixture (flat `_replay_into` drops those — staged must NOT).
 
-### P2.4 — Test inversion + partitioned fail-loud + suite
+### P2.4 — Test inversion + partitioned fail-loud + suite — ABSORBED (closed 2026-06-12, no standalone PR)
+**Every item landed elsewhere:** the staged-raise inversion + vanilla smoke shipped with P2.2/P2.3; the replay oracle is a standing gate in `test_h5_stages_replay.py`; the "multi-partition staged fixture asserting `ops.h5` still raises" became `test_h5_partitioned_staged_build_writes` (a write-SUCCESS case) when ADR 0055 Phase 5 / P5.1 (#612) lifted the guard. Original text kept below for the record.
 - **`test_h5_staged_fail_loud.py` has exactly two tests** (one non-partitioned staged-raise + vanilla smoke) — there is **no partitioned-raise case to "keep"**. Convert the staged-raise into a **non-partitioned staged ROUND-TRIP success** test; **ADD a new multi-partition staged fixture asserting `ops.h5` still raises** (partitioned-staged fail-loud is currently untested). Keep vanilla smoke + assert no `/opensees/stages` after vanilla write. Make the recording-oracle a mandatory gate.
 - **Verify:** full `tests/opensees/h5` + `tests/opensees` targeted green.
 

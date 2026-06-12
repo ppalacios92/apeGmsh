@@ -64,8 +64,8 @@ The staged-analysis work ships in four phases:
   (the conservative reading); same-stage release-then-re-fix becomes
   the canonical atomic-replace pattern.  Widens the `Emitter`
   Protocol with five methods (`set_time`, `set_creep`, `reset`,
-  `remove_sp`, `remove_element`); H5 archival deferred (the existing
-  `apeSees.h5(...)` fail-loud guard on staged models still covers).
+  `remove_sp`, `remove_element`); H5 archival landed later (ADR 0055
+  Phase 2 — the mutators capture into the per-stage buckets).
   Adds validators V5 (`s.remove_sp` target must reference a prior-
   tier SP) and V6 (`s.remove_element` target must reference a prior-
   tier element); V2 was extended to subtract `s.remove_sp` targets
@@ -590,7 +590,7 @@ authoritative; see ADR 0051 §7. The no-mixing guard stays.)
 | Stage-bound MP-constraint emit orchestrators (SSI-2.D ext) | [`_internal/build.py`](../_internal/build.py) `emit_stage_mp_constraints`, `emit_stage_mp_constraints_partitioned`, `_StageConstraintAdapter`, `_ExcludeClaimedConstraints` |
 | Stage-bound MP-constraint builder methods (SSI-2.D ext) | [`apesees.py`](../apesees.py) `_StageBuilder.embedded` / `.tie` / `.distributing` / `.equal_dof` / `.rigid_link` / `.rigid_diaphragm` / `.kinematic_coupling` / `.node_to_surface` / `.node_to_surface_spring` |
 | `s.initial_stress(...)` PUSH builder + shared validation helper (SSI-2.D ext) | [`apesees.py`](../apesees.py) `_StageBuilder.initial_stress`, `_build_initial_stress_record` |
-| `apeSees.h5` fail-loud guard (#313) | [`apesees.py`](../apesees.py) `apeSees.h5` |
+| `apeSees.h5` staged archival (#313 guard lifted by ADR 0055 Phases 2+5) | [`apesees.py`](../apesees.py) `apeSees.h5` |
 | Ownership computation | [`_internal/build.py`](../_internal/build.py) `compute_stage_ownership` |
 | Tag pre-allocation | [`_internal/build.py`](../_internal/build.py) `allocate_element_tags` |
 | Initial-stress global emit | [`_internal/build.py`](../_internal/build.py) `emit_initial_stress_global` |
@@ -621,7 +621,7 @@ authoritative; see ADR 0051 §7. The no-mixing guard stays.)
 | [`tests/opensees/subprocess/test_phase3_subprocess.py`](../../../../tests/opensees/subprocess/test_phase3_subprocess.py) | Subprocess smoke for `convergence_confinement` + `imposed_displacement`. |
 | [`tests/opensees/subprocess/test_initial_stress_smoke.py`](../../../../tests/opensees/subprocess/test_initial_stress_smoke.py) | Subprocess smoke for the SSI-1 ramp end-to-end on `OpenSees`. |
 | [`tests/opensees/subprocess/test_initial_stress_acceptance.py`](../../../../tests/opensees/subprocess/test_initial_stress_acceptance.py) | Empirical acceptance — locks the FIXED ramp values against `result_fixed.csv` within ±0.5 kPa per step; gated on the reference CSV and the Ladruno OpenSees binary being available. |
-| [`tests/opensees/h5/test_h5_staged_fail_loud.py`](../../../../tests/opensees/h5/test_h5_staged_fail_loud.py) | `apeSees.h5` fail-loud guard (#313) — staged build + global `initial_stress` both raise `NotImplementedError`; vanilla non-staged build still writes successfully (guard is precise, no regression). |
+| [`tests/opensees/h5/test_h5_staged_fail_loud.py`](../../../../tests/opensees/h5/test_h5_staged_fail_loud.py) | The INVERTED #313 guard contract (ADR 0055) — staged builds (flat AND partitioned) now WRITE successfully; vanilla writes carry no `/opensees/stages` key. |
 | [`tests/opensees/integration/test_emit_partitioned_staged.py`](../../../../tests/opensees/integration/test_emit_partitioned_staged.py) | Phase SSI-2.C — 4-quad 2-PG 2-partition fixture; locks per-rank topology routing, global `domain_change` after the per-rank loop, `addToParameter` inside `partition_open(K)` only, cross-stage tag identity. |
 | [`tests/opensees/unit/test_stage_bound_validators.py`](../../../../tests/opensees/unit/test_stage_bound_validators.py) | Phase SSI-2.D PR-A — V1 / V2 / V3 ownership-tier + duplicate-fix + region-name validators; StageRecord shape lock; orchestrator H1-before-V1 ordering. |
 | [`tests/opensees/unit/test_stage_bound_fix_mass.py`](../../../../tests/opensees/unit/test_stage_bound_fix_mass.py) | Phase SSI-2.D PR-B — `s.fix` / `s.mass` builder positive + negative + XOR; `__slots__` assertion; `bridge.all_fix_records` / `all_mass_records` introspection; flat emit shape + slot ordering; unified `domain_change` gate (BC-only stage). |

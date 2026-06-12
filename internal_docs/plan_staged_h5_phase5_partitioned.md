@@ -111,14 +111,18 @@ excluded from it — `/opensees/partitions` would not cover stage-owned
 elements and their `partition_ids` would stay `-1` → viewer Partition mode
 regression on exactly the staged SSI models this phase exists for.
 
-**INVARIANT P5-1 (the load-bearing test):** for the same model, the
-`/opensees/stages` zone of a partitioned build is byte-identical to the
-unpartitioned build's — with ONE stated carve-out: the partitioned build
-auto-emits the ADR 0027 INV-5 runtime-conditional numberer/system, which
-lands in per-stage `chain_attrs` as `*_runtime_fallback` keys
-(`h5.py:1683-1712` route through the stage-aware `_chain_attrs` sink). The
-test asserts equality after masking exactly those keys; nothing else may
-differ.
+**INVARIANT P5-1 (the load-bearing test) — REVISED at P5.1 code time:**
+for the same model, the `/opensees/stages` zone of a partitioned build is
+**content-equal** (same owned-topology sets, fixes, HOLD lines, pattern
+lines, region member unions, chain, analyze) to the unpartitioned
+build's, masking the INV-5 `*_runtime_fallback` chain keys. Strict
+byte-equality is NOT achievable: partitioned capture order is rank-major
+(rank 0's owned subset first) while the flat emit order is target-major —
+canonicalizing would change the flat 2.18.0 bytes. The byte-level gates
+are instead (a) `from_h5 → to_h5` hash stability of the partitioned
+archive itself and (b) two-fresh-builds hash determinism. Capture order
+is the replay order; rank-major node/fix order within a stage block is
+semantically equivalent (all between the same `domainChange` barriers).
 
 ## Slices (each = own PR, `--base main`)
 
@@ -174,7 +178,7 @@ differ.
   extended to the partitioned staged fixture; all existing partitioned-staged
   emit tests untouched and green.
 
-### P5.2 — Flat replay acceptance
+### P5.2 — Flat replay acceptance — SHIPPED with P5.3 (zero source changes; tests only)
 
 - Post-P5.1 the stage buckets are flat-equivalent, so `_replay_staged_into`
   (`compose.py:588`) should accept partitioned staged archives **as-is**.
@@ -187,7 +191,7 @@ differ.
   unpartitioned build's tcl; runnable single-process smoke — the INV-5
   conditional makes the deck portable by construction.
 
-### P5.3 — `domain_capture` gate lift (the user-facing payoff)
+### P5.3 — `domain_capture` gate lift (the user-facing payoff) — SHIPPED with P5.2
 
 - Remove the `bridge=None` degrade (`apesees.py:4853-4855`); partitioned
   staged builds forward the bridge → the Composed run file carries

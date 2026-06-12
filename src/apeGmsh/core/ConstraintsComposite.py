@@ -48,6 +48,7 @@ from apeGmsh.core.constraints.defs import (
     TieDef,
     TiedContactDef,
 )
+from apeGmsh._kernel._coupling_control import CouplingControl
 from apeGmsh._kernel.resolvers._constraint_resolver import ConstraintResolver
 from apeGmsh._kernel.record_sets import NodeConstraintSet as ConstraintSet
 from apeGmsh._kernel.records._constraints import ConstraintRecord
@@ -60,7 +61,7 @@ _DISPATCH: dict[type, str] = {
     RigidBodyDef:            "_resolve_kinematic",
     KinematicCouplingDef:    "_resolve_kinematic",
     TieDef:                  "_resolve_face_slave",
-    DistributingCouplingDef: "_resolve_kinematic",
+    DistributingCouplingDef: "_resolve_distributing",
     EmbeddedDef:             "_resolve_embedded",
     # Both the constraint- and spring-based variants go through the
     # same composite-level lookup; the final call to the resolver is
@@ -769,6 +770,10 @@ class ConstraintsComposite:
 
     def kinematic_coupling(self, master_label, slave_label, *,
                            master_point=(0., 0., 0.), dofs=None,
+                           k=None, k_alpha=None, host=None,
+                           kr=None, enforce="penalty",
+                           bipenalty_dtcr=None, bipenalty_wcap=None,
+                           absolute=False,
                            name=None) -> KinematicCouplingDef:
         """RBE2 / kinematic coupling — a reference node rigidly drives a
         node set.
@@ -804,6 +809,41 @@ class ConstraintsComposite:
             choice for a mixed 3/6-DOF slave set; pass an explicit list to
             restrict, e.g. ``[1, 2, 3]`` for translations only or
             ``[3]`` for a vertical-only follower.
+        k : float | ``"auto"``, optional
+            Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
+            default (``1e12``). ``"auto"`` scales it off a representative
+            host element's stiffness diagonal
+            (``K_t = k_alpha · max|K_host(i,i)|``) — requires ``host``.
+        k_alpha : float, optional
+            Multiplier for ``k="auto"`` (``-kAlpha``; fork default ``1e3``).
+            Only valid together with ``k="auto"``.
+        host : int, optional
+            Representative host element for ``k="auto"`` / ``bipenalty_wcap``
+            (``-host``) as a **FEM element id** — the bridge translates it to
+            the emitted OpenSees tag at emit time. Pick a typical element of
+            the coupled part (e.g. one touching the slave surface).
+        kr : float, optional
+            Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived
+            ``K_t·ℓ²`` (keeps the translation/rotation conditioning matched).
+        enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
+            ``"al"`` = augmented Lagrangian (near-exact rigidity at moderate
+            ``k``; **implicit only** — cannot combine with the bipenalty
+            knobs).
+        bipenalty_dtcr : float, optional
+            Explicit-dynamics critical-time-step target (``-bipenalty
+            -dtcr``); lumps a penalty mass on any massless tied DOF so the
+            stiff tie doesn't collapse the explicit step. ``None`` ⇒ off
+            (the master is usually a massed node).
+        bipenalty_wcap : float, optional
+            Bipenalty via the host frequency (``-bipenalty -wcap``):
+            ``m_p = K_t/(β·ω_host)²`` with ``β`` = this value — sets the
+            penalty-mode frequency at ``β·ω_host`` instead of a hard ``dt``
+            budget. Requires ``host``; mutually exclusive with
+            ``bipenalty_dtcr``.
+        absolute : bool, default False
+            Keep the **absolute** tie (``-absolute``) — skip the default
+            ``g0`` stress-free birth (a coupling added to a deformed model
+            is otherwise born force-free).
         name : str, optional
             Friendly name (also the stage-claim key for ``s.kinematic_coupling``).
 
@@ -815,10 +855,21 @@ class ConstraintsComposite:
         ------
         KeyError
             If either label is not in ``g.parts``.
+        ValueError
+            On an invalid knob (``enforce`` not in {penalty, al};
+            non-positive ``k``/``kr``/``bipenalty_dtcr``/``bipenalty_wcap``;
+            ``al`` + a bipenalty knob; ``k="auto"`` or ``bipenalty_wcap``
+            without ``host``; ``k_alpha`` without ``k="auto"``; a dangling
+            ``host`` no knob consumes; ``bipenalty_dtcr`` + ``bipenalty_wcap``).
         """
         return self._add_def(KinematicCouplingDef(
             master_label=master_label, slave_label=slave_label,
             master_point=master_point, dofs=dofs,
+            control=CouplingControl(
+                k=k, k_alpha=k_alpha, host=host, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, bipenalty_wcap=bipenalty_wcap,
+                absolute=absolute,
+            ),
             name=name))
 
     # ── Tier 3 — Node-to-Surface ─────────────────────────────────────
@@ -920,6 +971,10 @@ class ConstraintsComposite:
     def distributing_coupling(self, master_label, slave_label, *,
                               master_point=(0., 0., 0.),
                               weighting="uniform",
+                              k=None, k_alpha=None, host=None,
+                              kr=None, enforce="penalty",
+                              bipenalty_dtcr=None, bipenalty_wcap=None,
+                              absolute=False,
                               name=None) -> DistributingCouplingDef:
         """RBE3 / distributing coupling — distribute a load at a reference
         point over a node set while the set stays flexible.
@@ -956,27 +1011,84 @@ class ConstraintsComposite:
             injected).
         master_point : (x, y, z), default (0, 0, 0)
             Coordinates of the reference node R.
-        weighting : str, default ``"uniform"``
-            v1 supports only ``"uniform"`` (equal weights). Tributary-area
-            weighting (`-w`) is a follow-up — apeGmsh would compute
-            per-independent areas.
+        weighting : ``"uniform"`` | ``"area"``, default ``"uniform"``
+            ``"uniform"`` ⇒ equal weights (``-w`` omitted, the fork
+            element's default). ``"area"`` ⇒ apeGmsh computes each
+            independent node's **tributary area** over the slave
+            surface (each face's area split equally among its nodes —
+            the same lumping model as ``g.loads`` surface-tributary
+            resolution) and emits ``-w w1..wN``, so a force at R
+            distributes like a uniform traction on the surface.
+            Requires the slave label (or ``slave_entities``) to resolve
+            to meshed surface faces; an independent node on no slave
+            face fails loud.
+        k : float | ``"auto"``, optional
+            Translational penalty stiffness (``-k``). ``None`` ⇒ the fork
+            default (``1e12``). ``"auto"`` scales it off a representative
+            host element's stiffness diagonal
+            (``K_t = k_alpha · max|K_host(i,i)|``) — requires ``host``.
+            Note the **force distribution is exact for any penalty** (the
+            RBE3 property); ``k`` only relaxes the *kinematic* fit of the
+            reference node.
+        k_alpha : float, optional
+            Multiplier for ``k="auto"`` (``-kAlpha``; fork default ``1e3``).
+            Only valid together with ``k="auto"``.
+        host : int, optional
+            Representative host element for ``k="auto"`` / ``bipenalty_wcap``
+            (``-host``) as a **FEM element id** — the bridge translates it to
+            the emitted OpenSees tag at emit time. RBE3 has no single host
+            by construction; name ONE typical element among the independents'
+            parents — it is read ONLY to scale the penalties.
+        kr : float, optional
+            Rotational penalty stiffness (``-kr``). ``None`` ⇒ fork-derived.
+        enforce : ``"penalty"`` | ``"al"``, default ``"penalty"``
+            ``"al"`` = augmented Lagrangian — recovers a near-exact weighted
+            fit of R at moderate ``k`` (**implicit only**; cannot combine
+            with the bipenalty knobs).
+        bipenalty_dtcr : float, optional
+            Explicit-dynamics critical-time-step target (``-bipenalty
+            -dtcr``). The reference node is **massless** by construction, so
+            an explicit run needs this (or it has a zero stable step).
+            ``None`` ⇒ off.
+        bipenalty_wcap : float, optional
+            Bipenalty via the host frequency (``-bipenalty -wcap``):
+            ``m_p = K_t/(β·ω_host)²`` with ``β`` = this value. Requires
+            ``host``; mutually exclusive with ``bipenalty_dtcr``.
+        absolute : bool, default False
+            Keep the **absolute** tie (``-absolute``) — skip the default
+            ``g0`` stress-free birth.
         name : str, optional
             Friendly name (also the stage-claim key for `s.distributing`).
 
         Returns
         -------
         DistributingCouplingDef
+
+        Raises
+        ------
+        ValueError
+            On an invalid knob (``enforce`` not in {penalty, al};
+            non-positive ``k``/``kr``/``bipenalty_dtcr``/``bipenalty_wcap``;
+            ``al`` + a bipenalty knob; ``k="auto"`` or ``bipenalty_wcap``
+            without ``host``; ``k_alpha`` without ``k="auto"``; a dangling
+            ``host`` no knob consumes; ``bipenalty_dtcr`` + ``bipenalty_wcap``;
+            ``weighting`` not in {uniform, area}).
         """
-        if weighting != "uniform":
-            raise NotImplementedError(
-                "distributing_coupling: only weighting='uniform' is supported "
-                f"in v1 (got {weighting!r}). Tributary-area '-w' weighting is a "
-                "follow-up — apeGmsh would compute per-independent areas and "
-                "emit -w. Use 'uniform' for now."
+        if weighting not in ("uniform", "area"):
+            raise ValueError(
+                "distributing_coupling: weighting must be 'uniform' (equal "
+                "weights) or 'area' (tributary-area -w weights computed over "
+                f"the slave surface), got {weighting!r}."
             )
         return self._add_def(DistributingCouplingDef(
             master_label=master_label, slave_label=slave_label,
-            master_point=master_point, weighting=weighting, name=name))
+            master_point=master_point, weighting=weighting,
+            control=CouplingControl(
+                k=k, k_alpha=k_alpha, host=host, kr=kr, enforce=enforce,
+                bipenalty_dtcr=bipenalty_dtcr, bipenalty_wcap=bipenalty_wcap,
+                absolute=absolute,
+            ),
+            name=name))
 
     def embedded(self, host_label, embedded_label, *, tolerance=1.0,
                  host_entities=None, embedded_entities=None,
@@ -1324,6 +1436,11 @@ class ConstraintsComposite:
                 connectivity=None, *, node_map=None, face_map=None) -> ConstraintSet:
         has_face_constraints = any(
             isinstance(d, _FACE_TYPES) for d in self.constraint_defs)
+        # weighting="area" distributing couplings consume slave faces too.
+        has_face_constraints = has_face_constraints or any(
+            isinstance(d, DistributingCouplingDef)
+            and getattr(d, "weighting", "uniform") == "area"
+            for d in self.constraint_defs)
         if has_face_constraints and face_map is None:
             raise TypeError(
                 "Surface constraints are defined but face_map=None. "
@@ -1459,6 +1576,17 @@ class ConstraintsComposite:
         s = self._resolve_nodes(defn.slave_label, "slave", defn, node_map, all_nodes)
         method = getattr(resolver, _RESOLVER_METHOD[type(defn)])
         return method(defn, m, s)
+
+    def _resolve_distributing(self, resolver, defn, node_map, face_map, all_nodes):
+        m = self._resolve_nodes(defn.master_label, "master", defn, node_map, all_nodes)
+        s = self._resolve_nodes(defn.slave_label, "slave", defn, node_map, all_nodes)
+        # weighting="area" additionally needs the slave surface's face
+        # connectivity for the tributary-area accumulation; "uniform"
+        # stays node-set-only (no face_map requirement).
+        s_faces = None
+        if getattr(defn, "weighting", "uniform") == "area":
+            s_faces = self._resolve_faces(defn.slave_label, "slave", defn, face_map)
+        return resolver.resolve_distributing(defn, m, s, slave_face_conn=s_faces)
 
     def _resolve_face_slave(self, resolver, defn, node_map, face_map, all_nodes):
         m_faces = self._resolve_faces(defn.master_label, "master", defn, face_map)

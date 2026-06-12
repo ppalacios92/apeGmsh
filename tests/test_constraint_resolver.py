@@ -326,6 +326,24 @@ class TestResolveKinematicCoupling(unittest.TestCase):
         self.assertEqual(rec.kind, "kinematic_coupling")
         self.assertEqual(rec.dofs, [1, 3, 5])
 
+    def test_kinematic_coupling_carries_control_onto_record(self):
+        from apeGmsh._kernel._coupling_control import CouplingControl
+        r = _make_resolver({1: (0, 0, 0), 2: (1, 0, 0)})
+        defn = KinematicCouplingDef(
+            master_label="m", slave_label="s", master_point=(0, 0, 0),
+            control=CouplingControl(k=1e10, enforce="al"),
+        )
+        rec = r.resolve_kinematic_coupling(defn, {1}, {2})
+        self.assertEqual(rec.control, CouplingControl(k=1e10, enforce="al"))
+
+    def test_kinematic_coupling_default_control_becomes_none(self):
+        r = _make_resolver({1: (0, 0, 0), 2: (1, 0, 0)})
+        defn = KinematicCouplingDef(
+            master_label="m", slave_label="s", master_point=(0, 0, 0),
+        )
+        rec = r.resolve_kinematic_coupling(defn, {1}, {2})
+        self.assertIsNone(rec.control)   # no knobs set ⇒ None (emits nothing)
+
 
 # =====================================================================
 # resolve_distributing
@@ -363,6 +381,134 @@ class TestResolveDistributing(unittest.TestCase):
         # slave set is only the reference node ⇒ no independents
         with self.assertRaises(ValueError):
             r.resolve_distributing(defn, {1}, {1})
+
+    def test_resolve_distributing_carries_control_onto_record(self):
+        from apeGmsh._kernel._coupling_control import CouplingControl
+        r = _make_resolver({1: (0., 0., 0.), 2: (1., 0., 0.), 3: (-1., 0., 0.)})
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf", master_point=(0, 0, 0),
+            control=CouplingControl(k=5e8, bipenalty_dtcr=2e-6),
+        )
+        rec = r.resolve_distributing(defn, {1}, {2, 3})
+        self.assertEqual(rec.control,
+                         CouplingControl(k=5e8, bipenalty_dtcr=2e-6))
+        # default control ⇒ None
+        defn2 = DistributingCouplingDef(
+            master_label="ref", slave_label="surf", master_point=(0, 0, 0),
+        )
+        self.assertIsNone(r.resolve_distributing(defn2, {1}, {2, 3}).control)
+
+
+class TestResolveDistributingAreaWeighting(unittest.TestCase):
+    """``weighting="area"`` → per-independent tributary areas in ``weights``.
+
+    Each face's area is split equally among its nodes (the ``g.loads``
+    surface-tributary lumping model) and accumulated per node; weights
+    align with the record's sorted independent order. The fork
+    normalizes by ``W = Σw``, so only proportionality matters.
+    """
+
+    # Two coplanar quads sharing edge 3-4:
+    #   face A (2,3,4,5): 1×1 unit square, area 1   → share 0.25/node
+    #   face B (3,6,7,4): 2×1 rectangle,  area 2   → share 0.5/node
+    # Ref node 1 floats above the surface.
+    _COORDS = {
+        1: (0.5, 0.5, 1.0),
+        2: (0.0, 0.0, 0.0), 3: (1.0, 0.0, 0.0),
+        4: (1.0, 1.0, 0.0), 5: (0.0, 1.0, 0.0),
+        6: (3.0, 0.0, 0.0), 7: (3.0, 1.0, 0.0),
+    }
+    _FACES = np.array([[2, 3, 4, 5], [3, 6, 7, 4]], dtype=int)
+
+    def test_area_weights_are_tributary_and_sorted(self):
+        r = _make_resolver(self._COORDS)
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(0.5, 0.5, 1.0), weighting="area",
+        )
+        rec = r.resolve_distributing(
+            defn, {1}, {2, 3, 4, 5, 6, 7}, slave_face_conn=self._FACES,
+        )
+        self.assertEqual(rec.master_nodes, [2, 3, 4, 5, 6, 7])
+        # nodes 2,5 only on A (0.25); 3,4 shared (0.25+0.5); 6,7 only on B.
+        np.testing.assert_allclose(
+            rec.weights, [0.25, 0.75, 0.75, 0.25, 0.5, 0.5],
+        )
+
+    def test_area_weights_tri_faces(self):
+        # One unit right triangle, area 0.5 → each node gets 1/6.
+        r = _make_resolver({
+            1: (0.0, 0.0, 1.0),
+            2: (0.0, 0.0, 0.0), 3: (1.0, 0.0, 0.0), 4: (0.0, 1.0, 0.0),
+        })
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(0, 0, 1), weighting="area",
+        )
+        rec = r.resolve_distributing(
+            defn, {1}, {2, 3, 4},
+            slave_face_conn=np.array([[2, 3, 4]], dtype=int),
+        )
+        np.testing.assert_allclose(rec.weights, [0.5 / 3] * 3)
+
+    def test_area_without_faces_raises(self):
+        r = _make_resolver(self._COORDS)
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(0.5, 0.5, 1.0), weighting="area",
+        )
+        with self.assertRaisesRegex(ValueError, "face connectivity"):
+            r.resolve_distributing(defn, {1}, {2, 3}, slave_face_conn=None)
+        with self.assertRaisesRegex(ValueError, "face connectivity"):
+            r.resolve_distributing(
+                defn, {1}, {2, 3},
+                slave_face_conn=np.empty((0, 4), dtype=int),
+            )
+
+    def test_area_node_on_no_face_fails_loud(self):
+        # Node 8 is in the independent set but on no slave face.
+        coords = dict(self._COORDS)
+        coords[8] = (9.0, 9.0, 0.0)
+        r = _make_resolver(coords)
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(0.5, 0.5, 1.0), weighting="area",
+        )
+        with self.assertRaisesRegex(ValueError, r"\[8\]"):
+            r.resolve_distributing(
+                defn, {1}, {2, 3, 4, 5, 6, 7, 8},
+                slave_face_conn=self._FACES,
+            )
+
+    def test_uniform_ignores_faces(self):
+        r = _make_resolver(self._COORDS)
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(0.5, 0.5, 1.0), weighting="uniform",
+        )
+        rec = r.resolve_distributing(
+            defn, {1}, {2, 3}, slave_face_conn=self._FACES,
+        )
+        self.assertIsNone(rec.weights)
+
+    def test_ref_node_on_face_keeps_share_unreported(self):
+        # The reference node sits ON the slave surface: its face share
+        # is not reported (it's not an independent) and the remaining
+        # weights are unaffected in order.
+        r = _make_resolver(self._COORDS)
+        defn = DistributingCouplingDef(
+            master_label="ref", slave_label="surf",
+            master_point=(1.0, 0.0, 0.0), weighting="area",
+        )
+        # Node 3 is the closest to master_point ⇒ becomes R, excluded.
+        rec = r.resolve_distributing(
+            defn, {3}, {2, 3, 4, 5, 6, 7}, slave_face_conn=self._FACES,
+        )
+        self.assertEqual(rec.slave_node, 3)
+        self.assertEqual(rec.master_nodes, [2, 4, 5, 6, 7])
+        np.testing.assert_allclose(
+            rec.weights, [0.25, 0.75, 0.25, 0.5, 0.5],
+        )
 
 
 # =====================================================================

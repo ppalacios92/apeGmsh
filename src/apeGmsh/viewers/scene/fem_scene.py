@@ -176,6 +176,13 @@ class FEMSceneData:
     cell_dim: ndarray = field(
         default_factory=lambda: np.array([], dtype=np.int8)
     )
+    # ADR 0058 S1: the undeformed baseline this scene's deformation is
+    # computed from — per-scene so a future per-geometry scene carries
+    # its own reference. Captured once at build; the DEFORM pump resets
+    # ``grid.points`` to it when deformation is off.
+    reference_points: ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
+    )
     actor: Any = None
     node_tree: Any = None              # scipy.spatial.cKDTree, lazy
     pick_engine: Any = None            # PickInventory (results_pick_engine)
@@ -355,4 +362,56 @@ def build_fem_scene(
         model_diagonal=diag,
         skipped_types=skipped_types,
         cell_dim=cell_dim_arr,
+        reference_points=np.asarray(
+            grid.points, dtype=np.float64,
+        ).copy(),
+    )
+
+
+# ======================================================================
+# Clone (ADR 0058 S2a — per-geometry scene instances)
+# ======================================================================
+
+def clone_scene(scene: FEMSceneData) -> FEMSceneData:
+    """Clone ``scene`` into a fresh per-geometry ``FEMSceneData``.
+
+    The S2a materialization primitive: the viewer's ``scene_factory``
+    calls this, then wires the render-side fields.
+
+    * ``grid`` is deep-copied and its points reset to
+      ``reference_points`` — clones are born **undeformed**. Any
+      ``vtkGhostType`` hides on the source grid are also zeroed
+      (clones are born unhidden; the viewer re-applies the view-global
+      dim-filter / stage-activation layers at materialization).
+    * The immutable index arrays are **shared** (every scene indexes
+      the same model): ``node_ids``, ``node_id_to_idx``,
+      ``cell_to_element_id``, ``element_id_to_cell``, ``cell_dim``,
+      ``model_diagonal``.
+    * ``reference_points`` is copied (per-scene undeformed baseline).
+    * The render-side fields (``actor`` / ``pick_engine`` /
+      ``element_visibility`` / ``opacity_controller``) start ``None``
+      — filled by the viewer, never here (keeps the build headless).
+    """
+    grid = scene.grid.copy(deep=True)
+    reference = np.asarray(
+        scene.reference_points, dtype=np.float64,
+    ).copy()
+    if reference.shape == (int(grid.n_points), 3):
+        grid.points = reference.copy()
+    try:
+        ghosts = grid.cell_data["vtkGhostType"]
+    except (KeyError, IndexError):
+        ghosts = None
+    if ghosts is not None:
+        ghosts[:] = 0
+    return FEMSceneData(
+        grid=grid,
+        node_ids=scene.node_ids,
+        node_id_to_idx=scene.node_id_to_idx,
+        cell_to_element_id=scene.cell_to_element_id,
+        element_id_to_cell=scene.element_id_to_cell,
+        model_diagonal=scene.model_diagonal,
+        skipped_types=list(scene.skipped_types),
+        cell_dim=scene.cell_dim,
+        reference_points=reference,
     )

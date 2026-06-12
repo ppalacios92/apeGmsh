@@ -145,10 +145,24 @@ __all__ = [
 #: additions and decode cleanly with ``composed_from=()`` and no
 #: ``module_label`` plumbed.
 #:
+#: v2.13.0 (June 2026, fork-coupling host auto-scalers — handoff item A):
+#: additive — extends the ``cpl_*`` coupling-control lane on
+#: ``node_group_payload_dtype`` / ``interpolation_payload_dtype`` with
+#: four columns: ``cpl_k_auto`` (uint8, ``k="auto"``), ``cpl_k_alpha``
+#: (float64, ``-kAlpha``), ``cpl_host`` (int64 **FEM element id**,
+#: ``-1`` = none — deliberately NOT the emit-time ops tag) and
+#: ``cpl_wcap`` (float64, ``-bipenalty -wcap``), with matching
+#: per-slave vlen ``sr_cpl_*`` mirrors on
+#: ``surface_coupling_payload_dtype`` (lane-parity contract from PR
+#: #337 / #632).  Per ADR 0023's two-version reader window, readers
+#: tolerate 2.12.x and 2.13.x; 2.12.x files probe ``cpl_k_auto`` /
+#: ``sr_cpl_k_auto`` via ``p.dtype.names`` and decode with the v1
+#: knobs only.
+#:
 #: Broker-only files (no `/opensees/...`) still stamp the current
 #: minor — the field is additive and old readers tolerate its
 #: absence.
-NEUTRAL_SCHEMA_VERSION: str = "2.11.0"
+NEUTRAL_SCHEMA_VERSION: str = "2.13.0"
 
 #: Inner schema-version stamp written on the ``/composed_from/`` group
 #: when ``fem.composed_from`` is non-empty.  Independent of the
@@ -1023,6 +1037,92 @@ def _encode_node_pair(rec: Any) -> tuple[Any, ...]:
     )
 
 
+def _encode_control(ctrl: Any) -> tuple[Any, ...]:
+    """Encode a :class:`CouplingControl` (or ``None``) into the ``cpl_*``
+    columns (schema 2.12.0; host auto-scalers 2.13.0).  ``cpl_has`` is the
+    presence flag; unset numeric knobs encode as NaN; ``enforce`` encodes
+    0=penalty/1=al.  ``k="auto"`` encodes as ``cpl_k_auto=1`` + ``cpl_k``
+    NaN; ``cpl_host`` carries the **FEM element id** (``-1`` = none) — the
+    eid is stable across emits, ops tags are not.
+    """
+    nan = float("nan")
+    if ctrl is None:
+        return (
+            np.uint8(0), nan, nan, np.uint8(0), nan, np.uint8(0),
+            np.uint8(0), nan, np.int64(-1), nan,
+        )
+    k_auto = ctrl.k == "auto"
+    return (
+        np.uint8(1),
+        float(ctrl.k) if ctrl.k is not None and not k_auto else nan,
+        float(ctrl.kr) if ctrl.kr is not None else nan,
+        np.uint8(1 if ctrl.enforce == "al" else 0),
+        float(ctrl.bipenalty_dtcr) if ctrl.bipenalty_dtcr is not None else nan,
+        np.uint8(1 if ctrl.absolute else 0),
+        np.uint8(1 if k_auto else 0),
+        float(ctrl.k_alpha) if ctrl.k_alpha is not None else nan,
+        np.int64(ctrl.host) if ctrl.host is not None else np.int64(-1),
+        float(ctrl.bipenalty_wcap) if ctrl.bipenalty_wcap is not None else nan,
+    )
+
+
+def _decode_control(p: Any) -> Any:
+    """Reconstruct a :class:`CouplingControl` from the ``cpl_*`` columns,
+    or ``None`` (pre-2.12.0 files lack the columns → probe ``dtype.names``;
+    ``cpl_has == 0`` means the record carried no control).  The 2.13.0
+    host auto-scaler columns are presence-probed independently
+    (``cpl_k_auto``) so 2.12.0 files decode with the v1 knobs only."""
+    names = set(p.dtype.names or ())
+    if "cpl_has" not in names:
+        return None
+    if "cpl_k_auto" in names:
+        return _control_from_values(
+            p["cpl_has"], p["cpl_k"], p["cpl_kr"],
+            p["cpl_enforce"], p["cpl_dtcr"], p["cpl_absolute"],
+            k_auto=p["cpl_k_auto"], k_alpha=p["cpl_k_alpha"],
+            host=p["cpl_host"], wcap=p["cpl_wcap"],
+        )
+    return _control_from_values(
+        p["cpl_has"], p["cpl_k"], p["cpl_kr"],
+        p["cpl_enforce"], p["cpl_dtcr"], p["cpl_absolute"],
+    )
+
+
+def _control_from_values(
+    has: Any, k: Any, kr: Any, enforce: Any, dtcr: Any, absolute: Any,
+    *, k_auto: Any = None, k_alpha: Any = None,
+    host: Any = None, wcap: Any = None,
+) -> Any:
+    """Values-level core of :func:`_decode_control` — also used by the
+    ``sr_cpl_*`` lane decode in :func:`_decode_surface_coupling`, where
+    the columns arrive as per-slave vlen array elements instead of
+    scalar payload columns.  The host auto-scaler values (schema
+    2.13.0) are keyword-only and stay ``None`` for 2.12.0 files that
+    lack the columns — the decode then yields the v1 knobs only."""
+    if not int(has):
+        return None
+    from apeGmsh._kernel._coupling_control import CouplingControl
+    k_val: Any = _opt_scalar(k)
+    extras: dict[str, Any] = {}
+    if k_auto is not None:
+        if int(k_auto):
+            k_val = "auto"
+        host_eid = int(host)
+        extras = dict(
+            k_alpha=_opt_scalar(k_alpha),
+            host=host_eid if host_eid >= 0 else None,
+            bipenalty_wcap=_opt_scalar(wcap),
+        )
+    return CouplingControl(
+        k=k_val,
+        kr=_opt_scalar(kr),
+        enforce=("al" if int(enforce) else "penalty"),
+        bipenalty_dtcr=_opt_scalar(dtcr),
+        absolute=bool(int(absolute)),
+        **extras,
+    )
+
+
 def _encode_node_group(rec: Any) -> tuple[Any, ...]:
     nan = float("nan")
     offsets = rec.offsets
@@ -1043,6 +1143,7 @@ def _encode_node_group(rec: Any) -> tuple[Any, ...]:
         offsets_flat,
         plane_arr,
         rec.name or "",
+        *_encode_control(getattr(rec, "control", None)),
     )
 
 
@@ -1081,6 +1182,7 @@ def _encode_interpolation(rec: Any) -> tuple[Any, ...]:
         np.uint8(1 if rec.rotational else 0),
         np.uint8(1 if rec.pressure else 0),
         float(rec.excess) if rec.excess is not None else nan,
+        *_encode_control(getattr(rec, "control", None)),
     )
 
 
@@ -1114,6 +1216,18 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
     sr_rotational: list[int] = []
     sr_pressure: list[int] = []
     sr_excess: list[float] = []
+    # CouplingControl per slave record (schema 2.12.0 sr_cpl_* mirror;
+    # host auto-scalers 2.13.0)
+    sr_cpl_has: list[Any] = []
+    sr_cpl_k: list[float] = []
+    sr_cpl_kr: list[float] = []
+    sr_cpl_enforce: list[Any] = []
+    sr_cpl_dtcr: list[float] = []
+    sr_cpl_absolute: list[Any] = []
+    sr_cpl_k_auto: list[Any] = []
+    sr_cpl_k_alpha: list[float] = []
+    sr_cpl_host: list[Any] = []
+    sr_cpl_wcap: list[float] = []
     nan = float("nan")
     for ir in srs:
         m = [int(x) for x in np.asarray(ir.master_nodes).reshape(-1)]
@@ -1143,6 +1257,18 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
         sr_rotational.append(1 if ir.rotational else 0)
         sr_pressure.append(1 if ir.pressure else 0)
         sr_excess.append(float(ir.excess) if ir.excess is not None else nan)
+        (c_has, c_k, c_kr, c_enf, c_dtcr, c_abs,
+         c_auto, c_alpha, c_host, c_wcap) = _encode_control(ir.control)
+        sr_cpl_has.append(c_has)
+        sr_cpl_k.append(c_k)
+        sr_cpl_kr.append(c_kr)
+        sr_cpl_enforce.append(c_enf)
+        sr_cpl_dtcr.append(c_dtcr)
+        sr_cpl_absolute.append(c_abs)
+        sr_cpl_k_auto.append(c_auto)
+        sr_cpl_k_alpha.append(c_alpha)
+        sr_cpl_host.append(c_host)
+        sr_cpl_wcap.append(c_wcap)
     return (
         np.asarray(rec.master_nodes, dtype=np.int64),
         np.asarray(rec.slave_nodes, dtype=np.int64),
@@ -1164,6 +1290,16 @@ def _encode_surface_coupling(rec: Any) -> tuple[Any, ...]:
         np.asarray(sr_rotational, dtype=np.uint8),
         np.asarray(sr_pressure, dtype=np.uint8),
         np.asarray(sr_excess, dtype=np.float64),
+        np.asarray(sr_cpl_has, dtype=np.uint8),
+        np.asarray(sr_cpl_k, dtype=np.float64),
+        np.asarray(sr_cpl_kr, dtype=np.float64),
+        np.asarray(sr_cpl_enforce, dtype=np.uint8),
+        np.asarray(sr_cpl_dtcr, dtype=np.float64),
+        np.asarray(sr_cpl_absolute, dtype=np.uint8),
+        np.asarray(sr_cpl_k_auto, dtype=np.uint8),
+        np.asarray(sr_cpl_k_alpha, dtype=np.float64),
+        np.asarray(sr_cpl_host, dtype=np.int64),
+        np.asarray(sr_cpl_wcap, dtype=np.float64),
     )
 
 
@@ -2099,6 +2235,7 @@ def _decode_node_group(row: Any, cls: type) -> Any:
         dofs=[int(x) for x in np.asarray(p["dofs"]).reshape(-1)],
         offsets=offsets,
         plane_normal=_opt_vec3(p["plane_normal"]),
+        control=_decode_control(p),
     )
 
 
@@ -2134,6 +2271,7 @@ def _decode_interpolation(row: Any, cls: type) -> Any:
         dofs=[int(x) for x in np.asarray(p["dofs"]).reshape(-1)],
         projected_point=_opt_vec3(p["projected_point"]),
         parametric_coords=_opt_vec2(p["parametric_coords"]),
+        control=_decode_control(p),
         **extras,
     )
 
@@ -2175,6 +2313,30 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
             sr_rot = np.asarray(p["sr_rotational"], dtype=np.uint8).reshape(-1)
             sr_p = np.asarray(p["sr_pressure"], dtype=np.uint8).reshape(-1)
             sr_ex = np.asarray(p["sr_excess"], dtype=np.float64).reshape(-1)
+        # CouplingControl per slave (schema 2.12.0 sr_cpl_* mirror;
+        # host auto-scalers 2.13.0, presence-probed independently).
+        # Pre-2.12.0 files lack these — fall back to control=None.
+        has_sr_cpl = "sr_cpl_has" in names
+        has_sr_cpl_host = "sr_cpl_k_auto" in names
+        if has_sr_cpl:
+            sr_c_has = np.asarray(p["sr_cpl_has"], dtype=np.uint8).reshape(-1)
+            sr_c_k = np.asarray(p["sr_cpl_k"], dtype=np.float64).reshape(-1)
+            sr_c_kr = np.asarray(p["sr_cpl_kr"], dtype=np.float64).reshape(-1)
+            sr_c_enf = np.asarray(
+                p["sr_cpl_enforce"], dtype=np.uint8).reshape(-1)
+            sr_c_dtcr = np.asarray(
+                p["sr_cpl_dtcr"], dtype=np.float64).reshape(-1)
+            sr_c_abs = np.asarray(
+                p["sr_cpl_absolute"], dtype=np.uint8).reshape(-1)
+        if has_sr_cpl_host:
+            sr_c_auto = np.asarray(
+                p["sr_cpl_k_auto"], dtype=np.uint8).reshape(-1)
+            sr_c_alpha = np.asarray(
+                p["sr_cpl_k_alpha"], dtype=np.float64).reshape(-1)
+            sr_c_host = np.asarray(
+                p["sr_cpl_host"], dtype=np.int64).reshape(-1)
+            sr_c_wcap = np.asarray(
+                p["sr_cpl_wcap"], dtype=np.float64).reshape(-1)
         m_off = 0
         d_off = 0
         for i in range(sn.size):
@@ -2199,6 +2361,17 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
                 )
             else:
                 opt_extras = {}
+            if has_sr_cpl:
+                control = _control_from_values(
+                    sr_c_has[i], sr_c_k[i], sr_c_kr[i],
+                    sr_c_enf[i], sr_c_dtcr[i], sr_c_abs[i],
+                    **(dict(
+                        k_auto=sr_c_auto[i], k_alpha=sr_c_alpha[i],
+                        host=sr_c_host[i], wcap=sr_c_wcap[i],
+                    ) if has_sr_cpl_host else {}),
+                )
+            else:
+                control = None
             slave_records.append(InterpolationRecord(
                 kind=ConstraintKind.TIE,
                 slave_node=int(sn[i]),
@@ -2209,6 +2382,7 @@ def _decode_surface_coupling(row: Any, cls: type) -> Any:
                                  else pp.astype(np.float64)),
                 parametric_coords=(None if np.all(np.isnan(pc))
                                    else pc.astype(np.float64)),
+                control=control,
                 **opt_extras,
             ))
 
