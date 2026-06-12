@@ -8,6 +8,16 @@ Every geometry with `visible=True` now renders concurrently — its substrate fi
 
 *(Merge note: the `## Unreleased` header items for P5.2+P5.3 (#634) and the coupling host auto-scalers (#635) keep being dropped by CHANGELOG conflict resolutions on other tracks — restored above again; their sections were never lost.)*
 
+### CHANGED — flat deck emission sheds its per-incidence Python overhead (~1.5× on top of the partitioned fix)
+
+Companion to the partitioned pre-bucketing below — this slice attacks the FLAT path's constant factor (the per-element cost every emit pays regardless of partitioning). Three changes, decks byte-identical (verified by diffing ~100 MB Tcl + Py decks at 512k hexes — flat, 64-rank, and staged-partitioned fixtures — before/after):
+
+- **ADR 0048 ndf inference is evaluated per element CLASS, not per (element × node) incidence** — `infer_node_ndf` makes one capability-registry probe per class and resolves per-node floors + the strict ndf_ok gate with numpy over the connectivity; semantics are exactly the unit-tested `_infer_ndf_from_incidence` core (kept as the reference). Was ~30% of flat emit (8 registry probes + a dict-append per hex).
+- **PG fan-outs are memoised per snapshot** — `expand_pg_to_elements` / `expand_pg_to_nodes` cache on a `WeakKeyDictionary` keyed by the (immutable) `FEMData`; one emit re-ran the same PG → Python-tuples materialisation for ndf inference, tag allocation, validators, and fix/mass/load fan-outs, and a same-snapshot re-emit (`ops.tcl` then `ops.py`) re-ran all of it again. Returned containers are documented read-only.
+- **Emitter token dispatch is inlined per line** — `_join` (Tcl) / `_ops_call` (Py) dispatch int/float/str inline instead of calling `_fmt_value` per token, and `node` lines (the dominant deck band) render via a single f-string fast path behind exact-class guards (`bool` / numpy scalars fall through to the old path unchanged).
+
+Measured (`time.perf_counter`, 512k hexes / 531k nodes, cold caches): flat `ops.tcl` 9.2 s → **6.2 s**; 64-rank `ops.tcl` 11.1 s → **7.9 s**; a same-snapshot follow-up `ops.py` lands at 4.9–6.2 s on the warm memo. (The "46.8 s flat" reading in earlier profiling notes was cProfile-inflated ~5× on this call-heavy path.)
+
 ### CHANGED — partitioned deck emission drops its O(model × ranks) rescans (~2.5× at 512k hexes / 64 ranks)
 
 Authoring-side emission wall-time — named by ADR 0061 as the next ceiling after the per-rank layout shipped — had three hidden O(model × ranks) terms in `_emit_partitioned`: the node-id → index lookup dict was rebuilt inside the per-rank loop, `emit_element_spec_partitioned` skip-scanned the FULL pre-allocated element plan once per rank (twice — owned-list build + main loop), and the global fix/mass passes re-ran the PG → nodes broker expansion per rank. Measured on a 512k-hex / 531k-node box at 64 ranks: `ops.tcl` 29.2 s → **11.7 s** (`ops.py` 28.2 s → 11.3 s); 64k hexes / 16 ranks: 2.5 s → 1.7 s.
