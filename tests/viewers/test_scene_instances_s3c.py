@@ -324,7 +324,6 @@ def test_duplicate_geometry_copies_offset_and_stage_pin(director):
 def test_duplicate_geometry_section_cut_uses_tag_map_path(director):
     """A section_cut layer duplicates through the ``tag_map=`` branch
     (the only kind that takes a third constructor argument)."""
-    import apeGmsh.viewers.diagrams._director as director_mod
     from apeGmsh.viewers.diagrams._base import DiagramSpec
     from apeGmsh.viewers.diagrams._selectors import SlabSelector
     from apeGmsh.viewers.diagrams._section_cut import SectionCutDiagram
@@ -335,8 +334,6 @@ def test_duplicate_geometry_section_cut_uses_tag_map_path(director):
     # constructing with object.__new__ + a stub spec.
     sentinel_map = object()
     captured: dict = {}
-
-    real_init = SectionCutDiagram.__init__
 
     def _spy_init(self, spec, results, *, tag_map=None):
         captured["tag_map"] = tag_map
