@@ -16,8 +16,9 @@ that forgets the hook fails here at test time, not silently in a
 user's deformed view. Mirrors the ADR 0056 state-contract guard
 pattern (``test_viewer_state_contract.py``).
 
-A diagram may be exempted ONLY if it renders no point geometry of its
-own or is itself the deformation source — say why in ``_EXEMPT``.
+The contract is unconditional: every discovered diagram must override
+the hook — no exemption mechanism exists (ADR 0058 S4 retired the last
+exempt diagram, ``DeformedShapeDiagram``).
 """
 from __future__ import annotations
 
@@ -25,15 +26,6 @@ import inspect
 
 import apeGmsh.viewers.diagrams as diagrams_pkg
 from apeGmsh.viewers.diagrams._base import Diagram
-
-# Class name -> why the base no-op is correct for it. Keep this list
-# SHORT and justified; "I forgot" is exactly what the guard catches.
-_EXEMPT: dict[str, str] = {
-    # Legacy layer-kind that warps its OWN copy of the substrate from
-    # the displacement field every step — it IS a deformation renderer;
-    # following the globally-deformed substrate would double-warp it.
-    "DeformedShapeDiagram": "renders its own warp from the displacement field",
-}
 
 
 def _all_diagram_classes() -> list[type]:
@@ -80,8 +72,6 @@ def test_discovery_sees_the_diagram_family() -> None:
 def test_every_rendering_diagram_overrides_sync_substrate_points() -> None:
     missing: list[str] = []
     for cls in _all_diagram_classes():
-        if cls.__name__ in _EXEMPT:
-            continue
         if cls.sync_substrate_points is Diagram.sync_substrate_points:
             missing.append(cls.__name__)
     assert not missing, (
@@ -92,15 +82,5 @@ def test_every_rendering_diagram_overrides_sync_substrate_points() -> None:
         "Implement sync_substrate_points — re-sample cached "
         "vtkOriginalPointIds rows for substrate-extracted submeshes, "
         "or recompute owned geometry — and add a shift/reset case to "
-        "tests/viewers/test_diagram_deform_follow.py. Exempt a class "
-        "in _EXEMPT only if it renders no point geometry of its own, "
-        "with the reason."
+        "tests/viewers/test_diagram_deform_follow.py."
     )
-
-
-def test_exempt_list_is_live() -> None:
-    # Exemptions must name real classes — a rename would otherwise
-    # leave a stale entry silently exempting nothing.
-    names = {c.__name__ for c in _all_diagram_classes()}
-    stale = set(_EXEMPT) - names
-    assert not stale, f"_EXEMPT names unknown diagram classes: {sorted(stale)}"
