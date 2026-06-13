@@ -861,6 +861,128 @@ class ResultsDirector:
             geom = self._geometries.active
         return self.scene_for(geom)
 
+    def duplicate_geometry(self, geom_id: str) -> "Optional[Any]":
+        """Clone a geometry AND rebuild its layers (ADR 0058 S3c).
+
+        Core ruling 4 — the manager's :meth:`GeometryManager.duplicate`
+        stays the state-only primitive; this director verb composes it
+        with diagram reconstruction from each layer's :class:`DiagramSpec`,
+        reusing the exact ``_apply_session`` recipe
+        (``kind_def(spec.kind).diagram_class(spec, results)`` plus
+        ``tag_map=`` for ``section_cut``). The director is the owner: it
+        holds the registry, the bound :class:`Results`, the tag map, and
+        the geometries — the manager can't construct diagrams.
+
+        Per-layer flow, wrapped in ``dispatcher.session_batch()`` so the
+        registry observer pumps once on exit rather than K(K+1)/2 times:
+
+        1. ``new_geom = geometries.duplicate(geom_id)`` (state clone; the
+           clone becomes active, matching today's duplicate UX).
+        2. For each source composition: ``new_geom.compositions.add``;
+           for each layer ``d`` rebuild ``cls(d.spec, results)``, record
+           **composition membership first** (``add_layer``), **then**
+           ``registry.add`` — so attach resolves the clone's scene
+           through the registry's ``scene_resolver``
+           (``geometry_for_layer`` hits the clone), not the
+           active-geometry fallback.
+        3. Restore the clone's active-composition pointer by position.
+        4. Layers that fail to rebuild (``NoDataError``, unknown kind)
+           are skipped and counted — same fail-soft as session restore.
+
+        Explicitly **NOT copied** (same rule as session save/restore —
+        *what's in the spec round-trips, what isn't doesn't*): runtime
+        overrides not reflected into the spec
+        (``DeformedShapeDiagram._runtime_show_undeformed``, runtime scale
+        tweaks, live color-map edits), probe/pick state and highlights,
+        per-scene ``ElementVisibility`` manual hides, selection-log
+        entries.
+
+        Returns the clone geometry, or ``None`` if ``geom_id`` is
+        unknown. (``n_skipped`` is logged via :func:`report`; the count
+        is intentionally not surfaced — the outline gesture is fire-and-
+        forget, mirroring the plain duplicate.)
+        """
+        from ._base import NoDataError
+        from ._kinds import kind_def
+
+        src = self._geometries.find(geom_id)
+        if src is None:
+            return None
+        # Snapshot the source's composition order + active pointer BEFORE
+        # duplicate() — duplicate() makes the clone active, and the clone
+        # starts with no compositions, so the source remains the only
+        # source of truth for what to rebuild.
+        src_comps = list(src.compositions.compositions)
+        src_active_comp_id = src.compositions.active_id
+
+        batch_cm = self.dispatcher.session_batch()
+        batch_cm.__enter__()
+        try:
+            new_geom = self._geometries.duplicate(geom_id)
+            if new_geom is None:
+                return None
+            # Map the source's active composition (by position) to the
+            # clone's so the pointer survives.
+            active_pos: Optional[int] = None
+            for pos, c in enumerate(src_comps):
+                if c.id == src_active_comp_id:
+                    active_pos = pos
+                    break
+            for csnap in src_comps:
+                new_comp = new_geom.compositions.add(
+                    name=csnap.name, make_active=False,
+                )
+                for layer in csnap.layers:
+                    spec = getattr(layer, "spec", None)
+                    if spec is None:
+                        continue
+                    kdef = kind_def(spec.kind)
+                    cls = kdef.diagram_class if kdef is not None else None
+                    if cls is None:
+                        continue
+                    clone: Optional[Any] = None
+                    try:
+                        if spec.kind == "section_cut":
+                            clone = cls(
+                                spec, self._results, tag_map=self.tag_map,
+                            )
+                        else:
+                            clone = cls(spec, self._results)
+                        # Membership FIRST so the registry's
+                        # scene_resolver routes the attach to the clone's
+                        # scene (correct-by-construction, decision 4).
+                        new_geom.compositions.add_layer(new_comp.id, clone)
+                        self._registry.add(clone)
+                    except NoDataError:
+                        if clone is not None:
+                            new_geom.compositions.remove_layer(clone)
+                        continue
+                    except Exception as exc:
+                        from .._failures import report
+                        report(
+                            f"ResultsDirector.duplicate_geometry({spec.kind})",
+                            exc,
+                        )
+                        if clone is not None:
+                            try:
+                                new_geom.compositions.remove_layer(clone)
+                            except Exception:
+                                pass
+                        continue
+            # Restore the clone's active-composition pointer by position.
+            if active_pos is not None:
+                clone_comps = new_geom.compositions.compositions
+                if 0 <= active_pos < len(clone_comps):
+                    new_geom.compositions.set_active(
+                        clone_comps[active_pos].id,
+                    )
+        finally:
+            try:
+                batch_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+        return new_geom
+
     # ------------------------------------------------------------------
     # Stage / step actions
     # ------------------------------------------------------------------
