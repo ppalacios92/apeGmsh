@@ -86,7 +86,7 @@ def test_known_kind_ids_are_present() -> None:
     # Self-check against vacuous discovery: pin the shipped family.
     ids = {k.kind_id for k in all_kinds()}
     assert {
-        "contour", "deformed_shape", "line_force", "fiber_section",
+        "contour", "line_force", "fiber_section",
         "layer_stack", "vector_glyph", "gauss_marker", "spring_force",
         "loads", "reactions", "section_cut",
     } <= ids

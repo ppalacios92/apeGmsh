@@ -8,8 +8,6 @@ Measures per-step update time on a non-trivial scene for the diagrams
 flagged by the audit:
 
 * VectorGlyphDiagram — rebuilds the entire glyph PolyData each step.
-* DeformedShapeDiagram — issues N independent h5py reads per step,
-  one per displacement component.
 * ContourDiagram — nodes path (cheap baseline).
 """
 from __future__ import annotations
@@ -25,8 +23,6 @@ from apeGmsh.results.writers import NativeWriter
 from apeGmsh.viewers.diagrams import (
     ContourDiagram,
     ContourStyle,
-    DeformedShapeDiagram,
-    DeformedShapeStyle,
     DiagramSpec,
     SlabSelector,
     VectorGlyphDiagram,
@@ -111,23 +107,6 @@ def test_audit_diagrams_perf(big_solid_results, headless_plotter):
     _bench("ContourDiagram(nodes) update_to_step",
            contour.update_to_step)
     contour.detach()
-
-    # ---------- DeformedShapeDiagram -----------------------------
-    deformed = DeformedShapeDiagram(
-        DiagramSpec(
-            kind="deformed_shape",
-            selector=SlabSelector(component="displacement_x"),
-            style=DeformedShapeStyle(scale=1.0),
-        ),
-        results,
-    )
-    t0 = time.perf_counter()
-    deformed.attach(headless_plotter, results.fem, scene)
-    print(f"  DeformedShape attach                       "
-          f"{(time.perf_counter()-t0)*1000:.2f} ms")
-    _bench("DeformedShape update_to_step (3 reads/step)",
-           deformed.update_to_step)
-    deformed.detach()
 
     # ---------- VectorGlyphDiagram -------------------------------
     glyph = VectorGlyphDiagram(

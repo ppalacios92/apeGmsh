@@ -15,7 +15,6 @@ import pytest
 from apeGmsh.cuts import SectionCutDef
 from apeGmsh.viewers.diagrams import (
     ContourStyle,
-    DeformedShapeStyle,
     DiagramSpec,
     LineForceStyle,
     SectionCutStyle,
@@ -68,17 +67,6 @@ def _make_spring_spec():
     )
 
 
-def _make_deformed_spec():
-    return DiagramSpec(
-        kind="deformed_shape",
-        selector=SlabSelector(component="displacement_x"),
-        style=DeformedShapeStyle(
-            components=("displacement_x", "displacement_y"),
-            scale=10.0,
-        ),
-    )
-
-
 def _make_section_cut_spec(*, with_bounding: bool = False, side="positive"):
     bounding = (
         ((0.0, 0.0, 2.5), (1.0, 0.0, 2.5), (1.0, 1.0, 2.5), (0.0, 1.0, 2.5))
@@ -123,14 +111,6 @@ def test_line_force_spec_round_trip_preserves_flip_sign():
     assert restored.style.flip_sign is True
 
 
-def test_deformed_spec_round_trip_keeps_components_tuple():
-    """Tuples become lists in JSON; deserialize must coerce them back."""
-    spec = _make_deformed_spec()
-    restored = deserialize_spec(serialize_spec(spec))
-    assert restored == spec
-    assert isinstance(restored.style.components, tuple)
-
-
 def test_spring_spec_round_trip_keeps_direction_tuple():
     spec = _make_spring_spec()
     restored = deserialize_spec(serialize_spec(spec))
@@ -145,6 +125,39 @@ def test_deserialize_spec_unknown_kind_raises():
             "selector": {"component": "x"},
             "style": {},
         })
+
+
+def test_deserialize_spec_retired_deformed_shape_raises():
+    """A retired kind (ADR 0058 S4) raises with a migration hint, not a
+    bare 'unknown kind' — so the catch-and-skip drops just that spec."""
+    with pytest.raises(KeyError, match="retired"):
+        deserialize_spec({
+            "kind": "deformed_shape",
+            "selector": {"component": "displacement"},
+            "style": {},
+        })
+
+
+def test_legacy_session_with_deformed_shape_drops_it_keeps_rest():
+    """ADR 0058 S4 — a legacy session carrying a retired
+    ``deformed_shape`` diagram loads with the spec dropped and the rest
+    of its hierarchy intact (the retirement is fail-soft, no schema
+    bump)."""
+    payload = {
+        "schema_version": 1,
+        "results_path": "/x/y.h5",
+        "fem_snapshot_id": None,
+        "saved_at": "",
+        "diagrams": [
+            serialize_spec(_make_contour_spec()),
+            {"kind": "deformed_shape", "selector": {"component": "displacement"}},
+            serialize_spec(_make_line_force_spec()),
+        ],
+    }
+    session = deserialize_session(payload)
+    # The retired deformed_shape spec is dropped; the other two survive.
+    assert len(session.diagrams) == 2
+    assert {d.kind for d in session.diagrams} == {"contour", "line_force"}
 
 
 # =====================================================================
@@ -170,7 +183,6 @@ def test_session_round_trip(tmp_path: Path):
     specs = [
         _make_contour_spec(),
         _make_line_force_spec(),
-        _make_deformed_spec(),
         _make_spring_spec(),
     ]
     payload = serialize_session(
@@ -181,7 +193,7 @@ def test_session_round_trip(tmp_path: Path):
     session = deserialize_session(payload)
     assert isinstance(session, ViewerSession)
     assert session.fem_snapshot_id == "abc123"
-    assert len(session.diagrams) == 4
+    assert len(session.diagrams) == 3
     for original, restored in zip(specs, session.diagrams):
         assert restored == original
 

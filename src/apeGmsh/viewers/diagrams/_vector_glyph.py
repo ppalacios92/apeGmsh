@@ -1,8 +1,8 @@
 """VectorGlyphDiagram — arrows at nodes from N components of a NodeSlab.
 
-Same pattern as ``DeformedShapeDiagram``: ``selector.component`` is the
-diagram's display label; the actual vector field is built from
-``style.components`` (default: 3-D translational displacement).
+``selector.component`` is the diagram's display label; the actual
+vector field is built from ``style.components`` (default: 3-D
+translational displacement).
 
 Render seam (ADR 0042, R-B Wave 1 #4 — first colour-mapped diagram).
 Emits one arrow :class:`GlyphLayer` via the backend; holds no VTK

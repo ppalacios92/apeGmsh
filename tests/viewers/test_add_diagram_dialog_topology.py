@@ -129,7 +129,7 @@ def test_topology_row_is_hidden_for_other_kinds(
     from apeGmsh.viewers.ui._add_diagram_dialog import AddDiagramDialog
     dlg = AddDiagramDialog(director_with_nodes_and_gauss, parent=None)
     for kind in (
-        "deformed_shape", "line_force", "fiber_section",
+        "line_force", "fiber_section",
         "layer_stack", "vector_glyph", "gauss_marker", "spring_force",
     ):
         _set_kind(dlg, kind)
@@ -335,8 +335,8 @@ def test_non_contour_kind_unaffected_by_topology_combo(
     _set_kind(dlg, "contour")
     _set_topology(dlg, "gauss")
 
-    _set_kind(dlg, "deformed_shape")
+    _set_kind(dlg, "vector_glyph")
     items = _component_items(dlg)
-    # deformed_shape lives on `nodes` regardless of any contour state.
+    # vector_glyph lives on `nodes` regardless of any contour state.
     assert "displacement_z" in items
     assert "stress_xx" not in items

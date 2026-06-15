@@ -10,7 +10,6 @@ drift.
 from __future__ import annotations
 
 from apeGmsh.viewers.diagrams._contour import ContourDiagram
-from apeGmsh.viewers.diagrams._deformed_shape import DeformedShapeDiagram
 from apeGmsh.viewers.diagrams._fiber_section import FiberSectionDiagram
 from apeGmsh.viewers.diagrams._gauss_marker import GaussPointDiagram
 from apeGmsh.viewers.diagrams._layer_stack import LayerStackDiagram
@@ -21,7 +20,6 @@ from apeGmsh.viewers.diagrams._vector_glyph import VectorGlyphDiagram
 
 _EXPECTED: dict[str, str] = {
     "contour":        "nodes",
-    "deformed_shape": "nodes",
     "vector_glyph":   "nodes",
     "line_force":     "line_stations",
     "fiber_section":  "fibers",
@@ -39,7 +37,6 @@ _EXPECTED: dict[str, str] = {
 def test_each_diagram_class_declares_expected_topology() -> None:
     cases = [
         (ContourDiagram,       "contour",        "nodes"),
-        (DeformedShapeDiagram, "deformed_shape", "nodes"),
         (VectorGlyphDiagram,   "vector_glyph",   "nodes"),
         (LineForceDiagram,     "line_force",     "line_stations"),
         (FiberSectionDiagram,  "fiber_section",  "fibers"),

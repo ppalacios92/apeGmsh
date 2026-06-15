@@ -32,9 +32,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .._log import log_action
 from ._base import DiagramSpec
 from ._kinds import kind_ids, style_class_for
 from ._selectors import SlabSelector
+
+
+# Diagram kinds removed from the live registry but still recognized on
+# load so a legacy session that carries one drops it with a clear log
+# line instead of a bare "unknown kind". Maps the retired kind id to
+# the migration hint shown to the user.
+_RETIRED_KINDS: dict[str, str] = {
+    # ADR 0058 S4 — DeformedShapeDiagram retired: deformation is now
+    # per-geometry state (a deform-on geometry), and the undeformed
+    # reference is the S3c `add_reference_ghost` preset.
+    "deformed_shape":
+        "ADR 0058 S4 — deformation is now per-geometry "
+        "(enable Deform on a geometry); the undeformed reference is "
+        "the 'Add reference ghost' preset.",
+}
 
 
 # Bumped to 4 in the cuts v2.2 viewer overlay: ``ViewerSession`` gained a
@@ -165,11 +181,26 @@ def deserialize_spec(data: dict[str, Any]) -> DiagramSpec:
     Raises
     ------
     KeyError
-        If ``data["kind"]`` doesn't map to a known Style class. Callers
-        should catch and surface this so the user knows which spec was
-        skipped.
+        If ``data["kind"]`` doesn't map to a known Style class —
+        including a recognized-but-retired kind (see
+        :data:`_RETIRED_KINDS`). Callers should catch and surface this
+        so the user knows which spec was skipped;
+        :func:`deserialize_session` already does (catch-and-skip).
     """
     kind = data["kind"]
+    if kind in _RETIRED_KINDS:
+        # Recognized-but-retired (ADR 0058 S4): log a clear migration
+        # line, then raise so the existing catch-and-skip in
+        # deserialize_session drops just this spec — the rest of the
+        # session's hierarchy loads intact.
+        log_action(
+            "viewer.session", "retired_diagram_dropped",
+            kind=kind, migration=_RETIRED_KINDS[kind],
+        )
+        raise KeyError(
+            f"Diagram kind {kind!r} was retired and is no longer "
+            f"loadable. {_RETIRED_KINDS[kind]}"
+        )
     style_cls = style_class_for(kind)
     if style_cls is None:
         raise KeyError(
