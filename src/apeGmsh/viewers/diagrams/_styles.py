@@ -2,8 +2,7 @@
 
 Each Diagram subclass declares its own ``DiagramStyle`` subclass with
 the fields it needs (colormap, clim, scale, …). The base class is
-empty — kinds share no fields. Phase 1 adds Contour and DeformedShape
-styles.
+empty — kinds share no fields.
 
 Style records are frozen for stability across save / load. Within a
 session, a Diagram may carry mutable runtime state (current scale,

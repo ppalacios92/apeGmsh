@@ -62,7 +62,7 @@ class DiagramSpec:
 
     Frozen — saved/loaded by the Director, never mutated. The
     ``kind`` field is the registered diagram kind name (e.g.
-    ``"contour"``, ``"deformed_shape"``); the registry maps it back
+    ``"contour"``, ``"line_force"``); the registry maps it back
     to the concrete class.
     """
     kind: str
@@ -235,7 +235,7 @@ class Diagram:
         transition while tests / external callers haven't switched).
         ``scene`` is the substrate FEMSceneData built once at viewer
         open. Diagrams that paint on the substrate (Contour,
-        DeformedShape, …) require it; stub diagrams may pass ``None``.
+        LineForce, …) require it; stub diagrams may pass ``None``.
         """
         # Render seam (ADR 0042). ``backend`` is always a RenderBackend:
         # production binds through ``DiagramRegistry.bind`` (wraps the raw

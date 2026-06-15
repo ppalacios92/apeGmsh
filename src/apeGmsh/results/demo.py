@@ -65,21 +65,11 @@ def make_demo_results(
     -------
     Results
         Backed by a native composed file; ``.show_web()`` /
-        ``.viewer()`` render it immediately. Add a deformed-shape layer
-        to see the bend animate across steps::
-
-            from apeGmsh.viewers.diagrams import (
-                DiagramSpec, DeformedShapeDiagram, DeformedShapeStyle,
-                SlabSelector,
-            )
-            wv = make_demo_results().show_web(show=False)
-            spec = DiagramSpec(
-                kind="deformed_shape",
-                selector=SlabSelector(component="displacement_x"),
-                style=DeformedShapeStyle(scale=1.0),
-            )
-            wv.director.registry.add(DeformedShapeDiagram(spec, wv.director.results))
-            wv.show()
+        ``.viewer()`` render it immediately. Turn deformation on for the
+        boot geometry (Geometry settings → Deformation, or
+        ``geometries.set_deformation(geom_id, enabled=True,
+        field="displacement", scale=1.0)``) to see the bend animate
+        across steps; add a reference ghost for an undeformed overlay.
     """
     if n_elements < 1:
         raise ValueError("n_elements must be >= 1")

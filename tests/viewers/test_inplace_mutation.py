@@ -9,8 +9,6 @@ This file enforces that contract:
   *same* VTK objects as after step 0 — no re-creation.
 * The scalar / point_data array's underlying buffer is mutated in
   place; ``np.shares_memory`` confirms.
-* DeformedShapeDiagram's points buffer changes value but the grid
-  identity is stable.
 """
 from __future__ import annotations
 
@@ -24,8 +22,6 @@ from apeGmsh.results.writers import NativeWriter
 from apeGmsh.viewers.diagrams import (
     ContourDiagram,
     ContourStyle,
-    DeformedShapeDiagram,
-    DeformedShapeStyle,
     DiagramSpec,
     SlabSelector,
 )
@@ -141,60 +137,3 @@ def test_contour_scalar_buffer_mutates_in_place(
     final = np.asarray(diagram._handle.dataset.point_data["displacement_z"])
     fem_ids = diagram._fem_ids_to_read
     np.testing.assert_allclose(final, fem_ids.astype(np.float64) + 49 * 0.3)
-
-
-# =====================================================================
-# DeformedShapeDiagram — actor + grid identity stable across steps
-# =====================================================================
-
-def test_deformed_actor_identity_stable_across_steps(
-    results_50_steps, headless_plotter,
-):
-    scene = build_fem_scene(results_50_steps.fem)
-    spec = DiagramSpec(
-        kind="deformed_shape",
-        selector=SlabSelector(component="displacement_x"),
-        style=DeformedShapeStyle(scale=1.0, show_undeformed=True),
-    )
-    diagram = DeformedShapeDiagram(spec, results_50_steps)
-    diagram.attach(headless_plotter, results_50_steps.fem, scene)
-
-    # Post-migration (ADR 0042): the backend owns the actor; the diagram
-    # holds a layer handle. The perf contract is unchanged — the backend
-    # mutates the grid's points in place when topology is stable, so the
-    # handle's actor + dataset are the same objects across all steps (no
-    # per-step add_mesh re-creation).
-    handle = diagram._deformed_handle
-    initial_actor = handle.actor
-    initial_dataset = handle.dataset
-
-    for step in range(50):
-        diagram.update_to_step(step)
-
-    assert diagram._deformed_handle is handle
-    assert handle.actor is initial_actor
-    assert handle.dataset is initial_dataset
-
-
-def test_deformed_scale_change_does_not_re_add_actor(
-    results_50_steps, headless_plotter,
-):
-    scene = build_fem_scene(results_50_steps.fem)
-    spec = DiagramSpec(
-        kind="deformed_shape",
-        selector=SlabSelector(component="displacement_x"),
-        style=DeformedShapeStyle(scale=1.0),
-    )
-    diagram = DeformedShapeDiagram(spec, results_50_steps)
-    diagram.attach(headless_plotter, results_50_steps.fem, scene)
-
-    handle = diagram._deformed_handle
-    initial_actor = handle.actor
-    initial_dataset = handle.dataset
-
-    for s in (2.0, 5.0, 10.0, 0.5, 1.0):
-        diagram.set_scale(s)
-
-    # No re-add on scale change — same actor + same underlying grid.
-    assert handle.actor is initial_actor
-    assert handle.dataset is initial_dataset

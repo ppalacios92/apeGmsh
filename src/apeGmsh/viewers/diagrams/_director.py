@@ -892,7 +892,7 @@ class ResultsDirector:
         Explicitly **NOT copied** (same rule as session save/restore —
         *what's in the spec round-trips, what isn't doesn't*): runtime
         overrides not reflected into the spec
-        (``DeformedShapeDiagram._runtime_show_undeformed``, runtime scale
+        (``ContourDiagram._runtime_opacity``, runtime scale
         tweaks, live color-map edits), probe/pick state and highlights,
         per-scene ``ElementVisibility`` manual hides, selection-log
         entries.

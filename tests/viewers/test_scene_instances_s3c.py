@@ -231,34 +231,34 @@ def test_duplicate_geometry_layers_resolve_clone_scene(director):
 
 
 def test_duplicate_geometry_does_not_copy_runtime_overrides(director):
-    """A DeformedShape clone is born with the default runtime
-    show-undeformed state — runtime overrides not reflected into the
-    spec do not survive duplication (the session save/restore rule)."""
+    """A Contour clone is born with the default runtime opacity —
+    runtime overrides not reflected into the spec do not survive
+    duplication (the session save/restore rule)."""
     from apeGmsh.viewers.diagrams._base import DiagramSpec
-    from apeGmsh.viewers.diagrams._deformed_shape import DeformedShapeDiagram
+    from apeGmsh.viewers.diagrams._contour import ContourDiagram
     from apeGmsh.viewers.diagrams._selectors import SlabSelector
-    from apeGmsh.viewers.diagrams._styles import DeformedShapeStyle
+    from apeGmsh.viewers.diagrams._styles import ContourStyle
 
     geom = director.geometries.active
-    comp = geom.compositions.add(name="Deformed", make_active=True)
+    comp = geom.compositions.add(name="Contour", make_active=True)
     spec = DiagramSpec(
-        kind="deformed_shape",
-        selector=SlabSelector(component="displacement"),
-        style=DeformedShapeStyle(),
+        kind="contour",
+        selector=SlabSelector(component="displacement_z"),
+        style=ContourStyle(),
         stage_id="grav",
     )
-    src_d = DeformedShapeDiagram(spec, director.results)
+    src_d = ContourDiagram(spec, director.results)
     director.registry.add(src_d)
     geom.compositions.add_layer(comp.id, src_d)
     # Mutate the source's RUNTIME override (not reflected in the spec).
-    src_d._runtime_show_undeformed = True
+    src_d._runtime_opacity = 0.5
 
     clone = director.duplicate_geometry(geom.id)
     assert clone is not None
     clone_d = clone.compositions.compositions[0].layers[0]
     assert clone_d is not src_d
     # The clone starts from the default — the override didn't copy.
-    assert clone_d._runtime_show_undeformed is None
+    assert clone_d._runtime_opacity is None
 
 
 def test_duplicate_geometry_skips_failing_layers_rest_land(director):

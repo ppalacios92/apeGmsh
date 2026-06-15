@@ -16,10 +16,11 @@ dropdown — the UI skips that row in the creation form. The Loads
 kind uses ``requires_data=True`` with the data combo bound to load
 pattern names rather than canonical components.
 
-Note: ``deformed_shape`` is intentionally absent. Deformation is now a
-global view modifier in the Session panel (``☐ Deform`` + scale
-spinner) that mutates ``scene.grid.points`` at every step; every layer
-that paints on the substrate inherits the deformed shape.
+Note: deformation is not a catalog kind. It is per-geometry state
+(``set_deformation`` → ``☐ Deform`` + scale on a geometry) that warps
+that geometry's ``scene.grid.points`` at every step; every layer that
+paints on the substrate inherits the deformed shape. (The legacy
+``deformed_shape`` diagram was retired in ADR 0058 S4.)
 """
 from __future__ import annotations
 
@@ -228,7 +229,7 @@ def build_catalog(director: "ResultsDirector") -> list[KindEntry]:
 
     Kinds and their order come from the declarative kind registry
     (:mod:`._kinds`, ADR 0058 S0) — entries registered with
-    ``in_catalog=False`` (``deformed_shape``, ``section_cut``) are
+    ``in_catalog=False`` (``section_cut``) are
     skipped. Disabled kinds (no data feeds them) are still returned —
     the UI greys them out rather than hiding them, so the user can see
     what *isn't* in the file.

@@ -923,7 +923,7 @@ class ResultsViewer:
         #   - substrate fill + wireframe (they reference scene.grid)
         #   - any layer whose actor renders an UnstructuredGrid /
         #     PolyData with a ``vtkOriginalPointIds`` field (contour,
-        #     deformed_shape, …) — points are scattered from the
+        #     …) — points are scattered from the
         #     deformed substrate via the original-point map.
         # Layers that own non-substrate point geometry (vector glyph
         # source, gauss markers, node cloud) don't follow yet.

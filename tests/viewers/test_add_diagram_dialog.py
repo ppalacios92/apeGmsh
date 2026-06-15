@@ -60,10 +60,10 @@ def test_dialog_constructs_with_director(qapp, director):
 def test_dialog_kind_combo_populated(qapp, director):
     from apeGmsh.viewers.ui._add_diagram_dialog import AddDiagramDialog
     dlg = AddDiagramDialog(director, parent=None)
-    # 11 kinds: contour / deformed / line force / fiber / layer /
+    # 10 kinds: contour / line force / fiber / layer /
     # vector glyph / gauss marker / spring force / loads / reactions /
     # section_cut (file-picker path, no Results-data composite).
-    assert dlg._kind_combo.count() == 11
+    assert dlg._kind_combo.count() == 10
 
 
 def test_dialog_stage_combo_populated_from_director(qapp, director):
@@ -312,10 +312,10 @@ def test_populated_combo_restores_generic_placeholder(qapp, director):
 def test_initial_kind_preselects_combo(qapp, director):
     from apeGmsh.viewers.ui._add_diagram_dialog import AddDiagramDialog
     dlg = AddDiagramDialog(
-        director, parent=None, initial_kind="deformed_shape",
+        director, parent=None, initial_kind="line_force",
     )
     entry = dlg._kind_combo.currentData()
-    assert entry.kind_id == "deformed_shape"
+    assert entry.kind_id == "line_force"
 
 
 def test_initial_kind_unknown_falls_back_to_default(qapp, director):

@@ -11,7 +11,6 @@ Each fixture renders whatever subset of the catalogue its data carries:
 * ``substrate``    — gray mesh, no field data (sanity for the ``(dim,
   npe)`` fallback).
 * ``contour``      — nodal displacement scalar.
-* ``deformed``     — warped mesh + undeformed reference.
 * ``line_force``   — beam moment / shear / axial (skipped when the
   fixture has no line-station data).
 * ``spring_force`` — zero-length spring arrows (skipped when the
@@ -39,8 +38,6 @@ from apeGmsh.viewers.backends import PyVistaQtBackend
 from apeGmsh.viewers.diagrams import (
     ContourDiagram,
     ContourStyle,
-    DeformedShapeDiagram,
-    DeformedShapeStyle,
     DiagramSpec,
     LineForceDiagram,
     LineForceStyle,
@@ -126,39 +123,6 @@ def render_contour(
     diagram.update_to_step(step)
     plotter.add_text(
         f"contour: {component} @ step {step}",
-        position="upper_left", font_size=10,
-    )
-    plotter.add_axes()
-    plotter.view_isometric()
-    plotter.reset_camera()
-    try:
-        _save(plotter, out_path)
-    finally:
-        diagram.detach()
-
-
-def render_deformed(
-    results: "Results",
-    fem: Any,
-    scene: FEMSceneData,
-    components: tuple[str, ...],
-    scale: float,
-    step: int,
-    out_path: Path,
-) -> None:
-    spec = DiagramSpec(
-        kind="deformed_shape",
-        selector=SlabSelector(component=components[0]),
-        style=DeformedShapeStyle(components=components, scale=scale),
-    )
-    diagram = DeformedShapeDiagram(spec, results)
-
-    plotter = _make_plotter()
-    _add_substrate(plotter, scene)
-    diagram.attach(PyVistaQtBackend(plotter), fem, scene)
-    diagram.update_to_step(step)
-    plotter.add_text(
-        f"deformed (×{scale:g}) @ step {step}",
         position="upper_left", font_size=10,
     )
     plotter.add_axes()
@@ -286,7 +250,6 @@ def render_fixture(name: str, path: Path) -> list[tuple[str, str, Optional[str]]
     out_paths = {
         "substrate":   _OUT_DIR / f"{name}_substrate.png",
         "contour":     _OUT_DIR / f"{name}_contour.png",
-        "deformed":    _OUT_DIR / f"{name}_deformed.png",
         "line_force":  _OUT_DIR / f"{name}_line_force.png",
         "spring":      _OUT_DIR / f"{name}_spring_force.png",
     }
@@ -308,23 +271,7 @@ def render_fixture(name: str, path: Path) -> list[tuple[str, str, Optional[str]]
     else:
         log.append(("contour", "SKIP", "no displacement_z in nodes"))
 
-    # 3. Deformed on (displacement_x, _y, _z) where available.
-    disp_axes = [c for c in ("displacement_x", "displacement_y",
-                              "displacement_z") if c in node_components]
-    if disp_axes:
-        components = tuple(disp_axes)
-        # Pick a scale that makes the warp visible without self-clipping —
-        # 5% of the model diagonal divided by the largest displacement.
-        scale = _auto_deformed_scale(scoped, fem, scene, components, step)
-        log.append(("deformed",) + _safe_render(
-            "deformed", render_deformed,
-            scoped, fem, scene,
-            components, scale, step, out_paths["deformed"],
-        ))
-    else:
-        log.append(("deformed", "SKIP", "no displacement components"))
-
-    # 4. Line force — only when the fixture carries line-station data.
+    # 3. Line force — only when the fixture carries line-station data.
     line_components = set(scoped.elements.line_stations.available_components())
     moment_components = [c for c in line_components
                          if c.startswith(("bending_moment", "moment"))]
@@ -337,7 +284,7 @@ def render_fixture(name: str, path: Path) -> list[tuple[str, str, Optional[str]]
     else:
         log.append(("line_force", "SKIP", "no line-station components"))
 
-    # 5. Spring force — only when the fixture has zero-length spring data.
+    # 4. Spring force — only when the fixture has zero-length spring data.
     spring_components = set(scoped.elements.springs.available_components())
     if "spring_force_0" in spring_components:
         log.append(("spring",) + _safe_render(
@@ -349,29 +296,6 @@ def render_fixture(name: str, path: Path) -> list[tuple[str, str, Optional[str]]
         log.append(("spring", "SKIP", "no spring components"))
 
     return log
-
-
-def _auto_deformed_scale(
-    results: "Results", fem: Any, scene: FEMSceneData,
-    components: tuple[str, ...], step: int,
-) -> float:
-    """Pick a scale factor that makes the deformed shape visible.
-
-    Targets a peak-displacement amplification of ~5% of the model
-    diagonal. Falls back to 1.0 when the displacement read fails.
-    """
-    try:
-        peak = 0.0
-        for c in components:
-            slab = results.nodes.get(component=c, time=[step])
-            if slab.values.size == 0:
-                continue
-            peak = max(peak, float(abs(slab.values).max()))
-        if peak <= 0.0:
-            return 1.0
-        return float(0.05 * scene.model_diagonal / peak)
-    except Exception:
-        return 1.0
 
 
 # --------------------------------------------------------------------- #

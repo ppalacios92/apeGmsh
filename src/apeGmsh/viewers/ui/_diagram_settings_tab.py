@@ -4,7 +4,6 @@ Reads the currently-selected diagram from the Diagrams tab and shows a
 kind-specific control set:
 
 * ``contour`` — clim min/max, auto-fit button, opacity slider, cmap combo
-* ``deformed_shape`` — scale slider, show-undeformed toggle
 
 When no diagram is selected, an empty-state message is shown.
 """
@@ -798,8 +797,6 @@ class DiagramSettingsTab:
         kind = d.kind
         if kind == "contour":
             self._build_contour_panel(d)
-        elif kind == "deformed_shape":
-            self._build_deformed_panel(d)
         elif kind == "line_force":
             self._build_line_force_panel(d)
         elif kind in ("fiber_section", "layer_stack", "gauss_marker"):
@@ -1247,42 +1244,6 @@ class DiagramSettingsTab:
         # vector_glyph so every contour-bearing diagram gets the same
         # UI surface.
         self._add_scalar_bar_controls(d, form)
-
-    # ------------------------------------------------------------------
-    # Deformed shape panel
-    # ------------------------------------------------------------------
-
-    def _build_deformed_panel(self, d: Diagram) -> None:
-        QtWidgets, QtCore = _qt()
-        form = QtWidgets.QFormLayout()
-        self._content_layout.addLayout(form)
-
-        # Scale slider — log-ish via spinbox for ergonomics
-        scale_spin = QtWidgets.QDoubleSpinBox()
-        scale_spin.setRange(0.0, 1e9)
-        scale_spin.setDecimals(4)
-        scale_spin.setSingleStep(0.1)
-        scale_spin.setValue(float(d.current_scale()))
-        self._stage_with_signal(
-            scale_spin,
-            "valueChanged",
-            lambda: self._safe_call(d.set_scale, float(scale_spin.value())),
-        )
-        form.addRow("Scale:", scale_spin)
-
-        # Show-undeformed checkbox — staged via Apply.
-        chk = QtWidgets.QCheckBox("Show undeformed reference")
-        style = d.spec.style
-        current = (
-            getattr(d, "_runtime_show_undeformed", None)
-            if getattr(d, "_runtime_show_undeformed", None) is not None
-            else getattr(style, "show_undeformed", True)
-        )
-        chk.setChecked(bool(current))
-        self._pending_appliers.append(
-            lambda: self._safe_call(d.set_show_undeformed, bool(chk.isChecked()))
-        )
-        form.addRow("", chk)
 
     # ------------------------------------------------------------------
     # Section cut panel

@@ -12,7 +12,6 @@ from apeGmsh.viewers.diagrams._style_presets import (
 )
 from apeGmsh.viewers.diagrams._styles import (
     ContourStyle,
-    DeformedShapeStyle,
     LineForceStyle,
     SpringForceStyle,
     VectorGlyphStyle,
@@ -112,9 +111,9 @@ def test_save_and_load_round_trip(tmp_path):
 def test_list_returns_name_kind_pairs(tmp_path):
     s = _store(tmp_path)
     s.save("a", "contour", ContourStyle(cmap="viridis"))
-    s.save("b", "deformed_shape", DeformedShapeStyle())
+    s.save("b", "vector_glyph", VectorGlyphStyle())
     pairs = sorted(s.list())
-    assert pairs == [("a", "contour"), ("b", "deformed_shape")]
+    assert pairs == [("a", "contour"), ("b", "vector_glyph")]
 
 
 def test_list_for_kind_filters(tmp_path):

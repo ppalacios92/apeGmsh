@@ -64,8 +64,8 @@ class DiagramKindDef:
     in_catalog
         Whether the kind appears in the kind-availability catalog
         (:func:`._kind_catalog.build_catalog`) and therefore in the
-        settings-tab creation panel. ``deformed_shape`` (legacy view
-        modifier) and ``section_cut`` (its own creation flow) opt out.
+        settings-tab creation panel. ``section_cut`` (its own creation
+        flow) opts out.
     requires_data
         Whether the creation form needs a Data/Component combo.
     data_topology
