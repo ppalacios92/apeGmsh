@@ -17,10 +17,12 @@ from ...time_series.time_series import (
     FEMA461Protocol,
     Linear,
     ModifiedATC24Protocol,
+    MomentStep,
     Path,
     Pulse,
     Ricker,
     Trig,
+    Yoffe,
 )
 from ._base import _BridgeNamespace
 
@@ -127,6 +129,70 @@ class _TimeSeriesNS(_BridgeNamespace):
                 dt=dt,
                 t_center=t_center,
                 kind=kind,
+                factor=factor,
+            ),
+            name=name,
+        )
+
+    # -- MomentStep (ADR 0062 moment function) --------------------------
+    def MomentStep(
+        self,
+        *,
+        half_duration: float,
+        t_total: float,
+        dt: float,
+        t0: float = 0.0,
+        f_max: float | None = None,
+        factor: float = 1.0,
+        name: str | None = None,
+    ) -> MomentStep:
+        """Construct + register a smoothed-step moment function ``S(t)``.
+
+        An error-function ramp rising 0 → 1 (Gaussian slip-rate of std
+        ``half_duration`` centred at ``t0``); the normalized moment
+        function for a moment-tensor source (``p.moment_tensor``). See
+        :class:`apeGmsh.opensees.time_series.time_series.MomentStep`.
+        """
+        return self._bridge._register(
+            MomentStep(
+                half_duration=half_duration,
+                t_total=t_total,
+                dt=dt,
+                t0=t0,
+                f_max=f_max,
+                factor=factor,
+            ),
+            name=name,
+        )
+
+    # -- Yoffe (ADR 0062 finite-fault moment function) ------------------
+    def Yoffe(
+        self,
+        *,
+        rise_time: float,
+        peak_time: float,
+        t_total: float,
+        dt: float,
+        t0: float = 0.0,
+        f_max: float | None = None,
+        factor: float = 1.0,
+        name: str | None = None,
+    ) -> Yoffe:
+        """Construct + register a regularized modified-Yoffe ``S(t)`` (Path).
+
+        The FFSP finite-fault source-time function — a singular Yoffe
+        slip-rate over ``rise_time`` regularized by a triangular window of
+        half-width ``peak_time``, integrated and normalized 0 → 1. See
+        :class:`apeGmsh.opensees.time_series.time_series.Yoffe`.
+        """
+        return self._bridge._register(
+            Yoffe(
+                rise_time=rise_time,
+                peak_time=peak_time,
+                t_total=t_total,
+                dt=dt,
+                t0=t0,
+                f_max=f_max,
                 factor=factor,
             ),
             name=name,

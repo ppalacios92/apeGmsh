@@ -28,13 +28,59 @@ See ADR 0007 for why ``time_series/`` is separated from ``pattern/``.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 from .._internal.types import Primitive, TimeSeries
 
 if TYPE_CHECKING:
     from ..emitter.base import Emitter
+
+
+class WarnMomentFunctionBandwidth(UserWarning):
+    """A normalized moment function ``S(t)`` injects slip-rate energy above
+    the caller's mesh-resolvable frequency ``f_max`` (ADR 0062 — the P=3
+    dispersion lesson, ADR 0054 AB-4)."""
+
+
+def _band_limit_warn(
+    values: "tuple[float, ...]",
+    dt: float,
+    f_max: float | None,
+    *,
+    name: str,
+    quantile: float = 0.95,
+) -> None:
+    """Warn if the slip-rate spectrum carries energy above ``f_max``.
+
+    Differentiates the moment function ``S(t)`` to the slip-rate ``Ṡ``,
+    takes its power spectrum, and finds the frequency below which
+    ``quantile`` of the energy lies; warns when that exceeds ``f_max``.
+    No-op when ``f_max`` is ``None`` or the series is too short.
+    """
+    if f_max is None or len(values) < 4:
+        return
+    s = np.asarray(values, dtype=float)
+    rate = np.gradient(s, dt)
+    spec = np.abs(np.fft.rfft(rate)) ** 2
+    freqs = np.fft.rfftfreq(len(rate), d=dt)
+    total = spec.sum()
+    if total <= 0:
+        return
+    cdf = np.cumsum(spec) / total
+    f_q = float(freqs[np.searchsorted(cdf, quantile)])
+    if f_q > f_max:
+        warnings.warn(
+            f"{name}: the slip-rate spectrum carries {quantile:.0%} of its "
+            f"energy below {f_q:.3g} Hz, above the mesh-resolvable f_max="
+            f"{f_max:.3g} Hz — the source injects energy the mesh cannot "
+            f"propagate without dispersion. Lengthen the rise/peak time, "
+            f"refine the mesh, or raise f_max.",
+            WarnMomentFunctionBandwidth, stacklevel=3,
+        )
 
 
 __all__ = [
@@ -47,6 +93,9 @@ __all__ = [
     "ASCE41Protocol",
     "ModifiedATC24Protocol",
     "FEMA461Protocol",
+    "MomentStep",
+    "Yoffe",
+    "WarnMomentFunctionBandwidth",
 ]
 
 
@@ -412,6 +461,206 @@ class Ricker(TimeSeries):
     def _emit(self, emitter: "Emitter", tag: int) -> None:
         _, values = self.samples()
         # Delegate to Path: this IS a tabulated path time series.
+        Path(values=values, dt=self.dt, factor=self.factor)._emit(emitter, tag)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
+# Normalized moment functions S(t) — the seismic-source time history
+# ---------------------------------------------------------------------------
+#
+# A moment-tensor source (ADR 0062) modulates its constant nodal forces by
+# the **normalized moment function** S(t) — the *time integral of the
+# slip-rate*, rising 0 → 1. Apply S(t) (NOT the slip-rate Ṡ): the
+# displacement-based nodal force takes the moment function; the wrong choice
+# is one time-derivative off in every trace. Like Ricker, these store knobs
+# and expand to a ``timeSeries Path`` at emit; the pattern's force vectors
+# carry M0·m_ij·∂N.
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MomentStep(TimeSeries):
+    """Smoothed-step moment function (error-function ramp), as a ``Path``.
+
+    ``S(t) = ½(1 + erf((t − t0) / (√2 · half_duration)))`` — a clean
+    one-sided ramp from 0 to 1 whose slip-rate ``Ṡ`` is a Gaussian of
+    standard deviation ``half_duration`` centred at ``t0`` (integral 1).
+    Roughly 95 % of the moment is released within ``±2·half_duration`` of
+    ``t0``.
+
+    Parameters
+    ----------
+    half_duration
+        Gaussian slip-rate std (s) — the source's characteristic rise. A
+        proxy for the corner frequency ``~ 1/(2π·half_duration)``.
+    t_total, dt
+        History duration and sample step (s); ``n = round(t_total/dt)``.
+    t0
+        Centroid time where ``S = ½`` (the slip-rate peak). Default
+        ``0.0``; choose a few ``half_duration`` so the ramp starts at ~0.
+    f_max
+        Optional mesh-resolvable frequency (Hz); a band-limit warning
+        fires if the slip-rate spectrum exceeds it.
+    factor
+        Path ``-factor`` amplitude scale (default ``1.0`` keeps the
+        normalized 0→1 moment function).
+    """
+
+    half_duration: float
+    t_total: float
+    dt: float
+    t0: float = 0.0
+    f_max: float | None = None
+    factor: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.half_duration <= 0:
+            raise ValueError(
+                f"MomentStep: half_duration must be > 0, got "
+                f"{self.half_duration!r}"
+            )
+        if self.t_total <= 0:
+            raise ValueError(
+                f"MomentStep: t_total must be > 0, got {self.t_total!r}"
+            )
+        if self.dt <= 0:
+            raise ValueError(f"MomentStep: dt must be > 0, got {self.dt!r}")
+        if round(self.t_total / self.dt) < 2:
+            raise ValueError(
+                "MomentStep: need at least 2 samples — t_total/dt = "
+                f"{self.t_total / self.dt!r}."
+            )
+
+    def samples(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Return ``(times, values)`` — the normalized moment function S(t)."""
+        n = round(self.t_total / self.dt)
+        denom = math.sqrt(2.0) * self.half_duration
+        times = tuple(i * self.dt for i in range(n))
+        values = tuple(
+            0.5 * (1.0 + math.erf((t - self.t0) / denom)) for t in times
+        )
+        return times, values
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        _, values = self.samples()
+        _band_limit_warn(values, self.dt, self.f_max, name="MomentStep")
+        Path(values=values, dt=self.dt, factor=self.factor)._emit(emitter, tag)
+
+    def dependencies(self) -> tuple[Primitive, ...]:
+        return ()
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Yoffe(TimeSeries):
+    """Regularized modified-Yoffe moment function (Tinti et al. 2005), Path.
+
+    The kinematic source-time function used by FFSP finite-fault sources:
+    the singular Yoffe slip-rate (``∝ √((T_r−t)/t)`` over the rise time
+    ``T_r``) convolved with a triangular window of half-width
+    ``peak_time`` to regularize the ``t=0`` singularity. The convolution
+    is done numerically on the ``dt`` grid, then integrated and normalized
+    so the returned moment function ``S(t)`` rises 0 → 1; the slip-rate
+    peaks ~``peak_time`` after onset.
+
+    Parameters
+    ----------
+    rise_time
+        Total Yoffe slip duration ``T_r`` (s).
+    peak_time
+        Triangular-regularization half-width (s) — sets the time-to-peak
+        slip-rate and the high-frequency corner. Must be ``< rise_time/2``.
+    t_total, dt
+        History duration and sample step (s).
+    t0
+        Rupture onset (s); ``S`` is ~0 before ``t0``. Default ``0.0``.
+    f_max
+        Optional mesh-resolvable frequency (Hz) for the band-limit warn.
+    factor
+        Path ``-factor`` amplitude scale (default ``1.0``).
+    """
+
+    rise_time: float
+    peak_time: float
+    t_total: float
+    dt: float
+    t0: float = 0.0
+    f_max: float | None = None
+    factor: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.rise_time <= 0:
+            raise ValueError(
+                f"Yoffe: rise_time must be > 0, got {self.rise_time!r}"
+            )
+        if self.peak_time <= 0:
+            raise ValueError(
+                f"Yoffe: peak_time must be > 0, got {self.peak_time!r}"
+            )
+        if self.peak_time >= 0.5 * self.rise_time:
+            raise ValueError(
+                "Yoffe: peak_time (the regularization half-width) must be < "
+                f"rise_time/2 (got peak_time={self.peak_time!r}, "
+                f"rise_time={self.rise_time!r})."
+            )
+        if self.dt <= 0:
+            raise ValueError(f"Yoffe: dt must be > 0, got {self.dt!r}")
+        if self.t_total <= 0:
+            raise ValueError(
+                f"Yoffe: t_total must be > 0, got {self.t_total!r}"
+            )
+        if round(self.t_total / self.dt) < 2:
+            raise ValueError(
+                "Yoffe: need at least 2 samples — t_total/dt = "
+                f"{self.t_total / self.dt!r}."
+            )
+
+    def samples(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Return ``(times, values)`` — the normalized moment function S(t)."""
+        n = round(self.t_total / self.dt)
+        dt = self.dt
+        tr = self.rise_time
+
+        # Raw (singular) Yoffe slip-rate on a fine local grid, sampled at
+        # cell centres to skip the integrable 1/√t singularity at t=0.
+        m = max(2, int(round(tr / dt)))
+        tc = (np.arange(m) + 0.5) * dt
+        inside = tc < tr
+        y = np.zeros(m)
+        y[inside] = np.sqrt(np.maximum(tr - tc[inside], 0.0) / tc[inside])
+        if y.sum() > 0:
+            y /= y.sum() * dt                      # ∫ y dt = 1
+
+        # Symmetric triangular regularization window of half-width peak_time.
+        w = max(1, int(round(self.peak_time / dt)))
+        tri = np.concatenate([np.arange(1, w + 1), np.arange(w, 0, -1)])
+        tri = tri.astype(float)
+        tri /= tri.sum() * dt                       # ∫ tri dt = 1
+
+        rate = np.convolve(y, tri) * dt             # regularized slip-rate
+        moment = np.cumsum(rate) * dt               # S = ∫ rate
+        if moment[-1] > 0:
+            moment /= moment[-1]                     # normalize 0 → 1
+
+        # Place onset at t0 on the output grid; hold the final value after
+        # the source has finished.
+        i0 = int(round(self.t0 / dt))
+        values = np.zeros(n)
+        for i in range(n):
+            k = i - i0
+            if k < 0:
+                values[i] = 0.0
+            elif k < len(moment):
+                values[i] = moment[k]
+            else:
+                values[i] = moment[-1]
+        times = tuple(i * dt for i in range(n))
+        return times, tuple(float(v) for v in values)
+
+    def _emit(self, emitter: "Emitter", tag: int) -> None:
+        _, values = self.samples()
+        _band_limit_warn(values, self.dt, self.f_max, name="Yoffe")
         Path(values=values, dt=self.dt, factor=self.factor)._emit(emitter, tag)
 
     def dependencies(self) -> tuple[Primitive, ...]:
