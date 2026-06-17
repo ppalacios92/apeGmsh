@@ -2591,6 +2591,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2872,6 +2876,62 @@
     
   
     Pushover of a steel moment frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/plane-wave-ssi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plane-wave SSI: absorbing soil column
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/staged-gravity-ssi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Staged SSI: gravity then the absorbing flip
   
 
     
@@ -5658,7 +5718,7 @@ ranks, inspect the broker view, and emit a <code>.tcl</code> deck.</p>
 <p>The emitted <code>frame_partitioned.tcl</code> carries the partitioning shape:</p>
 <div class="language-tcl highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c"># (header — model, materials, transforms, etc. — at indent 0)</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">if</span><span class="w"> </span><span class="k">{[</span><span class="nb">info</span><span class="w"> </span>procs<span class="w"> </span>getPID<span class="k">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="k">}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">proc</span><span class="w"> </span>getPID<span class="w"> </span><span class="k">{}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">}</span><span class="w"> </span><span class="k">}</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">if</span><span class="w"> </span><span class="k">{[</span><span class="nb">info</span><span class="w"> </span>commands<span class="w"> </span>getPID<span class="k">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="k">}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">proc</span><span class="w"> </span>getPID<span class="w"> </span><span class="k">{}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">}</span><span class="w"> </span><span class="k">}</span>
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">if</span><span class="w"> </span><span class="k">{[</span><span class="nv">getPID</span><span class="k">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nv">1</span><span class="k">}</span><span class="w"> </span><span class="k">{</span>
 </span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="c"># rank 1 owns these nodes / elements</span>
@@ -5933,12 +5993,12 @@ the bridge follows the policy in ADR 0027:</p>
 <li><strong>Declare foreign node tags before the constraint line.</strong> If
   rank K's block references a node tag K does not natively own, the
   bridge emits <code>node &lt;tag&gt; &lt;x&gt; &lt;y&gt; &lt;z&gt; -ndf 6</code> on K's block before
-  the constraint line (INV-2). The coordinates and <code>ndf</code> come from
-  the broker — identical to those used on the natively-owning rank —
-  via the per-foreign-node <code>fem.nodes.ndf_for(tag)</code> lookup in
-  <code>_internal/build.py::emit_mp_constraints_partitioned</code> (override-only
-  per ADR 0033; sentinel slots elide <code>-ndf</code> and fall back to the
-  envelope).</li>
+  the constraint line (INV-2). The coordinates come from the broker and
+  the <code>ndf</code> from the bridge's deterministic per-node inference — identical
+  to those used on the natively-owning rank — applied in
+  <code>_internal/build.py::emit_mp_constraints_partitioned</code> (ADR 0048; a node
+  whose inferred <code>ndf</code> equals the envelope elides <code>-ndf</code> and falls back to
+  the <code>ops.model(ndm, ndf=)</code> envelope).</li>
 <li><strong>Phantom nodes get broker-deterministic tags</strong> (INV-3). When a
   <code>node_to_surface</code> constraint synthesises phantom nodes at
   build time, those tags and coordinates come from one canonical
@@ -5996,12 +6056,17 @@ single-process OpenSees — the diaphragm coupling is preserved.</p>
 <h2 id="8-single-process-vs-openseesmp">8. Single-process vs OpenSeesMP<a class="headerlink" href="#8-single-process-vs-openseesmp" title="Permanent link">&para;</a></h2>
 <p>The <code>proc getPID</code> shim in § 3 makes a partitioned deck syntactically
 parseable under single-process OpenSees:</p>
-<div class="language-tcl highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">if</span><span class="w"> </span><span class="k">{[</span><span class="nb">info</span><span class="w"> </span>procs<span class="w"> </span>getPID<span class="k">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="k">}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">proc</span><span class="w"> </span>getPID<span class="w"> </span><span class="k">{}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">}</span><span class="w"> </span><span class="k">}</span>
+<div class="language-tcl highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">if</span><span class="w"> </span><span class="k">{[</span><span class="nb">info</span><span class="w"> </span>commands<span class="w"> </span>getPID<span class="k">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="k">}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">proc</span><span class="w"> </span>getPID<span class="w"> </span><span class="k">{}</span><span class="w"> </span><span class="k">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">}</span><span class="w"> </span><span class="k">}</span>
 </span></code></pre></div>
-<p>If the runtime is single-process OpenSees (no MPI loaded), <code>getPID</code>
-is unbound, the shim defines it to return 0, and only the rank-0
-block executes. Other ranks' blocks are skipped by the
-<code>if {[getPID] == K}</code> gate.</p>
+<p>If the runtime has no <code>getPID</code> (no MPI loaded), the shim defines it
+to return 0, and only the rank-0 block executes. Other ranks' blocks
+are skipped by the <code>if {[getPID] == K}</code> gate.</p>
+<p>The guard probes <code>info commands</code>, <strong>not</strong> <code>info procs</code>: OpenSeesMP
+registers <code>getPID</code> via <code>Tcl_CreateCommand</code>, i.e. as a C <em>command</em>
+that <code>info procs</code> cannot see. An <code>info procs</code> guard silently
+overrides the native command with the rank-0 fallback, so every MPI
+rank builds rank 0's submodel — the run looks green while solving
+N copies of one subdomain.</p>
 <h3 id="runtime-conditional-numberer-system">Runtime-conditional numberer + system<a class="headerlink" href="#runtime-conditional-numberer-system" title="Permanent link">&para;</a></h3>
 <p>When <code>len(fem.partitions) &gt; 1</code> and the user has not explicitly
 declared a numberer / system, the bridge auto-emits a <strong>runtime
@@ -6118,37 +6183,34 @@ expected to change.</p>
   read time. See § 5.1 for the full emit shape.</p>
 </li>
 <li>
-<p><strong>Per-node <code>ndf</code> metadata is on the broker.</strong> The top-level
-  <code>g.node_ndf</code> composite (sibling to <code>g.constraints</code> / <code>g.loads</code> /
-  <code>g.masses</code>) is the user-facing API for declaring DOF counts per
-  region; <code>fem.nodes.ndf_for(nid)</code> is the broker-side query.
-  Declarations are explicit-only — apeGmsh does not infer <code>ndf</code>
-  from element class — and <code>ndf_for</code> raises <code>LookupError</code> on
-  undeclared nodes naming both fixes
-  (<code>g.node_ndf.set(target, ndf=K)</code> and
-  <code>g.node_ndf.set_default(ndf=K)</code>). See
-  <a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0032-explicit-only-per-node-ndf.md">ADR 0032</a>
-  for the doctrine.</p>
+<p><strong>Per-node <code>ndf</code> is inferred on the bridge, not declared.</strong> apeGmsh
+  infers each node's DOF count from the element classes declared on it
+  (a <code>ShellMITC4</code> node → 6, a <code>stdBrick</code> node → 3); there is no
+  <code>g.node_ndf</code> composite. <code>ops.model(ndm, ndf=K)</code> keeps <code>ndf</code> only as the
+  <strong>envelope</strong> — the builder default and the fallback for element-less
+  nodes. The sole explicit per-node channel is <code>ops.ndf(target, ndf=K)</code>,
+  restricted to element-less <strong>decoupled</strong> nodes. See
+  <a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0048-infer-per-node-ndf-from-elements.md">ADR 0048</a>
+  (inference) and
+  <a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0049-decoupled-nodes.md">ADR 0049</a>
+  (<code>ops.ndf</code>).</p>
 </li>
 </ul>
 <p>Foreign node declarations under cross-partition replication (§ 7)
-  now consume per-node <code>ndf</code> directly. The partitioned fan-out in
-  <code>_internal/build.py::emit_mp_constraints_partitioned</code> looks up
-  <code>fem.nodes.ndf_for(tag)</code> per foreign-node decl and passes <code>-ndf K</code>
-  on the <code>node(...)</code> call when the broker carries an override;
-  sentinel slots elide <code>-ndf</code> and OpenSees applies the envelope
-  (<code>apeSees(fem).model(ndm, ndf=K)</code>) — matching OpenSees-native
-  semantics. This unblocks mixed-ndf partitioned models such as
-  <code>ndf=3</code> solid nodes coexisting with <code>ndf=6</code> shell nodes across
-  rank boundaries.</p>
-<p>Cross-rank consistency is <strong>hash-guaranteed</strong> per
-  <a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0021-lineage-chain-replaces-snapshot-id.md">ADR 0021</a>:
-  the resolved <code>_ndf</code> array folds into <code>fem_hash</code>, so every rank
-  deserialises identical declarations and agrees on per-node <code>ndf</code>
-  for shared nodes without explicit cross-rank communication. See
+  consume the resolved per-node <code>ndf</code> directly: the partitioned fan-out
+  in <code>_internal/build.py::emit_mp_constraints_partitioned</code> passes
+  <code>-ndf K</code> on the <code>node(...)</code> call when a node's inferred value differs
+  from the envelope, and elides it where they match. This unblocks
+  mixed-ndf partitioned models such as <code>ndf=3</code> solid nodes coexisting
+  with <code>ndf=6</code> shell nodes across rank boundaries.</p>
+<p>Cross-rank consistency is <strong>determinism-guaranteed</strong> (ADR 0048): every
+  OpenSeesMP rank runs the <em>same</em> inference over the same broker and the
+  same element declarations, so a foreign / ghost node resolves to the
+  identical <code>ndf</code> its owning rank assigns — without cross-rank
+  communication and without folding a per-node <code>_ndf</code> array into
+  <code>fem_hash</code> (the mechanism the superseded
   <a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0033-s2-emit-wiring-per-node-ndf.md">ADR 0033</a>
-  for the full emit-wiring contract (override-only semantics +
-  validator at three materialisation sites + phantom carveout).</p>
+  previously relied on).</p>
 <ul>
 <li>
 <p><strong><code>partition()</code> after <code>renumber()</code> is the canonical order.</strong>
