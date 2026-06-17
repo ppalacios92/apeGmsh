@@ -4332,8 +4332,14 @@ class BuiltModel:
             sp_nodes=owned_nodes,
             inferred_ndf=eff,
         )
+        # ADR 0062: moment-tensor sources → rank-owned nodal load lines.
+        mt_loads = self._owned_moment_tensor_lines(
+            p.moment_tensors,
+            load_nodes=primary_nodes,
+            inferred_ndf=eff,
+        )
         if (not owned_loads and not owned_sps
-                and not fm_loads and not fm_sps):
+                and not fm_loads and not fm_sps and not mt_loads):
             return False
         emitter.pattern_open("Plain", tag, ts_tag)
         for load_rec in owned_loads:
@@ -4348,6 +4354,8 @@ class BuiltModel:
             emitter.load(node_id, *comps)
         for node_id, dof, value in fm_sps:
             emitter.sp(node_id, dof, value)
+        for node_id, comps in mt_loads:
+            emitter.load(node_id, *comps)
         emitter.pattern_close()
         return True
 
@@ -4391,6 +4399,12 @@ class BuiltModel:
                 inferred_ndf=inferred_ndf,
             )
             if fm_loads or fm_sps:
+                return True
+            if self._owned_moment_tensor_lines(
+                p.moment_tensors,
+                load_nodes=primary_nodes,
+                inferred_ndf=inferred_ndf,
+            ):
                 return True
         return False
 
@@ -4441,6 +4455,48 @@ class BuiltModel:
                     if rec.pattern == case and int(rec.node_id) in sp_nodes:
                         fm_sps.append((int(rec.node_id), rec.dof, rec.value))
         return fm_loads, fm_sps
+
+    def _owned_moment_tensor_lines(
+        self,
+        moment_tensors: "tuple[Any, ...]",
+        *,
+        load_nodes: set[int],
+        inferred_ndf: "dict[int, int] | None" = None,
+    ) -> "list[tuple[int, tuple[float, ...]]]":
+        """Resolve moment-tensor sources to rank-owned nodal load lines (ADR 0062).
+
+        Mirrors :meth:`_owned_from_model_lines`: the source's
+        representation-theorem nodal forces are additive MP loads (one
+        rank per node), so each ``(node, force)`` pair is kept only when
+        the node is in this rank's PRIMARY-owned set ``load_nodes``. The
+        host search and force build run against the full FEM snapshot (the
+        host element may straddle a partition boundary); only the emitted
+        lines are rank-filtered, so the per-rank union reproduces the same
+        deck the flat path emits. Returns ``[(node, components), ...]``.
+        """
+        from ._internal.build import (
+            broker_load_components,
+            resolve_moment_tensor_pairs,
+        )
+        from apeGmsh._kernel.records._loads import NodalLoadRecord
+
+        eff = inferred_ndf or {}
+        out: list[tuple[int, tuple[float, ...]]] = []
+        for rec in moment_tensors:
+            for node, force in resolve_moment_tensor_pairs(rec, self.fem):
+                if int(node) in load_nodes:
+                    node_ndf = int(eff.get(int(node), self.ndf))
+                    nl = NodalLoadRecord(
+                        node_id=int(node),
+                        force_xyz=(
+                            float(force[0]), float(force[1]), float(force[2]),
+                        ),
+                    )
+                    out.append(
+                        (int(node),
+                         broker_load_components(nl, node_ndf, self.ndm)),
+                    )
+        return out
 
     # -- Auto-emit constraint handler (Phase 8 fold-in) ----------------
 

@@ -17,10 +17,13 @@ from .time_series import (
     FEMA461Protocol,
     Linear,
     ModifiedATC24Protocol,
+    MomentStep,
     Path,
     Pulse,
     Ricker,
     Trig,
+    WarnMomentFunctionBandwidth,
+    Yoffe,
 )
 
 __all__ = [
@@ -33,4 +36,7 @@ __all__ = [
     "ASCE41Protocol",
     "ModifiedATC24Protocol",
     "FEMA461Protocol",
+    "MomentStep",
+    "Yoffe",
+    "WarnMomentFunctionBandwidth",
 ]

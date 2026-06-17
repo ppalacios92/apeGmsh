@@ -70,7 +70,12 @@ __all__ = [
     "UniformExcitation",
     "_LoadRecord",
     "_SPRecord",
+    "_MomentTensorRecord",
 ]
+
+# Frame / method vocabularies for the moment-tensor source (ADR 0062).
+_MT_FRAMES = ("z-up", "z-down")
+_MT_METHODS = ("consistent", "dipole")
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +123,34 @@ class _SPRecord:
     value: float
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _MomentTensorRecord:
+    """One moment-tensor seismic source inside a :class:`Plain` pattern
+    (ADR 0062).
+
+    A value object resolved by the bridge build pipeline (Phase 4): it
+    needs the FEM snapshot to locate the host element and evaluate
+    ``∂N/∂x`` at ``position``, so it cannot expand at the primitive level
+    (like ``pg=`` loads and ``from_model`` cases). The forces it produces
+    are constant nodal-load vectors ``M0·m_ij·∂N_a/∂x_j``; the pattern's
+    shared :class:`TimeSeries` supplies the **normalized moment function**
+    ``S(t)``.
+
+    Supply exactly one mechanism source: ``(strike, dip, rake)`` *or*
+    ``m_ij`` (a 3×3 unit tensor stored as nested tuples for frozen-ness).
+    """
+
+    position: tuple[float, ...]
+    frame: str
+    method: str
+    t0: float
+    M0: float
+    strike: float | None
+    dip: float | None
+    rake: float | None
+    m_ij: tuple[tuple[float, ...], ...] | None
+
+
 # ---------------------------------------------------------------------------
 # Plain — the workhorse pattern (loads + prescribed SPs in a block)
 # ---------------------------------------------------------------------------
@@ -159,6 +192,9 @@ class Plain(Pattern):
     _from_model_cases_: list[str] = field(
         init=False, repr=False, compare=False, default_factory=list,
     )
+    _moment_tensors_: list[_MomentTensorRecord] = field(
+        init=False, repr=False, compare=False, default_factory=list,
+    )
 
     # -- Inspection -----------------------------------------------------
 
@@ -181,6 +217,16 @@ class Plain(Pattern):
         FEM snapshot and the model ``ndf``).
         """
         return tuple(self._from_model_cases_)
+
+    @property
+    def moment_tensors(self) -> tuple[_MomentTensorRecord, ...]:
+        """Tuple snapshot of the recorded moment-tensor sources (ADR 0062).
+
+        Populated by :meth:`moment_tensor`.  The bridge resolves each into
+        nodal ``load`` lines at emit time (it owns the FEM snapshot needed
+        to locate the host and evaluate ``∂N/∂x``).
+        """
+        return tuple(self._moment_tensors_)
 
     # -- Context manager ------------------------------------------------
 
@@ -288,6 +334,101 @@ class Plain(Pattern):
             )
         self._from_model_cases_.append(case)
 
+    def moment_tensor(
+        self,
+        *,
+        position: "tuple[float, ...] | list[float]",
+        frame: str,
+        M0: float = 1.0,
+        mech: "dict[str, float] | None" = None,
+        m_ij: "object | None" = None,
+        t0: float = 0.0,
+        method: str = "consistent",
+    ) -> None:
+        """Record a moment-tensor seismic source inside this pattern (ADR 0062).
+
+        Embeds a seismic point source at ``position`` (mesh coordinates)
+        and emits the representation-theorem equivalent **nodal forces**
+        ``M0·m_ij·∂N_a/∂x_j`` — a pure right-hand-side contribution, no
+        stiffness / constraint, integrator-agnostic. The pattern's time
+        series carries the **normalized moment function** ``S(t)`` (rising
+        ``0 → 1``); build it with ``ops.timeSeries.MomentStep`` / ``Yoffe``.
+
+        Parameters
+        ----------
+        position
+            Source point in mesh coordinates ``(x, y, z)`` (or ``(x, y)``
+            for a 2D model). The host element is found automatically; the
+            point must lie inside the intact continuum.
+        frame
+            Mesh vertical convention — ``"z-up"`` (typical apeGmsh: free
+            surface on top, depth positive downward; flips the A&R z-down
+            tensor) or ``"z-down"``. **Required** — wrong frame silently
+            mirrors the radiation pattern.
+        M0
+            Scalar seismic moment ``M0 = μ·A·D̄`` in deck moment units
+            (e.g. kN·m). Default ``1.0`` (unit source).
+        mech
+            Fault mechanism ``dict(strike=, dip=, rake=)`` in degrees, OR
+            pass ``m_ij`` — exactly one.
+        m_ij
+            A 3×3 unit moment tensor (A&R z-down), as an alternative to
+            ``mech``.
+        t0
+            Rupture onset (s). Only ``0.0`` is supported in v1 — a
+            per-source onset delay (a finite fault) is MT-4.
+        method
+            ``"consistent"`` (host ``∂N/∂x`` — works on any solid mesh) or
+            ``"dipole"`` (±neighbour couples on a structured grid).
+        """
+        if (mech is None) == (m_ij is None):
+            raise ValueError(
+                "Plain.moment_tensor: supply exactly one of mech= "
+                "(dict(strike=, dip=, rake=)) or m_ij= (a 3x3 unit tensor), "
+                f"got mech={mech!r}, m_ij={'<array>' if m_ij is not None else None}."
+            )
+        if frame not in _MT_FRAMES:
+            raise ValueError(
+                f"Plain.moment_tensor: frame must be one of {_MT_FRAMES}, "
+                f"got {frame!r} (no default — the flip mirrors the radiation "
+                f"pattern if wrong)."
+            )
+        if method not in _MT_METHODS:
+            raise ValueError(
+                f"Plain.moment_tensor: method must be one of {_MT_METHODS}, "
+                f"got {method!r}."
+            )
+        strike = dip = rake = None
+        m_tuple: tuple[tuple[float, ...], ...] | None = None
+        if mech is not None:
+            missing = {"strike", "dip", "rake"} - set(mech)
+            if missing:
+                raise ValueError(
+                    f"Plain.moment_tensor: mech= needs strike, dip, rake "
+                    f"(missing {sorted(missing)})."
+                )
+            strike = float(mech["strike"])
+            dip = float(mech["dip"])
+            rake = float(mech["rake"])
+        else:
+            rows = [tuple(float(v) for v in row) for row in m_ij]  # type: ignore[union-attr]
+            if len(rows) != 3 or any(len(r) != 3 for r in rows):
+                raise ValueError(
+                    "Plain.moment_tensor: m_ij must be a 3x3 array-like."
+                )
+            m_tuple = tuple(rows)
+        self._moment_tensors_.append(_MomentTensorRecord(
+            position=tuple(float(c) for c in position),
+            frame=frame,
+            method=method,
+            t0=float(t0),
+            M0=float(M0),
+            strike=strike,
+            dip=dip,
+            rake=rake,
+            m_ij=m_tuple,
+        ))
+
     # -- Primitive surface ---------------------------------------------
 
     def dependencies(self) -> tuple[Primitive, ...]:
@@ -307,6 +448,13 @@ class Plain(Pattern):
                 "Plain._emit: from_model(case) import is the bridge build "
                 "pipeline's job (it owns the FEM snapshot + ndf). Emit via "
                 "the bridge (ops.tcl/py/build), not the primitive directly."
+            )
+        if self._moment_tensors_:
+            raise NotImplementedError(
+                "Plain._emit: moment_tensor(...) resolution is the bridge "
+                "build pipeline's job (it owns the FEM snapshot needed to "
+                "locate the host + evaluate ∂N/∂x). Emit via the bridge "
+                "(ops.tcl/py/build), not the primitive directly."
             )
         ts_tag = resolve_tag(emitter, self.series)
         emitter.pattern_open("Plain", tag, ts_tag)

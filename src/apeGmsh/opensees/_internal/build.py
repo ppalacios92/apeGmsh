@@ -2311,6 +2311,8 @@ def emit_pattern_spec(
         _emit_sp_record(sp_rec, emitter, fem)
     for case in spec.from_model_cases:
         _emit_from_model_case(case, emitter, fem, ndf_of, ndm)
+    for mt_rec in spec.moment_tensors:
+        _emit_moment_tensor_record(mt_rec, emitter, fem, ndf_of, ndm)
     emitter.pattern_close()
 
 
@@ -2411,6 +2413,154 @@ def _emit_from_model_case(
         for rec in sp_set.prescribed():
             if rec.pattern == case:
                 emitter.sp(int(rec.node_id), rec.dof, rec.value)
+
+
+# gmsh element-type code → (inverse-map host kind, corner-node count).
+# Continuum hosts only; a straight-sided higher-order host maps with its
+# corner kind (gmsh orders corner nodes first). Sibling of
+# ``ReinforcementsComposite._GMSH_HOST_KIND`` — kept local so build.py
+# does not import a core composite.
+_MT_HOST_KIND: dict[int, tuple[str, int]] = {
+    2: ("tri3", 3), 3: ("quad4", 4), 4: ("tet4", 4), 5: ("hex8", 8),
+    9: ("tri3", 3), 10: ("quad4", 4), 11: ("tet4", 4),
+    16: ("quad4", 4), 17: ("hex8", 8),
+}
+
+
+def _collect_continuum_hosts(
+    fem: "FEMData",
+) -> tuple[list[list[int]], list[np.ndarray], list[str], int,
+           np.ndarray, np.ndarray]:
+    """Per continuum element: corner tags / coords / inverse-map kind.
+
+    Walks the broker's element groups (keyed by gmsh type code), keeps the
+    continuum kinds in :data:`_MT_HOST_KIND`, and restricts to the highest
+    continuum dimension present (a 3D model's surface tris are not source
+    hosts). Returns ``(host_node_ids, host_node_coords, host_kinds,
+    model_ndm, all_node_ids, all_node_coords)`` — the last two are the
+    global node cloud the ``"dipole"`` method searches.
+    """
+    from apeGmsh._kernel.geometry._inverse_map import HOST_KINDS
+
+    ids = np.asarray(fem.nodes.ids)
+    coords = np.asarray(fem.nodes.coords, dtype=float)
+    coord_of = {int(t): coords[i] for i, t in enumerate(ids)}
+
+    groups: list[tuple[str, int, np.ndarray]] = []
+    for code, grp in fem.elements._groups.items():
+        info = _MT_HOST_KIND.get(int(code))
+        if info is None:
+            continue
+        kind, n_corner = info
+        groups.append((kind, n_corner, np.asarray(grp.connectivity, dtype=int)))
+
+    if not groups:
+        raise BridgeError(
+            "moment_tensor: the model carries no continuum host elements "
+            "(tri/quad/tet/hex) for the source to embed into."
+        )
+
+    model_ndm = max(HOST_KINDS[kind][1] for kind, _, _ in groups)
+    host_ids: list[list[int]] = []
+    host_coords: list[np.ndarray] = []
+    host_kinds: list[str] = []
+    for kind, n_corner, conn in groups:
+        if HOST_KINDS[kind][1] != model_ndm:
+            continue
+        for row in conn:
+            corners = [int(t) for t in row[:n_corner]]
+            host_ids.append(corners)
+            host_coords.append(np.vstack([coord_of[t] for t in corners]))
+            host_kinds.append(kind)
+    return host_ids, host_coords, host_kinds, model_ndm, ids, coords
+
+
+def resolve_moment_tensor_pairs(
+    rec: "Any", fem: "FEMData",
+) -> list[tuple[int, np.ndarray]]:
+    """Resolve one ``Plain.moment_tensor`` source into ``(node, force_xyz)``.
+
+    Builds the moment tensor in the mesh frame, locates the host (or grid
+    node) in ``fem``, and turns the representation-theorem body force into
+    per-node force vectors (length-3, padded). Shared by the flat emit
+    (:func:`_emit_moment_tensor_record`) and the partitioned emit
+    (``apeSees._owned_moment_tensor_lines``) so both paths agree.
+
+    Raises ``NotImplementedError`` for a non-zero rupture onset (MT-4),
+    and a clear MT-flavoured ``ValueError`` (not the reinforcement-worded
+    inverse-map message) when the source lies outside the continuum.
+    """
+    from apeGmsh._kernel.geometry._moment_tensor import moment_tensor
+    from apeGmsh._kernel.resolvers._moment_tensor import (
+        resolve_moment_tensor_source,
+    )
+
+    if rec.t0 != 0.0:
+        raise NotImplementedError(
+            "moment_tensor: a non-zero rupture onset t0 (a per-source "
+            "delay) is MT-4 (finite-fault) work — the v1 single source "
+            "rides the pattern's shared S(t). Got t0="
+            f"{rec.t0!r}."
+        )
+
+    if rec.m_ij is not None:
+        M = moment_tensor(
+            m_ij=np.asarray(rec.m_ij, dtype=float), M0=rec.M0, frame=rec.frame,
+        )
+    else:
+        M = moment_tensor(
+            strike=rec.strike, dip=rec.dip, rake=rec.rake,
+            M0=rec.M0, frame=rec.frame,
+        )
+
+    host_ids, host_coords, host_kinds, _model_ndm, all_ids, all_coords = (
+        _collect_continuum_hosts(fem)
+    )
+    try:
+        return resolve_moment_tensor_source(
+            position=np.asarray(rec.position, dtype=float),
+            M=M,
+            method=rec.method,
+            host_node_ids=host_ids,
+            host_node_coords=host_coords,
+            host_kinds=host_kinds,
+            node_ids=all_ids,
+            node_coords=all_coords,
+            label=f"moment_tensor @ {tuple(rec.position)}",
+        )
+    except ValueError as exc:
+        if rec.method == "consistent" and "outside every host" in str(exc):
+            raise BridgeError(
+                f"moment_tensor: the source at {tuple(rec.position)} lies "
+                f"outside the continuum mesh — every seismic source must sit "
+                f"inside an element. Move the point into the intact continuum "
+                f"(not on the free surface, not in the absorbing skin)."
+            ) from exc
+        raise
+
+
+def _emit_moment_tensor_record(
+    rec: "Any",
+    emitter: "Emitter",
+    fem: "FEMData",
+    ndf_of: "Callable[[int], int]",
+    ndm: int = 3,
+) -> None:
+    """Resolve a ``Plain.moment_tensor`` source into nodal ``load`` lines.
+
+    Locates the host (or grid node) in ``fem``, turns the
+    representation-theorem body force into per-node forces, and emits each
+    as a ``load`` line mapped onto the node's effective ndf. The pattern's
+    time series supplies ``S(t)``.
+    """
+    from apeGmsh._kernel.records._loads import NodalLoadRecord
+
+    for node, force in resolve_moment_tensor_pairs(rec, fem):
+        nl = NodalLoadRecord(
+            node_id=int(node),
+            force_xyz=(float(force[0]), float(force[1]), float(force[2])),
+        )
+        emitter.load(int(node), *broker_load_components(nl, ndf_of(int(node)), ndm))
 
 
 def _emit_load_record(
