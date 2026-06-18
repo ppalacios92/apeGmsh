@@ -270,18 +270,17 @@ class TestLadrunoFilterValidation:
         assert r.has_filter() is False
         assert r._region_tag is None
 
-    def test_filter_with_energy_raises(self) -> None:
-        # -R scopes the value channels; -G energy is whole-model. The
-        # combo is forbidden in this slice (per-region energy deferred).
-        with pytest.raises(
-            ValueError, match="cannot be combined with energy=True"
-        ):
-            Ladruno(
-                file="run.ladruno",
-                nodal_responses=("displacement",),
-                nodes_pg="Targets",
-                energy=True,
-            )
+    def test_filter_with_energy_is_legal(self) -> None:
+        # ADR 0064 §4 (shipped): a region filter + energy=True records
+        # per-region energy over the same region (run-verified on fork).
+        r = Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+            energy=True,
+        )
+        assert r.has_filter() is True
+        assert r.energy is True
 
     def test_energy_without_filter_is_legal(self) -> None:
         r = Ladruno(file="run.ladruno", energy=True)
@@ -326,6 +325,30 @@ class TestLadrunoFilterEmit:
         e = RecordingEmitter()
         r._emit(e, tag=1)
         assert "-R" not in e.calls[0][1]
+
+    def test_filter_plus_energy_emits_per_region_energy(self) -> None:
+        # ADR 0064 §4: filter + energy -> ``-R $tag ... -G energy $tag``;
+        # the region tag trails ``-G energy`` (and -R precedes it).
+        r = Ladruno(
+            file="run.ladruno",
+            elem_responses=("stresses",),
+            elements=(5,),
+            energy=True,
+            _region_tag=9,
+        )
+        e = RecordingEmitter()
+        r._emit(e, tag=1)
+        assert e.calls[0][1] == (
+            "ladruno", "run.ladruno", "-E", "stresses",
+            "-R", 9, "-G", "energy", 9,
+        )
+
+    def test_whole_model_energy_omits_region_tag(self) -> None:
+        # energy without a filter -> ``-G energy`` (no trailing tag).
+        r = Ladruno(file="run.ladruno", energy=True)
+        e = RecordingEmitter()
+        r._emit(e, tag=1)
+        assert e.calls[0][1] == ("ladruno", "run.ladruno", "-G", "energy")
 
     def test_pg_path_raises_not_implemented(self) -> None:
         # Defense-in-depth — calling _emit directly with a pg= selector

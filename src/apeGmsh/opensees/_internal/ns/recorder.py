@@ -273,12 +273,13 @@ class _RecorderNS(_BridgeNamespace):
         ``nodes=`` / ``nodes_pg=`` and ``elements=`` / ``elements_pg=``
         are pairwise mutex; supplying any of the four triggers
         auto-emission of an OpenSees ``region`` plus ``-R $tag`` on the
-        ladruno line at build time (flat and partitioned). A region
-        filter cannot be combined with ``energy=True`` in this slice.
-        Emission works on any build; the Ladruno fork is required only
-        to *run* the deck. See
-        :class:`apeGmsh.opensees.recorder.Ladruno` for the full contract
-        (and the deferred per-region energy channel).
+        ladruno line at build time (flat and partitioned). Combining a
+        filter with ``energy=True`` records the energy balance over that
+        same region (``-G energy $tag`` → both whole-model and per-region
+        balances); ``energy=True`` alone is whole-model. Emission works on
+        any build; the Ladruno fork is required only to *run* the deck.
+        See :class:`apeGmsh.opensees.recorder.Ladruno` for the full
+        contract.
         """
         return self._bridge._register(
             Ladruno(

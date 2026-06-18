@@ -855,21 +855,26 @@ class Ladruno(FilterableRecorder):
     flag, so ``-G energy -T nsteps 10`` is a parse error while
     ``-T nsteps 10 -G energy`` runs (run-verified on the fork build).
 
-    A region filter **cannot** be combined with ``energy=True`` in this
-    slice: ``-R`` scopes the value channels while ``-G energy`` (no
-    trailing tag) is whole-model, so the combination would silently
-    record region stresses alongside a whole-model energy balance from
-    one recorder. Use a separate whole-model Ladruno for energy. The
-    clean per-region form ``-G energy <regionTag...>`` is the deferred
-    follow-up (see below); it will reuse this recorder's region tag.
+    **Per-region energy.** When ``energy=True`` is combined with a region
+    filter (``nodes=`` / ``nodes_pg=`` / ``elements=`` / ``elements_pg=``),
+    the energy balance is emitted as ``-G energy $regionTag`` reusing the
+    same region the value-channel ``-R`` filter targets — the fork writes
+    **both** the whole-model balance (``RESULTS/ON_DOMAIN/energyBalance``)
+    **and** the per-region balance (``RESULTS/ON_REGIONS/energyBalance``)
+    in one shot (run-verified on the fork build, ADR 0064 §4). Because the
+    energy region is the filter's already-allocated tag, this rides the
+    flat / staged / partitioned region plumbing with no extra wiring. A
+    whole-model-only balance (``-G energy`` with no tag) is what you get
+    when ``energy=True`` is set without a filter.
 
     Deferred (recorder-plan follow-up)
     ----------------------------------
-    * **Per-region energy (``-G energy <regionTag...>``)** — needs the
-      C++ ``-G energy <regionTag>`` path run-verified on the fork build;
-      will flip the ``region + energy`` guard into ``-G energy
-      $region_tag`` reusing the tag :meth:`materialize` already
-      allocates (ADR 0064 §4).
+    * **Independent energy region** — energy over a region *without* also
+      filtering the value channels to it (``-G energy <tag>`` where the
+      energy region differs from, or exists without, the ``-R`` filter).
+      The fork supports an energy-region list orthogonal to ``-R``; the
+      bridge currently couples the two (one region serves both). A future
+      slice could add an ``energy_pg=`` selector for the decoupled case.
 
     Parameters
     ----------
@@ -889,8 +894,9 @@ class Ladruno(FilterableRecorder):
         Optional step-based cadence (every N analysis steps). Mutually
         exclusive with ``dT``.
     energy
-        Record the whole-model energy balance (``-G energy``). Cannot be
-        combined with a region filter in this slice.
+        Record the energy balance (``-G energy``). Whole-model when no
+        filter is set; per-region (over the ``-R`` filter region, plus
+        whole-model) when combined with a ``nodes=``/``elements=`` filter.
     nodes
         Explicit tuple of node tags for the region filter. Mutually
         exclusive with ``nodes_pg``.
@@ -919,28 +925,26 @@ class Ladruno(FilterableRecorder):
             )
         self._validate_cadence()
         self._validate_filter()
-        if self.has_filter() and self.energy:
-            raise ValueError(
-                "Ladruno: a region filter (nodes=/nodes_pg=/elements=/"
-                "elements_pg=) cannot be combined with energy=True — -R "
-                "scopes the value channels but -G energy is whole-model. "
-                "Use a separate whole-model Ladruno for energy, or wait on "
-                "per-region energy (ADR 0064 deferral)."
-            )
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()
 
     def _emit(self, emitter: "Emitter", tag: int) -> None:
         self._require_materialized()
-        # ``_value_channel_args`` puts ``-R $tag`` last; the energy flag
-        # must trail it (the fork's -G parser eagerly eats trailing ints
-        # and cannot rewind past a following flag, so ``-G energy`` stays
-        # the final option). filter + energy is blocked at construction,
-        # so in practice only one of -R / -G energy is ever present.
+        # ``_value_channel_args`` puts ``-R $tag`` last (when filtered);
+        # the energy flag must trail it — the fork's ``-G`` parser eagerly
+        # eats trailing ints and cannot rewind past a following flag, so
+        # ``-G energy [$tag]`` is always the final option.
         args: list[int | float | str] = [self.file, *self._value_channel_args()]
         if self.energy:
             args += ["-G", "energy"]
+            if self._region_tag is not None:
+                # Per-region energy over the SAME region as the value
+                # filter (run-verified on the fork build: writes both
+                # ON_DOMAIN and ON_REGIONS/energyBalance). Reuses the tag
+                # ``materialize`` already allocated, so this rides the
+                # flat / staged / partitioned region plumbing unchanged.
+                args.append(self._region_tag)
         emitter.recorder("ladruno", *args)
 
 

@@ -665,6 +665,39 @@ def test_ladruno_without_filter_emits_no_region() -> None:
     assert "-R" not in lad_calls[0][1]
 
 
+def test_ladruno_filter_plus_energy_emits_per_region_energy() -> None:
+    """ADR 0064 §4: a region-filtered Ladruno with energy=True emits
+    ``-R $tag`` (value-channel filter) and ``-G energy $tag`` (per-region
+    energy over the SAME region) — the energy tag is the materialized
+    region tag, and ``-G energy $tag`` trails everything else."""
+    fem = make_two_column_frame()  # PG "Base" -> nodes (1, 3)
+
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    ops.recorder.Ladruno(
+        file="run.ladruno",
+        nodal_responses=("displacement",),
+        nodes_pg="Base",
+        energy=True,
+    )
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+
+    region_calls = [c for c in rec.calls if c[0] == "region"]
+    lad_calls = [
+        c for c in rec.calls if c[0] == "recorder" and c[1][0] == "ladruno"
+    ]
+    assert len(region_calls) == 1
+    assert len(lad_calls) == 1
+    region_tag = region_calls[0][1][0]
+
+    lad_args = lad_calls[0][1]
+    # -R references the region tag.
+    assert lad_args[lad_args.index("-R") + 1] == region_tag
+    # -G energy trails, with the same region tag appended for per-region.
+    assert lad_args[-3:] == ("-G", "energy", region_tag)
+
+
 def test_ladruno_region_persists_to_model_h5() -> None:
     """ADR 0064: a region-filtered Ladruno archives into model.h5 like
     MPCO — ONE recorder group (type ``ladruno``) carrying ``-R <tag>``

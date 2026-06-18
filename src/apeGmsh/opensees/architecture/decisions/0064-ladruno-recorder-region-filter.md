@@ -25,6 +25,24 @@ the cross-family primitive contract requires `dependencies` directly in each
 concrete class's `__dict__`, so it stays defined on MPCO and Ladruno (not lifted
 to the base).
 
+**Follow-up shipped — per-region energy (§4, the reserved landing).** PE0–PE3
+flipped the `region + energy` fail-loud guard into the promised
+`-G energy $region_tag`. The C++ grammar was re-read and the deployed build
+(`5266a708`) **run-verified**: `recorder ladruno … -E axialForce -R 10 -T nsteps
+1 -G energy 10` writes **both** `RESULTS/ON_DOMAIN/energyBalance` (whole-model)
+and `RESULTS/ON_REGIONS/energyBalance` (per-region) — confirming the fork emits
+both balances additively. The §4 premise was corrected along the way: the fork's
+`-G energy <tag>` energy-region list is **independent** of `-R` (orthogonal, not
+"reuse the filter tag because they must match"). We still couple them — energy
+reuses the value-filter's already-allocated region tag — because that reuse is
+exactly what makes per-region energy ride the existing flat / staged /
+partitioned region plumbing with zero new wiring. So `energy=True` + a filter now
+emits `-G energy $tag` over that region; `energy=True` alone stays whole-model.
+The consumer side (`Results.energy(region=<tag>)` reading `ON_REGIONS`) was
+already built. Remaining follow-up: a **decoupled** energy region (`energy_pg=`)
+for energy over a region *without* filtering the value channels to it — the fork
+supports the orthogonal list; the bridge does not yet expose it.
+
 ## Context
 
 The `Ladruno` recorder (`recorder ladruno fname.ladruno ...`) is the fork's
@@ -120,16 +138,14 @@ the energy flag.
    annotation widens to `FilterableRecorder`. Renaming was rejected as
    unjustified churn on internal symbols.
 
-4. **`region=` + `energy=True` is fail-loud for now.** A region filter scopes
+4. **`region=` + `energy=True` → per-region energy.** *(Originally fail-loud;
+   the follow-up below shipped the per-region form — see the "Follow-up shipped"
+   note in the status block.)* A region filter scopes
    the **value** channels (`-N`/`-E`) via `-R`; `-G energy` (no trailing tag)
-   is **whole-model**. Silently emitting region-filtered stresses alongside a
-   whole-model energy balance from one recorder is a confusing mismatch, and the
-   clean per-region form `-G energy $tag` is the *second*, still-deferred
-   capability (it needs the C++ `-G energy <regionTag>` path run-verified, the
-   same bridge-region→OpenSees-tag seam ADR 0062 left owed). So this slice
-   **raises `ValueError`** when a filter selector is combined with
-   `energy=True`, pointing the user at either two recorders or the forthcoming
-   per-region-energy follow-up. This is reversible: the follow-up flips the
+   is **whole-model**. The clean per-region form is `-G energy $tag`. The
+   original slice **raised `ValueError`** on a filter + `energy=True` because the
+   C++ `-G energy <regionTag>` path was not yet run-verified. The follow-up
+   (PE0–PE3) verified it on the deployed fork build and flipped the
    guard into `-G energy $region_tag` reusing the tag `materialize()` already
    allocated.
 
@@ -179,11 +195,16 @@ the energy flag.
   refactor, verified before Ladruno touches anything (plan step RF0). The
   partition gates are widened only after the base lands and MPCO is green.
 
-- **Deferred (unchanged by this ADR).** Per-region energy
-  (`-G energy <regionTag...>`) stays owed — now with a clear landing: reuse the
-  `_region_tag` and flip the step-4 guard. The `recorder.py:772` deferral note
-  for it is updated to cross-reference this ADR; the `-R` deferral note
-  (`:766`) is replaced by the shipped behaviour.
+- **Per-region energy — SHIPPED (PE follow-up).** `energy=True` + a filter now
+  emits `-G energy $region_tag` (run-verified on the deployed fork build); the
+  reader (`Results.energy(region=<tag>)`) was already in place. The remaining
+  deferral narrows to a **decoupled** energy region — energy over a region
+  without filtering the value channels to it (the fork's `-G energy <tag>` list
+  is orthogonal to `-R`; a future `energy_pg=` selector would expose it). A
+  related UX follow-up (shared by all auto-region recorders, not specific to
+  energy): discovering the bridge-allocated region tag from a PG name to pass to
+  `Results.energy(region=…)` — today it surfaces via the reader's
+  "recorded region tags: […]" error and `/opensees/regions`.
 
 - **Staged path.** `s.recorder` (ADR 0034) drives the same `emit_recorder_spec`
   → `materialize` → `_emit` pipeline, so a region-filtered `Ladruno` inside an
