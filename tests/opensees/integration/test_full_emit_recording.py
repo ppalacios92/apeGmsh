@@ -605,6 +605,122 @@ def test_mpco_without_filter_emits_no_region() -> None:
     assert "-R" not in mpco_calls[0][1]
 
 
+def test_ladruno_nodes_pg_emits_region_and_R_flag() -> None:
+    """ADR 0064: a region-filtered Ladruno auto-emits an OpenSees region
+    and references it via ``-R $tag`` — same machinery as MPCO, inherited
+    from ``FilterableRecorder``. Flat (unpartitioned) build path."""
+    fem = make_two_column_frame()  # PG "Base" -> nodes (1, 3)
+
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    ops.recorder.Ladruno(
+        file="run.ladruno",
+        nodal_responses=("displacement",),
+        nodes_pg="Base",
+    )
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+
+    region_calls = [c for c in rec.calls if c[0] == "region"]
+    lad_calls = [
+        c for c in rec.calls if c[0] == "recorder" and c[1][0] == "ladruno"
+    ]
+    assert len(region_calls) == 1
+    assert len(lad_calls) == 1
+    # Region precedes the recorder.
+    assert rec.calls.index(region_calls[0]) < rec.calls.index(lad_calls[0])
+
+    region_args = region_calls[0][1]
+    region_tag = region_args[0]
+    assert "-node" in region_args
+    node_flag_idx = region_args.index("-node")
+    assert region_args[node_flag_idx + 1: node_flag_idx + 3] == (1, 3)
+
+    lad_args = lad_calls[0][1]
+    assert "-R" in lad_args
+    r_idx = lad_args.index("-R")
+    assert lad_args[r_idx + 1] == region_tag
+
+
+def test_ladruno_without_filter_emits_no_region() -> None:
+    """Backward-compatible: a bare Ladruno (no filter) records the whole
+    model — no region command, no ``-R`` flag."""
+    fem = make_two_node_beam()
+
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    ops.recorder.Ladruno(
+        file="run.ladruno",
+        nodal_responses=("displacement",),
+    )
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+
+    region_calls = [c for c in rec.calls if c[0] == "region"]
+    lad_calls = [
+        c for c in rec.calls if c[0] == "recorder" and c[1][0] == "ladruno"
+    ]
+    assert region_calls == []
+    assert len(lad_calls) == 1
+    assert "-R" not in lad_calls[0][1]
+
+
+def test_ladruno_region_persists_to_model_h5() -> None:
+    """ADR 0064: a region-filtered Ladruno archives into model.h5 like
+    MPCO — ONE recorder group (type ``ladruno``) carrying ``-R <tag>``
+    and one ``/opensees/regions`` group sharing that tag. (model.h5
+    archival of the deck; the runtime ``.ladruno`` MODEL/SETS round-trip
+    needs the fork build and is covered separately.)"""
+    h5py = pytest.importorskip("h5py")
+    from apeGmsh.opensees.emitter.h5 import H5Emitter
+
+    fem = make_two_column_frame()  # PG "Base" -> nodes (1, 3)
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    ops.recorder.Ladruno(
+        file="run.ladruno",
+        nodal_responses=("displacement",),
+        nodes_pg="Base",
+    )
+
+    emitter = H5Emitter()
+    ops.build().emit(emitter)
+
+    import os
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".h5")
+    os.close(fd)
+    try:
+        emitter.write(tmp)
+        with h5py.File(tmp, "r") as f:
+            recorders = f["/opensees/recorders"]
+            names = list(recorders.keys())
+            assert len(names) == 1, f"expected ONE recorder group, got {names}"
+            rec_group = recorders[names[0]]
+            assert rec_group.attrs["type"] == "ladruno"
+
+            nums = list(rec_group.attrs["params"])
+            strs = list(rec_group.attrs["params_str"])
+            params: list[object] = []
+            for n, s in zip(nums, strs):
+                if isinstance(s, bytes):
+                    s = s.decode()
+                params.append(s if s else (int(n) if float(n).is_integer() else float(n)))
+            assert "-R" in params, f"ladruno params must carry -R; got {params!r}"
+            recorder_tag = int(params[params.index("-R") + 1])
+
+            assert "regions" in f["/opensees"]
+            regions = f["/opensees/regions"]
+            region_names = list(regions.keys())
+            assert len(region_names) == 1
+            assert int(regions[region_names[0]].attrs["tag"]) == recorder_tag
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def test_w_armado_fiber_section_in_force_beam_column() -> None:
     """``ops.section.W_fiber`` ships an end-to-end fiber section that
     a ``forceBeamColumn`` element can consume — the Cerro Lindo

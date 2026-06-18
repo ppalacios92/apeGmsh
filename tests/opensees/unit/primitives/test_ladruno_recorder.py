@@ -210,6 +210,137 @@ class TestLadrunoEnergy:
 
 
 # ---------------------------------------------------------------------------
+# Region filter (-R) — inherited from FilterableRecorder (ADR 0064)
+# ---------------------------------------------------------------------------
+
+class TestLadrunoFilterValidation:
+    def test_nodes_and_nodes_pg_mutex_raises(self) -> None:
+        with pytest.raises(
+            ValueError, match="supply only one of nodes= or nodes_pg="
+        ):
+            Ladruno(
+                file="run.ladruno",
+                nodal_responses=("displacement",),
+                nodes=(1, 2),
+                nodes_pg="Targets",
+            )
+
+    def test_elements_and_elements_pg_mutex_raises(self) -> None:
+        with pytest.raises(
+            ValueError, match="supply only one of elements= or elements_pg="
+        ):
+            Ladruno(
+                file="run.ladruno",
+                elem_responses=("stresses",),
+                elements=(1,),
+                elements_pg="Cols",
+            )
+
+    def test_node_only_filter_with_elem_responses_raises(self) -> None:
+        # Message must carry the recorder kind so the user knows which
+        # recorder rejected the combo.
+        with pytest.raises(ValueError, match="Ladruno: node-only filter"):
+            Ladruno(
+                file="run.ladruno",
+                nodal_responses=("displacement",),
+                elem_responses=("stresses",),
+                nodes_pg="Targets",
+            )
+
+    def test_element_only_filter_with_nodal_responses_raises(self) -> None:
+        with pytest.raises(ValueError, match="Ladruno: element-only filter"):
+            Ladruno(
+                file="run.ladruno",
+                nodal_responses=("displacement",),
+                elem_responses=("stresses",),
+                elements_pg="Cols",
+            )
+
+    def test_nodes_pg_alone_is_legal(self) -> None:
+        r = Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+        )
+        assert r.nodes_pg == "Targets"
+        assert r.has_filter() is True
+
+    def test_whole_model_has_no_filter(self) -> None:
+        r = Ladruno(file="run.ladruno", nodal_responses=("displacement",))
+        assert r.has_filter() is False
+        assert r._region_tag is None
+
+    def test_filter_with_energy_raises(self) -> None:
+        # -R scopes the value channels; -G energy is whole-model. The
+        # combo is forbidden in this slice (per-region energy deferred).
+        with pytest.raises(
+            ValueError, match="cannot be combined with energy=True"
+        ):
+            Ladruno(
+                file="run.ladruno",
+                nodal_responses=("displacement",),
+                nodes_pg="Targets",
+                energy=True,
+            )
+
+    def test_energy_without_filter_is_legal(self) -> None:
+        r = Ladruno(file="run.ladruno", energy=True)
+        assert r.energy is True
+        assert r.has_filter() is False
+
+
+class TestLadrunoFilterEmit:
+    def test_emit_with_region_tag_appends_R_flag(self) -> None:
+        # _region_tag is set by the build pipeline after region emission;
+        # _emit forwards it onto the ladruno command tail.
+        r = Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes=(5, 6),
+            _region_tag=42,
+        )
+        e = RecordingEmitter()
+        r._emit(e, tag=1)
+        args = e.calls[0][1]
+        assert "-R" in args
+        r_idx = args.index("-R")
+        assert args[r_idx + 1] == 42
+
+    def test_region_tag_emits_after_cadence(self) -> None:
+        r = Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes=(5,),
+            nsteps=10,
+            _region_tag=7,
+        )
+        e = RecordingEmitter()
+        r._emit(e, tag=1)
+        assert e.calls[0][1] == (
+            "ladruno", "run.ladruno", "-N", "displacement",
+            "-T", "nsteps", 10, "-R", 7,
+        )
+
+    def test_no_region_tag_omits_R_flag(self) -> None:
+        r = Ladruno(file="run.ladruno", nodal_responses=("displacement",))
+        e = RecordingEmitter()
+        r._emit(e, tag=1)
+        assert "-R" not in e.calls[0][1]
+
+    def test_pg_path_raises_not_implemented(self) -> None:
+        # Defense-in-depth — calling _emit directly with a pg= selector
+        # must raise; the build pipeline is the only legal driver.
+        r = Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+        )
+        e = RecordingEmitter()
+        with pytest.raises(NotImplementedError, match="build pipeline"):
+            r._emit(e, tag=1)
+
+
+# ---------------------------------------------------------------------------
 # Literal deck line — Tcl + Py emitters
 # ---------------------------------------------------------------------------
 
@@ -286,3 +417,13 @@ class TestLadrunoNamespace:
             file="run.ladruno", nodal_responses=("velocity",), energy=True,
         )
         assert r.energy is True
+
+    def test_namespace_filter_passthrough(self) -> None:
+        ops = apeSees(cast("object", MagicMock(name="FEMData")))
+        r = ops.recorder.Ladruno(
+            file="run.ladruno",
+            nodal_responses=("displacement",),
+            nodes_pg="Targets",
+        )
+        assert r.nodes_pg == "Targets"
+        assert r.has_filter() is True

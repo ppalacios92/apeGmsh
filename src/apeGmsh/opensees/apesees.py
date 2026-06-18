@@ -130,7 +130,7 @@ from ._internal.types import (
 )
 from .emitter.base import Emitter, StrategySpec
 from .node import Node, _NodeAccessor, _iter_tags
-from .recorder import MPCO
+from .recorder import FilterableRecorder
 from .transform import Cartesian, Orientation
 
 if TYPE_CHECKING:
@@ -336,10 +336,11 @@ class _MPCOFilterPlan:
 
     The ``materialised_spec`` carries ``_region_tag`` populated and
     ``nodes_pg`` / ``elements_pg`` cleared so the spec's ``_emit``
-    appends ``-R <region_tag>`` to the ``recorder mpco`` line without
-    re-entering ``MPCO.materialize`` (which would otherwise allocate a
-    new region tag and re-emit the region globally — the buggy pre-
-    ADR-0027 INV-4 behaviour for the partitioned path).
+    appends ``-R <region_tag>`` to the ``recorder`` line without
+    re-entering ``FilterableRecorder.materialize`` (which would otherwise
+    allocate a new region tag and re-emit the region globally — the buggy
+    pre-ADR-0027 INV-4 behaviour for the partitioned path). The spec is
+    any :class:`recorder.FilterableRecorder` (MPCO or Ladruno, ADR 0064).
 
     ``elem_ids`` carries **FEM eids** (not OpenSees element tags).
     Per-rank intersection in
@@ -350,7 +351,7 @@ class _MPCOFilterPlan:
     region_tag: int
     node_ids: tuple[int, ...]
     elem_ids: tuple[int, ...]
-    materialised_spec: "MPCO"
+    materialised_spec: "FilterableRecorder"
 
 
 # ---------------------------------------------------------------------------
@@ -3333,19 +3334,19 @@ class BuiltModel:
     def _recorder_node_targets(self, spec: "Recorder") -> "tuple[int, ...]":
         """Return the FEM node ids a recorder spec resolves to.
 
-        Handles :class:`recorder.Node` (``pg`` / ``nodes``) and
-        :class:`recorder.MPCO` (``nodes_pg`` / ``nodes``).  Returns an
-        empty tuple for recorder kinds that don't target nodes
-        (e.g. :class:`recorder.Element`-only or
-        :class:`RecorderDeclaration`).
+        Handles :class:`recorder.Node` (``pg`` / ``nodes``) and any
+        :class:`recorder.FilterableRecorder` — MPCO / Ladruno —
+        (``nodes_pg`` / ``nodes``).  Returns an empty tuple for recorder
+        kinds that don't target nodes (e.g. :class:`recorder.Element`-only
+        or :class:`RecorderDeclaration`).
         """
-        from .recorder import MPCO as MPCORec
+        from .recorder import FilterableRecorder as FilterableRec
         from .recorder import Node as NodeRec
         if isinstance(spec, NodeRec):
             if spec.pg is not None:
                 return expand_pg_to_nodes(self.fem, spec.pg)
             return spec.nodes or ()
-        if isinstance(spec, MPCORec):
+        if isinstance(spec, FilterableRec):
             if spec.nodes_pg is not None:
                 return expand_pg_to_nodes(self.fem, spec.nodes_pg)
             return spec.nodes or ()
@@ -3356,16 +3357,16 @@ class BuiltModel:
     ) -> "tuple[int, ...]":
         """Return the FEM element ids a recorder spec resolves to.
 
-        Handles :class:`recorder.Element` (``pg`` / ``elements``) and
-        :class:`recorder.MPCO` (``elements_pg`` / ``elements``).
-        Returns an empty tuple for recorder kinds that don't target
-        elements.
+        Handles :class:`recorder.Element` (``pg`` / ``elements``) and any
+        :class:`recorder.FilterableRecorder` — MPCO / Ladruno —
+        (``elements_pg`` / ``elements``).  Returns an empty tuple for
+        recorder kinds that don't target elements.
 
         ``expand_pg_to_elements`` returns ``[(eid, conn), ...]`` —
         this helper extracts just the eid component.
         """
         from .recorder import Element as ElementRec
-        from .recorder import MPCO as MPCORec
+        from .recorder import FilterableRecorder as FilterableRec
         if isinstance(spec, ElementRec):
             if spec.pg is not None:
                 return tuple(
@@ -3373,7 +3374,7 @@ class BuiltModel:
                     expand_pg_to_elements(self.fem, spec.pg)
                 )
             return spec.elements or ()
-        if isinstance(spec, MPCORec):
+        if isinstance(spec, FilterableRec):
             if spec.elements_pg is not None:
                 return tuple(
                     int(eid) for eid, _conn in
@@ -4123,7 +4124,10 @@ class BuiltModel:
         """
         plan: dict[int, _MPCOFilterPlan] = {}
         for p in post_element:
-            if not isinstance(p, MPCO):
+            # FilterableRecorder = MPCO + Ladruno (ADR 0064): both share
+            # the has_filter()/resolve_filter_ids()/-R region machinery,
+            # so the per-rank region pass covers both recorder kinds.
+            if not isinstance(p, FilterableRecorder):
                 continue
             if not p.has_filter():
                 continue
@@ -4209,12 +4213,13 @@ class BuiltModel:
                 for eid in rank_fem_eids:
                     ops_tag = fem_eid_to_ops_tag.get(int(eid))
                     if ops_tag is None:
+                        kind = type(entry.materialised_spec).__name__
                         raise BridgeError(
-                            f"MPCO recorder filter (rank {rank}): "
+                            f"{kind} recorder filter (rank {rank}): "
                             f"resolves to FEM eid {eid} but no element "
                             "was emitted at that eid — declare an "
                             "``ops.element.X(pg=...)`` primitive whose "
-                            "pg includes the MPCO recorder's "
+                            f"pg includes the {kind} recorder's "
                             "elements_pg."
                         )
                     rank_ops_tags.append(int(ops_tag))

@@ -77,6 +77,8 @@ __all__ = [
     # Typed primitives (Phase 3B)
     "Node",
     "Element",
+    # Shared region-filter base (MPCO + Ladruno)
+    "FilterableRecorder",
     "MPCO",
     # Ladruno fork recorder (recorder-integration L1)
     "Ladruno",
@@ -337,11 +339,375 @@ class Element(Recorder):
 
 
 # ---------------------------------------------------------------------------
+# FilterableRecorder — shared node/element region-filter machinery
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class FilterableRecorder(Recorder):
+    """Base for HDF5 recorders that share MPCO's region-filter surface.
+
+    Carries the four mutually-paired selectors (``nodes`` / ``nodes_pg``
+    / ``elements`` / ``elements_pg``) and the region-emit machinery that
+    turns them into an OpenSees ``region $tag -node ... -ele ...`` line
+    plus a ``-R $tag`` on the recorder command. :class:`MPCO` and
+    :class:`Ladruno` both inherit it; they differ only in the recorder
+    *kind* token and (Ladruno) the trailing ``-G energy`` channel.
+
+    Carries the shared value channels too (``file`` + ``nodal_responses``
+    / ``elem_responses`` ``-N``/``-E`` + ``dT``/``nsteps`` ``-T`` cadence),
+    so :meth:`_value_channel_args` builds the common ``-N ... -E ... -T ...
+    -R ...`` tail once for both subclasses — only the recorder *kind*
+    token and (Ladruno) the trailing ``-G energy`` are subclass-specific.
+
+    Subclasses own only their required-response rule (MPCO needs nodal or
+    element responses; Ladruno also accepts ``energy``); the cadence
+    mutex (:meth:`_validate_cadence`) and the four selector guards
+    (:meth:`_validate_filter`) are shared. The partition-aware build
+    pipeline (ADR 0027 INV-4) keys its per-rank region pass on
+    ``isinstance(spec, FilterableRecorder)`` via :meth:`has_filter` /
+    :meth:`resolve_filter_ids`.
+    """
+
+    file: str
+    nodal_responses: tuple[str, ...] = ()
+    elem_responses: tuple[str, ...] = ()
+    dT: float | None = None
+    nsteps: int | None = None
+    nodes: tuple[int, ...] | None = None
+    nodes_pg: str | None = None
+    elements: tuple[int, ...] | None = None
+    elements_pg: str | None = None
+    # When the build pipeline materialises the ``*_pg=`` form into a
+    # concrete region, it replays the spec with ``_region_tag=$tag``
+    # and ``nodes=``/``elements=`` populated; ``_emit`` reads
+    # ``_region_tag`` to append ``-R $tag`` to the recorder command. End
+    # users never set this directly.
+    _region_tag: int | None = None
+
+    # NOTE: ``dependencies()`` is intentionally NOT defined here.  The
+    # cross-family primitive contract (test_primitive_base) requires every
+    # *concrete* primitive to declare ``dependencies`` in its own
+    # ``__dict__``; MPCO and Ladruno each define it directly (both return
+    # ``()`` — recorders are leaves).
+
+    def _validate_cadence(self) -> None:
+        """Reject ``dT`` + ``nsteps`` together (call from ``__post_init__``)."""
+        if self.dT is not None and self.nsteps is not None:
+            raise ValueError(
+                f"{type(self).__name__}: supply only one of dT or nsteps "
+                f"(got dT={self.dT!r}, nsteps={self.nsteps!r})."
+            )
+
+    def _validate_filter(self) -> None:
+        """The four shared selector guards (call from ``__post_init__``).
+
+        The recorder name in each message comes from
+        ``type(self).__name__`` so MPCO and Ladruno self-identify; the
+        ``has_*`` booleans are derived from the base's own response fields.
+        """
+        kind = type(self).__name__
+        has_nodal = bool(self.nodal_responses)
+        has_elem = bool(self.elem_responses)
+        if self.nodes is not None and self.nodes_pg is not None:
+            raise ValueError(
+                f"{kind}: supply only one of nodes= or nodes_pg= "
+                f"(got nodes={self.nodes!r}, nodes_pg={self.nodes_pg!r})."
+            )
+        if self.elements is not None and self.elements_pg is not None:
+            raise ValueError(
+                f"{kind}: supply only one of elements= or elements_pg= "
+                f"(got elements={self.elements!r}, "
+                f"elements_pg={self.elements_pg!r})."
+            )
+        # Reject silent-empty-output asymmetric filter combos.  An
+        # OpenSees ``region`` populated with only ``-node ...`` does NOT
+        # auto-derive elements (``MeshRegion::setNodes`` is one-way; the
+        # reverse ``setElements`` -> nodes IS auto-derived), so a recorder
+        # filtered by a node-only region produces an empty element
+        # stream — a silent runtime bug.  Refuse the combo at
+        # construction time.
+        node_filter = self.nodes is not None or self.nodes_pg is not None
+        elem_filter = (
+            self.elements is not None or self.elements_pg is not None
+        )
+        if node_filter and not elem_filter and has_elem:
+            raise ValueError(
+                f"{kind}: node-only filter (nodes= or nodes_pg=) cannot be "
+                "combined with elem_responses — the auto-emitted region "
+                "would carry no -ele entries, and OpenSees MeshRegion "
+                "does not auto-derive elements from nodes, so the recorder "
+                "would produce an empty element stream.  Supply "
+                "elements= / elements_pg= (or drop elem_responses)."
+            )
+        if elem_filter and not node_filter and has_nodal:
+            # The symmetric case is less dangerous (OpenSees does
+            # auto-derive nodes from elements via the connectivity), but
+            # rejecting it keeps the API contract uniform and forces
+            # the user to be explicit about the nodal scope of the
+            # filter.
+            raise ValueError(
+                f"{kind}: element-only filter (elements= or elements_pg=) "
+                "cannot be combined with nodal_responses without an "
+                "explicit nodes= / nodes_pg= — the region's auto-derived "
+                "node set is implicit and varies with element type. "
+                "Supply nodes= / nodes_pg= explicitly (or drop "
+                "nodal_responses)."
+            )
+
+    def _require_materialized(self) -> None:
+        """Guard ``_emit`` against an unmaterialised ``*_pg=`` selector.
+
+        ``pg=`` selectors must be resolved by the build pipeline before
+        ``_emit`` runs; reaching ``_emit`` with one set means someone
+        bypassed the bridge.
+        """
+        if self.nodes_pg is not None or self.elements_pg is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__} nodes_pg=/elements_pg= must be "
+                "resolved by the bridge build pipeline. Drive emission "
+                "through apeSees(fem).tcl()/py()/run() instead of calling "
+                "_emit directly with a pg= spec."
+            )
+
+    def _value_channel_args(self) -> "list[int | float | str]":
+        """The shared ``-N ... -E ... -T ... -R ...`` arg tail.
+
+        Built once for both MPCO and Ladruno so the value-channel +
+        region wire grammar cannot drift between them (the ``.ladruno``
+        recorder is contracted to reproduce ``MPCORecorder``'s ``-N`` /
+        ``-E`` / ``-T`` grammar bit-for-bit). Excludes the leading
+        ``file`` and any subclass-specific trailing flag (Ladruno's
+        ``-G energy``). ``_region_tag`` is read with ``is not None`` so a
+        legitimate region tag of ``0`` still emits ``-R 0``.
+        """
+        args: list[int | float | str] = []
+        if self.nodal_responses:
+            args += ["-N", *self.nodal_responses]
+        if self.elem_responses:
+            args += ["-E", *self.elem_responses]
+        if self.dT is not None:
+            args += ["-T", "dt", self.dT]
+        elif self.nsteps is not None:
+            args += ["-T", "nsteps", self.nsteps]
+        if self._region_tag is not None:
+            args += ["-R", self._region_tag]
+        return args
+
+    def has_filter(self) -> bool:
+        """True iff any node/element selector was supplied.
+
+        Used by the partition-aware build pipeline (ADR 0027 INV-4) to
+        decide whether the recorder needs a per-rank region pass — a
+        whole-model recorder (no filter) emits one ``recorder`` line
+        and nothing else.
+        """
+        return (
+            self.nodes is not None
+            or self.nodes_pg is not None
+            or self.elements is not None
+            or self.elements_pg is not None
+        )
+
+    def resolve_filter_ids(
+        self,
+        fem: "FEMData",
+        fem_eid_to_ops_tag: "dict[int, int] | None" = None,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Resolve ``nodes`` / ``nodes_pg`` / ``elements`` / ``elements_pg``
+        to explicit id tuples — no emission, no tag allocation.
+
+        Returns ``(node_ids, elem_ids)``. Either may be empty when its
+        side was not requested; an empty *result* on a *requested* side
+        (e.g. ``nodes_pg="X"`` resolving to zero nodes) raises
+        :class:`BridgeError` to mirror the OpenSees runtime rejection of
+        an empty region.
+
+        ``fem_eid_to_ops_tag`` is the bridge-built ``{fem_eid: ops_tag}``
+        map for element fan-out.  When supplied AND ``elements_pg`` is
+        set, the resolved FEM eids are translated to OpenSees element
+        tags before they flow into the region's ``-ele`` arg list
+        (same drift as the Element recorder, closed by
+        :meth:`Element.materialize`).  Lookup miss → :class:`BridgeError`.
+        When ``None`` (legacy direct callers) the FEM eids are returned
+        verbatim — the partition orchestrator uses this form so it can
+        intersect per-rank in FEM-eid space, then translate at the
+        final region-emit step.
+
+        This is the partition-aware split-point of the legacy single-
+        pass :meth:`materialize`: the partition orchestrator calls
+        ``resolve_filter_ids`` once globally to determine the full
+        filter id set, then intersects per-rank before emitting the
+        region.  Whole-model recording (``has_filter() is False``) is
+        a no-op pass-through — callers should not invoke this method
+        in that case.
+        """
+        from ._internal.build import (
+            BridgeError,
+            expand_pg_to_elements,
+            expand_pg_to_nodes,
+        )
+
+        kind = type(self).__name__
+
+        # Resolve node-side selector.
+        node_ids: tuple[int, ...] = ()
+        if self.nodes_pg is not None:
+            node_ids = expand_pg_to_nodes(fem, self.nodes_pg)
+            if not node_ids:
+                raise BridgeError(
+                    f"{kind} recorder filter: nodes_pg={self.nodes_pg!r} "
+                    "resolved to zero nodes against the FEM snapshot. "
+                    "An empty region is rejected by OpenSees at runtime; "
+                    "check the PG name spelling and that the PG was "
+                    "populated before get_fem_data."
+                )
+        elif self.nodes is not None:
+            node_ids = tuple(int(n) for n in self.nodes)
+            if not node_ids:
+                raise BridgeError(
+                    f"{kind} recorder filter: nodes=() is empty.  An empty "
+                    "region is rejected by OpenSees at runtime; supply a "
+                    "non-empty tuple or drop the nodes= kwarg."
+                )
+
+        # Resolve element-side selector.
+        elem_ids: tuple[int, ...] = ()
+        if self.elements_pg is not None:
+            fem_eids = tuple(
+                eid for eid, _conn in expand_pg_to_elements(fem, self.elements_pg)
+            )
+            if not fem_eids:
+                raise BridgeError(
+                    f"{kind} recorder filter: elements_pg={self.elements_pg!r} "
+                    "resolved to zero elements against the FEM snapshot. "
+                    "An empty region is rejected by OpenSees at runtime; "
+                    "check the PG name spelling and that elements were "
+                    "registered against it before get_fem_data."
+                )
+            if fem_eid_to_ops_tag is None:
+                # Legacy / partition-orchestrator form: return FEM eids
+                # verbatim so the caller can intersect per-rank in
+                # FEM-eid space.  The bridge's flat path always supplies
+                # the map; the partition path translates at the final
+                # per-rank region-emit step.
+                elem_ids = fem_eids
+            else:
+                ops_tags: list[int] = []
+                for eid in fem_eids:
+                    ops_tag = fem_eid_to_ops_tag.get(int(eid))
+                    if ops_tag is None:
+                        raise BridgeError(
+                            f"{kind} recorder filter: elements_pg="
+                            f"{self.elements_pg!r} resolves to FEM eid "
+                            f"{eid} but no element was emitted at that "
+                            "eid — declare an "
+                            "``ops.element.X(pg=...)`` primitive whose "
+                            f"pg includes {self.elements_pg!r}."
+                        )
+                    ops_tags.append(int(ops_tag))
+                elem_ids = tuple(ops_tags)
+        elif self.elements is not None:
+            elem_ids = tuple(int(e) for e in self.elements)
+            if not elem_ids:
+                raise BridgeError(
+                    f"{kind} recorder filter: elements=() is empty.  An "
+                    "empty region is rejected by OpenSees at runtime; "
+                    "supply a non-empty tuple or drop the elements= kwarg."
+                )
+
+        return node_ids, elem_ids
+
+    def materialize(
+        self,
+        emitter: "Emitter",
+        fem: "FEMData",
+        tags: "TagAllocator | None",
+        fem_eid_to_ops_tag: "dict[int, int] | None" = None,
+    ) -> "FilterableRecorder":
+        """Resolve filter selectors against the FEM and emit the region.
+
+        Whole-model recording (no filter selectors) is a no-op pass-
+        through.  When any of ``nodes`` / ``nodes_pg`` / ``elements`` /
+        ``elements_pg`` is set, this method:
+
+        1. Resolves ``*_pg`` to explicit id tuples via the bridge's
+           PG-expansion helpers; refuses empty resolutions with
+           :class:`BridgeError` (an empty OpenSees region is rejected
+           at runtime).
+        2. Allocates one fresh region tag from ``tags`` (must be
+           supplied — the bridge build pipeline forwards the
+           ``TagAllocator``).
+        3. Emits one ``region $tag -node ... -ele ...`` line on
+           ``emitter``.
+        4. Returns a clone with the filter selectors cleared and
+           ``_region_tag`` populated, so the subsequent ``_emit``
+           appends ``-R $tag`` to the recorder command.
+
+        Used by the flat / unpartitioned emit path.  The partitioned
+        emit path (ADR 0027 INV-4) invokes :meth:`resolve_filter_ids`
+        once and emits the per-rank region line itself; it then
+        injects ``_region_tag=`` onto the spec via
+        :func:`dataclasses.replace` directly, bypassing this method.
+        """
+        if not self.has_filter():
+            return self
+
+        from ._internal.build import BridgeError
+
+        kind = type(self).__name__
+
+        if tags is None:
+            raise BridgeError(
+                f"{kind} with nodes=/elements=/nodes_pg=/elements_pg= filter "
+                "requires a TagAllocator on emit_recorder_spec(..., tags=); "
+                "the bridge build pipeline supplies one — tests that "
+                "bypass the bridge must pass it explicitly."
+            )
+
+        # ``elements_pg=`` resolution translates FEM eids → OpenSees
+        # element tags via the bridge-built map (same drift as the
+        # Element recorder, closed by ``Element.materialize`` above).
+        # The partitioned emit path drives this method-bypass via
+        # ``_plan_partitioned_mpco_recorders`` + ``_emit_mpco_filter_
+        # regions_for_rank`` (which keeps the resolution in FEM-eid
+        # space so the per-rank ``element_owner`` intersection works,
+        # then translates at the final region-emit step).
+        node_ids, elem_ids = self.resolve_filter_ids(
+            fem, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
+        )
+
+        # Allocate one region tag for this recorder and emit it.
+        # One ``region`` command can carry both ``-node`` and ``-ele``
+        # flags; the recorder's ``-R`` then filters both nodal and
+        # element results.  At least one of node_ids / elem_ids is
+        # guaranteed non-empty (empty-resolution branches in
+        # resolve_filter_ids raise before we get here, and
+        # __post_init__ already verified at least one selector was
+        # supplied).
+        region_tag = tags.allocate("region")
+        region_args: list[int | float | str] = []
+        if node_ids:
+            region_args += ["-node", *node_ids]
+        if elem_ids:
+            region_args += ["-ele", *elem_ids]
+        emitter.region(region_tag, *region_args)
+
+        return replace(
+            self,
+            nodes_pg=None,
+            elements_pg=None,
+            nodes=node_ids if node_ids else None,
+            elements=elem_ids if elem_ids else None,
+            _region_tag=region_tag,
+        )
+
+
+# ---------------------------------------------------------------------------
 # MPCO — ``recorder mpco ...`` (HDF5)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class MPCO(Recorder):
+class MPCO(FilterableRecorder):
     """``recorder mpco`` — write a single HDF5 ``.mpco`` file.
 
     OpenSees command::
@@ -413,21 +779,8 @@ class MPCO(Recorder):
     with explicit ``nodes=``/``elements=`` before driving ``_emit``.
     """
 
-    file: str
-    nodal_responses: tuple[str, ...] = ()
-    elem_responses: tuple[str, ...] = ()
-    dT: float | None = None
-    nsteps: int | None = None
-    nodes: tuple[int, ...] | None = None
-    nodes_pg: str | None = None
-    elements: tuple[int, ...] | None = None
-    elements_pg: str | None = None
-    # When the build pipeline materialises the ``*_pg=`` form into a
-    # concrete region, it replays the spec with ``_region_tag=$tag``
-    # and ``nodes=``/``elements=`` populated; ``_emit`` reads
-    # ``_region_tag`` to append ``-R $tag`` to the MPCO command. End
-    # users never set this directly.
-    _region_tag: int | None = None
+    # ``file`` + value-channel + filter fields are inherited from
+    # FilterableRecorder; MPCO adds no fields of its own.
 
     def __post_init__(self) -> None:
         if not (self.nodal_responses or self.elem_responses):
@@ -435,290 +788,15 @@ class MPCO(Recorder):
                 "MPCO: at least one of nodal_responses or "
                 "elem_responses required."
             )
-        if self.dT is not None and self.nsteps is not None:
-            raise ValueError(
-                "MPCO: supply only one of dT or nsteps "
-                f"(got dT={self.dT!r}, nsteps={self.nsteps!r})."
-            )
-        if self.nodes is not None and self.nodes_pg is not None:
-            raise ValueError(
-                "MPCO: supply only one of nodes= or nodes_pg= "
-                f"(got nodes={self.nodes!r}, nodes_pg={self.nodes_pg!r})."
-            )
-        if self.elements is not None and self.elements_pg is not None:
-            raise ValueError(
-                "MPCO: supply only one of elements= or elements_pg= "
-                f"(got elements={self.elements!r}, "
-                f"elements_pg={self.elements_pg!r})."
-            )
-        # Reject silent-empty-output asymmetric filter combos.  An
-        # OpenSees ``region`` populated with only ``-node ...`` does NOT
-        # auto-derive elements (``MeshRegion::setNodes`` is one-way; the
-        # reverse ``setElements`` -> nodes IS auto-derived), so MPCO
-        # filtered by a node-only region produces an empty element
-        # stream — a silent runtime bug.  Refuse the combo at
-        # construction time.
-        node_filter = self.nodes is not None or self.nodes_pg is not None
-        elem_filter = (
-            self.elements is not None or self.elements_pg is not None
-        )
-        if (
-            node_filter and not elem_filter and self.elem_responses
-        ):
-            raise ValueError(
-                "MPCO: node-only filter (nodes= or nodes_pg=) cannot be "
-                "combined with elem_responses — the auto-emitted region "
-                "would carry no -ele entries, and OpenSees MeshRegion "
-                "does not auto-derive elements from nodes, so MPCO "
-                "would produce an empty element stream.  Supply "
-                "elements= / elements_pg= (or drop elem_responses)."
-            )
-        if (
-            elem_filter and not node_filter and self.nodal_responses
-        ):
-            # The symmetric case is less dangerous (OpenSees does
-            # auto-derive nodes from elements via the connectivity), but
-            # rejecting it keeps the API contract uniform and forces
-            # the user to be explicit about the nodal scope of the
-            # filter.
-            raise ValueError(
-                "MPCO: element-only filter (elements= or elements_pg=) "
-                "cannot be combined with nodal_responses without an "
-                "explicit nodes= / nodes_pg= — the region's auto-derived "
-                "node set is implicit and varies with element type. "
-                "Supply nodes= / nodes_pg= explicitly (or drop "
-                "nodal_responses)."
-            )
+        self._validate_cadence()
+        self._validate_filter()
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()
 
-    def has_filter(self) -> bool:
-        """True iff any node/element selector was supplied.
-
-        Used by the partition-aware build pipeline (ADR 0027 INV-4) to
-        decide whether the recorder needs a per-rank region pass — a
-        whole-model MPCO (no filter) emits one ``recorder mpco`` line
-        and nothing else.
-        """
-        return (
-            self.nodes is not None
-            or self.nodes_pg is not None
-            or self.elements is not None
-            or self.elements_pg is not None
-        )
-
-    def resolve_filter_ids(
-        self,
-        fem: "FEMData",
-        fem_eid_to_ops_tag: "dict[int, int] | None" = None,
-    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-        """Resolve ``nodes`` / ``nodes_pg`` / ``elements`` / ``elements_pg``
-        to explicit id tuples — no emission, no tag allocation.
-
-        Returns ``(node_ids, elem_ids)``. Either may be empty when its
-        side was not requested; an empty *result* on a *requested* side
-        (e.g. ``nodes_pg="X"`` resolving to zero nodes) raises
-        :class:`BridgeError` to mirror the OpenSees runtime rejection of
-        an empty region.
-
-        ``fem_eid_to_ops_tag`` is the bridge-built ``{fem_eid: ops_tag}``
-        map for element fan-out.  When supplied AND ``elements_pg`` is
-        set, the resolved FEM eids are translated to OpenSees element
-        tags before they flow into the region's ``-ele`` arg list
-        (same drift as the Element recorder, closed by
-        :meth:`Element.materialize`).  Lookup miss → :class:`BridgeError`.
-        When ``None`` (legacy direct callers) the FEM eids are returned
-        verbatim — the partition orchestrator uses this form so it can
-        intersect per-rank in FEM-eid space, then translate at the
-        final region-emit step.
-
-        This is the partition-aware split-point of the legacy single-
-        pass :meth:`materialize`: the partition orchestrator calls
-        ``resolve_filter_ids`` once globally to determine the full
-        filter id set, then intersects per-rank before emitting the
-        region.  Whole-model recording (``has_filter() is False``) is
-        a no-op pass-through — callers should not invoke this method
-        in that case.
-        """
-        from ._internal.build import (
-            BridgeError,
-            expand_pg_to_elements,
-            expand_pg_to_nodes,
-        )
-
-        # Resolve node-side selector.
-        node_ids: tuple[int, ...] = ()
-        if self.nodes_pg is not None:
-            node_ids = expand_pg_to_nodes(fem, self.nodes_pg)
-            if not node_ids:
-                raise BridgeError(
-                    f"MPCO recorder filter: nodes_pg={self.nodes_pg!r} "
-                    "resolved to zero nodes against the FEM snapshot. "
-                    "An empty region is rejected by OpenSees at runtime; "
-                    "check the PG name spelling and that the PG was "
-                    "populated before get_fem_data."
-                )
-        elif self.nodes is not None:
-            node_ids = tuple(int(n) for n in self.nodes)
-            if not node_ids:
-                raise BridgeError(
-                    "MPCO recorder filter: nodes=() is empty.  An empty "
-                    "region is rejected by OpenSees at runtime; supply a "
-                    "non-empty tuple or drop the nodes= kwarg."
-                )
-
-        # Resolve element-side selector.
-        elem_ids: tuple[int, ...] = ()
-        if self.elements_pg is not None:
-            fem_eids = tuple(
-                eid for eid, _conn in expand_pg_to_elements(fem, self.elements_pg)
-            )
-            if not fem_eids:
-                raise BridgeError(
-                    f"MPCO recorder filter: elements_pg={self.elements_pg!r} "
-                    "resolved to zero elements against the FEM snapshot. "
-                    "An empty region is rejected by OpenSees at runtime; "
-                    "check the PG name spelling and that elements were "
-                    "registered against it before get_fem_data."
-                )
-            if fem_eid_to_ops_tag is None:
-                # Legacy / partition-orchestrator form: return FEM eids
-                # verbatim so the caller can intersect per-rank in
-                # FEM-eid space.  The bridge's flat path always supplies
-                # the map; the partition path translates at the final
-                # per-rank region-emit step.
-                elem_ids = fem_eids
-            else:
-                ops_tags: list[int] = []
-                for eid in fem_eids:
-                    ops_tag = fem_eid_to_ops_tag.get(int(eid))
-                    if ops_tag is None:
-                        raise BridgeError(
-                            f"MPCO recorder filter: elements_pg="
-                            f"{self.elements_pg!r} resolves to FEM eid "
-                            f"{eid} but no element was emitted at that "
-                            "eid — declare an "
-                            "``ops.element.X(pg=...)`` primitive whose "
-                            f"pg includes {self.elements_pg!r}."
-                        )
-                    ops_tags.append(int(ops_tag))
-                elem_ids = tuple(ops_tags)
-        elif self.elements is not None:
-            elem_ids = tuple(int(e) for e in self.elements)
-            if not elem_ids:
-                raise BridgeError(
-                    "MPCO recorder filter: elements=() is empty.  An "
-                    "empty region is rejected by OpenSees at runtime; "
-                    "supply a non-empty tuple or drop the elements= kwarg."
-                )
-
-        return node_ids, elem_ids
-
-    def materialize(
-        self,
-        emitter: "Emitter",
-        fem: "FEMData",
-        tags: "TagAllocator | None",
-        fem_eid_to_ops_tag: "dict[int, int] | None" = None,
-    ) -> "MPCO":
-        """Resolve filter selectors against the FEM and emit the region.
-
-        Whole-model recording (no filter selectors) is a no-op pass-
-        through.  When any of ``nodes`` / ``nodes_pg`` / ``elements`` /
-        ``elements_pg`` is set, this method:
-
-        1. Resolves ``*_pg`` to explicit id tuples via the bridge's
-           PG-expansion helpers; refuses empty resolutions with
-           :class:`BridgeError` (an empty OpenSees region is rejected
-           at runtime).
-        2. Allocates one fresh region tag from ``tags`` (must be
-           supplied — the bridge build pipeline forwards the
-           ``TagAllocator``).
-        3. Emits one ``region $tag -node ... -ele ...`` line on
-           ``emitter``.
-        4. Returns a clone with the filter selectors cleared and
-           ``_region_tag`` populated, so the subsequent ``_emit``
-           appends ``-R $tag`` to the MPCO command.
-
-        Used by the flat / unpartitioned emit path.  The partitioned
-        emit path (ADR 0027 INV-4) invokes :meth:`resolve_filter_ids`
-        once and emits the per-rank region line itself; it then
-        injects ``_region_tag=`` onto the spec via
-        :func:`dataclasses.replace` directly, bypassing this method.
-        """
-        if not self.has_filter():
-            return self
-
-        from ._internal.build import BridgeError
-
-        if tags is None:
-            raise BridgeError(
-                "MPCO with nodes=/elements=/nodes_pg=/elements_pg= filter "
-                "requires a TagAllocator on emit_recorder_spec(..., tags=); "
-                "the bridge build pipeline supplies one — tests that "
-                "bypass the bridge must pass it explicitly."
-            )
-
-        # ``elements_pg=`` resolution translates FEM eids → OpenSees
-        # element tags via the bridge-built map (same drift as the
-        # Element recorder, closed by ``Element.materialize`` above).
-        # The partitioned emit path drives this method-bypass via
-        # ``_plan_partitioned_mpco_recorders`` + ``_emit_mpco_filter_
-        # regions_for_rank`` (which keeps the resolution in FEM-eid
-        # space so the per-rank ``element_owner`` intersection works,
-        # then translates at the final region-emit step).
-        node_ids, elem_ids = self.resolve_filter_ids(
-            fem, fem_eid_to_ops_tag=fem_eid_to_ops_tag,
-        )
-
-        # Allocate one region tag for this MPCO recorder and emit it.
-        # One ``region`` command can carry both ``-node`` and ``-ele``
-        # flags; MPCO's ``-R`` then filters both nodal and element
-        # results.  At least one of node_ids / elem_ids is guaranteed
-        # non-empty (empty-resolution branches in resolve_filter_ids
-        # raise before we get here, and __post_init__ already verified
-        # at least one selector was supplied).
-        region_tag = tags.allocate("region")
-        region_args: list[int | float | str] = []
-        if node_ids:
-            region_args += ["-node", *node_ids]
-        if elem_ids:
-            region_args += ["-ele", *elem_ids]
-        emitter.region(region_tag, *region_args)
-
-        return replace(
-            self,
-            nodes_pg=None,
-            elements_pg=None,
-            nodes=node_ids if node_ids else None,
-            elements=elem_ids if elem_ids else None,
-            _region_tag=region_tag,
-        )
-
     def _emit(self, emitter: "Emitter", tag: int) -> None:
-        # ``pg=`` selectors must be materialised by the build pipeline
-        # before _emit runs; reaching here with one set means someone
-        # bypassed the bridge.
-        if self.nodes_pg is not None or self.elements_pg is not None:
-            raise NotImplementedError(
-                "MPCO nodes_pg=/elements_pg= must be resolved by the "
-                "bridge build pipeline. Drive emission through "
-                "apeSees(fem).tcl()/py()/run() instead of calling "
-                "_emit directly with a pg= spec."
-            )
-        args: list[int | float | str] = [self.file]
-        if self.nodal_responses:
-            args += ["-N", *self.nodal_responses]
-        if self.elem_responses:
-            args += ["-E", *self.elem_responses]
-        if self.dT is not None:
-            args += ["-T", "dt", self.dT]
-        elif self.nsteps is not None:
-            args += ["-T", "nsteps", self.nsteps]
-        if self._region_tag is not None:
-            args += ["-R", self._region_tag]
-        emitter.recorder("mpco", *args)
+        self._require_materialized()
+        emitter.recorder("mpco", self.file, *self._value_channel_args())
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +804,7 @@ class MPCO(Recorder):
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class Ladruno(Recorder):
+class Ladruno(FilterableRecorder):
     """``recorder ladruno`` — write a single HDF5 ``.ladruno`` file.
 
     **Fork-only.** The ``ladruno`` recorder exists only in the Ladruno
@@ -737,23 +815,37 @@ class Ladruno(Recorder):
     (``ops.run()`` / the live emitter). Gate at the point of use, never
     at import.
 
-    OpenSees command (whole-model value channels + energy balance)::
+    OpenSees command (value channels + region filter + energy balance)::
 
         recorder ladruno fname.ladruno [-N nodal_responses...]
                                        [-E elem_responses...]
                                        [-T dt $dt | -T nsteps $n]
+                                       [-R $regTag]
                                        [-G energy]
 
     The ``.ladruno`` recorder is forked from the frozen ``MPCORecorder``
     and shares its value-channel command grammar (the ``-N``/``-E``/
     ``-T`` channels reproduce the frozen recorder to 1e-12), so this
-    dataclass mirrors :class:`MPCO` for those channels. It diverges only
-    in the recorder *kind* token (``ladruno`` vs ``mpco``) and the output
-    extension (``.ladruno``).
+    dataclass mirrors :class:`MPCO` for those channels and inherits the
+    same region-filter machinery from :class:`FilterableRecorder`. It
+    diverges only in the recorder *kind* token (``ladruno`` vs ``mpco``),
+    the output extension (``.ladruno``), and the trailing ``-G energy``
+    channel.
 
     Cadence is selected by exactly one of ``dT`` (seconds) or ``nsteps``
     (analysis steps). Supplying both raises ``ValueError``; supplying
     neither records every analysis step.
+
+    **Filtering** — like MPCO, Ladruno records the whole model by
+    default. Supply any of ``nodes=`` / ``nodes_pg=`` / ``elements=`` /
+    ``elements_pg=`` to restrict output: the build pipeline auto-emits an
+    OpenSees ``region $tag -node ... -ele ...`` command before the
+    recorder and passes ``-R $tag`` to ``ladruno``. ``nodes=`` is
+    mutually exclusive with ``nodes_pg=`` (same for the element pair).
+    A node-only filter cannot be combined with ``elem_responses`` (and
+    vice versa) — the auto-region would carry no entries on the other
+    side and produce an empty stream. The ``-R $tag`` is emitted
+    **before** ``-G energy`` so the energy flag stays last.
 
     ``energy=True`` adds the fork's whole-model energy-balance channel
     (``-G energy`` → ``RESULTS/ON_DOMAIN/energyBalance``, components
@@ -763,14 +855,21 @@ class Ladruno(Recorder):
     flag, so ``-G energy -T nsteps 10`` is a parse error while
     ``-T nsteps 10 -G energy`` runs (run-verified on the fork build).
 
-    Not in this slice (recorder-plan L1)
-    ------------------------------------
-    * **Region filter (``-R``)** — the ``nodes=``/``elements=`` region
-      fan-out (mirrors :class:`MPCO`'s filter machinery) is deferred:
-      the canonical ``.ladruno`` is self-sufficient and the common case
-      is whole-model recording.
+    A region filter **cannot** be combined with ``energy=True`` in this
+    slice: ``-R`` scopes the value channels while ``-G energy`` (no
+    trailing tag) is whole-model, so the combination would silently
+    record region stresses alongside a whole-model energy balance from
+    one recorder. Use a separate whole-model Ladruno for energy. The
+    clean per-region form ``-G energy <regionTag...>`` is the deferred
+    follow-up (see below); it will reuse this recorder's region tag.
+
+    Deferred (recorder-plan follow-up)
+    ----------------------------------
     * **Per-region energy (``-G energy <regionTag...>``)** — needs the
-      bridge-region → OpenSees-tag seam; whole-model energy ships now.
+      C++ ``-G energy <regionTag>`` path run-verified on the fork build;
+      will flip the ``region + energy`` guard into ``-G energy
+      $region_tag`` reusing the tag :meth:`materialize` already
+      allocates (ADR 0064 §4).
 
     Parameters
     ----------
@@ -790,14 +889,26 @@ class Ladruno(Recorder):
         Optional step-based cadence (every N analysis steps). Mutually
         exclusive with ``dT``.
     energy
-        Record the whole-model energy balance (``-G energy``).
+        Record the whole-model energy balance (``-G energy``). Cannot be
+        combined with a region filter in this slice.
+    nodes
+        Explicit tuple of node tags for the region filter. Mutually
+        exclusive with ``nodes_pg``.
+    nodes_pg
+        Physical-group label whose nodes the region filter targets.
+        Mutually exclusive with ``nodes``. Resolved by the bridge build
+        pipeline at emit time.
+    elements
+        Explicit tuple of element tags for the region filter. Mutually
+        exclusive with ``elements_pg``.
+    elements_pg
+        Physical-group label whose elements the region filter targets.
+        Mutually exclusive with ``elements``. Resolved by the bridge
+        build pipeline at emit time.
     """
 
-    file: str
-    nodal_responses: tuple[str, ...] = ()
-    elem_responses: tuple[str, ...] = ()
-    dT: float | None = None
-    nsteps: int | None = None
+    # ``file`` + value-channel + filter fields are inherited from
+    # FilterableRecorder; Ladruno adds only the energy channel.
     energy: bool = False
 
     def __post_init__(self) -> None:
@@ -806,29 +917,29 @@ class Ladruno(Recorder):
                 "Ladruno: at least one of nodal_responses, "
                 "elem_responses or energy required."
             )
-        if self.dT is not None and self.nsteps is not None:
+        self._validate_cadence()
+        self._validate_filter()
+        if self.has_filter() and self.energy:
             raise ValueError(
-                "Ladruno: supply only one of dT or nsteps "
-                f"(got dT={self.dT!r}, nsteps={self.nsteps!r})."
+                "Ladruno: a region filter (nodes=/nodes_pg=/elements=/"
+                "elements_pg=) cannot be combined with energy=True — -R "
+                "scopes the value channels but -G energy is whole-model. "
+                "Use a separate whole-model Ladruno for energy, or wait on "
+                "per-region energy (ADR 0064 deferral)."
             )
 
     def dependencies(self) -> tuple[Primitive, ...]:
         return ()
 
     def _emit(self, emitter: "Emitter", tag: int) -> None:
-        args: list[int | float | str] = [self.file]
-        if self.nodal_responses:
-            args += ["-N", *self.nodal_responses]
-        if self.elem_responses:
-            args += ["-E", *self.elem_responses]
-        if self.dT is not None:
-            args += ["-T", "dt", self.dT]
-        elif self.nsteps is not None:
-            args += ["-T", "nsteps", self.nsteps]
+        self._require_materialized()
+        # ``_value_channel_args`` puts ``-R $tag`` last; the energy flag
+        # must trail it (the fork's -G parser eagerly eats trailing ints
+        # and cannot rewind past a following flag, so ``-G energy`` stays
+        # the final option). filter + energy is blocked at construction,
+        # so in practice only one of -R / -G energy is ever present.
+        args: list[int | float | str] = [self.file, *self._value_channel_args()]
         if self.energy:
-            # MUST stay the last option: the fork's -G parser eagerly
-            # consumes trailing region-tag ints and cannot rewind past
-            # a following flag ("-G energy -T nsteps 10" parse-errors).
             args += ["-G", "energy"]
         emitter.recorder("ladruno", *args)
 

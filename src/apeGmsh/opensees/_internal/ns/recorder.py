@@ -257,18 +257,28 @@ class _RecorderNS(_BridgeNamespace):
         dT: float | None = None,
         nsteps: int | None = None,
         energy: bool = False,
+        nodes: tuple[int, ...] | None = None,
+        nodes_pg: str | None = None,
+        elements: tuple[int, ...] | None = None,
+        elements_pg: str | None = None,
     ) -> Ladruno:
         """Construct + register a ``recorder ladruno`` (fork-only).
 
-        Whole-model value channels (``-N``/``-E``/``-T``), mirroring
-        :meth:`MPCO`, plus the whole-model energy balance
-        (``energy=True`` → ``-G energy``, read back via
-        ``Results.energy()``). At least one of ``nodal_responses``,
-        ``elem_responses`` or ``energy`` must be supplied; both ``dT``
-        and ``nsteps`` raises. Emission works on any build; the Ladruno
-        fork is required only to *run* the deck. See
+        Value channels (``-N``/``-E``/``-T``) mirroring :meth:`MPCO`,
+        plus the whole-model energy balance (``energy=True`` → ``-G
+        energy``, read back via ``Results.energy()``). At least one of
+        ``nodal_responses``, ``elem_responses`` or ``energy`` must be
+        supplied; both ``dT`` and ``nsteps`` raises.
+
+        ``nodes=`` / ``nodes_pg=`` and ``elements=`` / ``elements_pg=``
+        are pairwise mutex; supplying any of the four triggers
+        auto-emission of an OpenSees ``region`` plus ``-R $tag`` on the
+        ladruno line at build time (flat and partitioned). A region
+        filter cannot be combined with ``energy=True`` in this slice.
+        Emission works on any build; the Ladruno fork is required only
+        to *run* the deck. See
         :class:`apeGmsh.opensees.recorder.Ladruno` for the full contract
-        (and the deferred ``-R`` filter / per-region energy channels).
+        (and the deferred per-region energy channel).
         """
         return self._bridge._register(
             Ladruno(
@@ -278,6 +288,10 @@ class _RecorderNS(_BridgeNamespace):
                 dT=dT,
                 nsteps=nsteps,
                 energy=energy,
+                nodes=nodes,
+                nodes_pg=nodes_pg,
+                elements=elements,
+                elements_pg=elements_pg,
             )
         )
 

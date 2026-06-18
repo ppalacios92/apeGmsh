@@ -94,6 +94,14 @@ def _region_calls(calls: list[tuple]) -> list[tuple]:
     return [(n, a, k) for (n, a, k) in calls if n == "region"]
 
 
+def _ladruno_recorder_calls(calls: list[tuple]) -> list[tuple]:
+    """Filter for ``recorder("ladruno", ...)`` calls only."""
+    return [
+        (n, a, k) for (n, a, k) in calls
+        if n == "recorder" and a and a[0] == "ladruno"
+    ]
+
+
 def _scan_dash_R(mpco_args: tuple) -> int | None:
     """Pull the ``-R <tag>`` value out of an MPCO arg tail, or None if absent."""
     args = list(mpco_args)
@@ -321,6 +329,90 @@ def test_mpco_region_unpartitioned_byte_identical_to_pre_change() -> None:
     region_tag = int(region_calls[0][1][0])
     recorder_R = _scan_dash_R(mpco_recorder_calls[0][1])
     assert recorder_R == region_tag
+
+
+# ---------------------------------------------------------------------------
+# Test 3b — Ladruno region per-rank under partitioning (ADR 0064)
+# ---------------------------------------------------------------------------
+
+def test_ladruno_region_emitted_per_rank_under_partitioning() -> None:
+    """ADR 0064: a region-filtered Ladruno rides the SAME INV-4 per-rank
+    machinery as MPCO (it inherits ``FilterableRecorder``). The
+    ``recorder ladruno ... -R <tag>`` line emits once globally; the
+    ``region <tag> -node ... -ele ...`` command emits per-rank with the
+    rank-owned intersection; the tag is the same scalar everywhere.
+    """
+    fem = make_two_column_frame_partitioned()
+    ops = apeSees(cast("object", fem))  # type: ignore[arg-type]
+    ops.model(ndm=3, ndf=6)
+    transf = ops.geomTransf.Linear(vecxz=(1.0, 0.0, 0.0))
+    ops.element.elasticBeamColumn(
+        pg="Cols", transf=transf,
+        A=0.01, E=200e9, Iz=1e-4, Iy=1e-4, G=80e9, J=1e-4,
+    )
+    ops.recorder.Ladruno(
+        file="out/run.ladruno",
+        nodal_responses=("displacement",),
+        elem_responses=("stresses",),
+        nodes_pg="Base",
+        elements_pg="Cols",
+    )
+
+    rec = RecordingEmitter()
+    ops.build().emit(rec)
+
+    # Global scope: exactly one ``recorder ladruno`` line, no region leak.
+    global_calls = _global_calls(rec)
+    lad_globals = _ladruno_recorder_calls(global_calls)
+    assert len(lad_globals) == 1, (
+        f"INV-4: ``recorder ladruno`` must emit EXACTLY ONCE globally; "
+        f"got {lad_globals!r}"
+    )
+    assert _region_calls(global_calls) == [], (
+        "per-rank regions must NOT leak into global scope"
+    )
+
+    recorder_R_tag = _scan_dash_R(lad_globals[0][1])
+    assert recorder_R_tag is not None, (
+        "the global ``recorder ladruno`` line must carry ``-R <tag>``"
+    )
+
+    # Per-rank: each rank emits one region with the same shared tag.
+    per_rank = _per_rank_calls(rec)
+    assert set(per_rank) == {0, 1}
+    region_r0 = _region_calls(per_rank[0])
+    region_r1 = _region_calls(per_rank[1])
+    assert len(region_r0) == 1
+    assert len(region_r1) == 1
+    tag0 = int(region_r0[0][1][0])
+    tag1 = int(region_r1[0][1][0])
+    assert tag0 == tag1 == recorder_R_tag, (
+        f"region tag must be the SAME scalar across ranks AND the "
+        f"recorder ``-R`` reference; got r0={tag0}, r1={tag1}, "
+        f"-R={recorder_R_tag}"
+    )
+
+    def _scan_flag(args: tuple, flag: str) -> list:
+        if flag not in args:
+            return []
+        a = list(args)
+        i = a.index(flag) + 1
+        out = []
+        while i < len(a) and not (isinstance(a[i], str) and a[i].startswith("-")):
+            out.append(a[i])
+            i += 1
+        return out
+
+    # "Base" -> nodes (1, 3): rank 0 owns 1, rank 1 owns 3. "Cols" ->
+    # FEM eids (1, 2) -> ops tags (2, 3) after the element fan-out.
+    r0_nodes = sorted(int(x) for x in _scan_flag(region_r0[0][1], "-node"))
+    r1_nodes = sorted(int(x) for x in _scan_flag(region_r1[0][1], "-node"))
+    r0_eles = sorted(int(x) for x in _scan_flag(region_r0[0][1], "-ele"))
+    r1_eles = sorted(int(x) for x in _scan_flag(region_r1[0][1], "-ele"))
+    assert r0_nodes == [1]
+    assert r1_nodes == [3]
+    assert r0_eles == [2]
+    assert r1_eles == [3]
 
 
 # ---------------------------------------------------------------------------
