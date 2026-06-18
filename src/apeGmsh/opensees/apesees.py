@@ -417,7 +417,7 @@ def _write_split_tcl(
         ) as f:
             f.write(f"# apeGmsh split fragment: {label or 'host'}\n")
             if body:
-                f.write("\n".join(body) + "\n")
+                f.writelines(ln + "\n" for ln in body)
         source_lines.append(
             f"source [file join [file dirname [info script]] "
             f"parts {safe}.tcl]"
@@ -431,7 +431,7 @@ def _write_split_tcl(
         + lines[layout.module_end:]
     )
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 def _write_per_rank_tcl(
@@ -477,7 +477,7 @@ def _write_per_rank_tcl(
                 f"rank {span.rank}, block {n}\n"
             )
             if body:
-                f.write("\n".join(body) + "\n")
+                f.writelines(ln + "\n" for ln in body)
         driver.append(
             f"if {{[getPID] == {span.rank}}} {{ source [file join "
             f"[file dirname [info script]] ranks {fname}] }}"
@@ -486,7 +486,7 @@ def _write_per_rank_tcl(
         cursor = span.end
     driver.extend(lines[cursor:])
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 def _write_split_py(
@@ -543,7 +543,7 @@ def _write_split_py(
     )
     driver = lines[: layout.module_start] + inject + lines[layout.module_end:]
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 # ---------------------------------------------------------------------------
@@ -5988,7 +5988,7 @@ class apeSees:
                 _write_per_rank_tcl(path, emitter.lines(), spans)
             else:
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(emitter.lines()) + "\n")
+                    emitter.write_to(f)
         else:
             layout = bm.emit(emitter, split=True)
             for _verb, _vargs in pre_prof:
@@ -6052,7 +6052,7 @@ class apeSees:
             for _verb, _vargs in post_prof:
                 emitter.profiler(_verb, *_vargs)
             with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(emitter.lines()) + "\n")
+                emitter.write_to(f)
         else:
             layout = bm.emit(emitter, split=True)
             for _verb, _vargs in pre_prof:
