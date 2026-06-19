@@ -191,5 +191,67 @@ class TestResolveVolumeLumped(unittest.TestCase):
             np.testing.assert_allclose(consistent[nid], lumped[nid])
 
 
+# =====================================================================
+# element_volumes_bulk — vectorized volume (must be bit-identical to the
+# per-element scalar element_volume; replaces the 648k-np.cross loop)
+# =====================================================================
+
+class TestBulkElementVolume(unittest.TestCase):
+
+    def _grid_hexes(self, nx, ny, nz):
+        """A structured unit-cube hex grid → (coords_by_tag, elements)."""
+        coords: dict[int, tuple[float, float, float]] = {}
+        tag = {}
+        t = 1
+        for k in range(nz + 1):
+            for j in range(ny + 1):
+                for i in range(nx + 1):
+                    tag[(i, j, k)] = t
+                    coords[t] = (float(i), float(j), float(k))
+                    t += 1
+        elems = []
+        for k in range(nz):
+            for j in range(ny):
+                for i in range(nx):
+                    elems.append(np.array([
+                        tag[(i, j, k)], tag[(i + 1, j, k)],
+                        tag[(i + 1, j + 1, k)], tag[(i, j + 1, k)],
+                        tag[(i, j, k + 1)], tag[(i + 1, j, k + 1)],
+                        tag[(i + 1, j + 1, k + 1)], tag[(i, j + 1, k + 1)],
+                    ]))
+        return coords, elems
+
+    def test_bulk_bit_identical_to_scalar_hex8(self):
+        coords, elems = self._grid_hexes(4, 3, 2)
+        r = _resolver(coords)
+        bulk = r.element_volumes_bulk(elems)
+        scalar = np.array([r.element_volume(e) for e in elems])
+        # bit-identical, not merely close — single shared primitive
+        self.assertTrue(np.array_equal(bulk, scalar))
+
+    def test_bulk_bit_identical_to_scalar_tet4(self):
+        r = _resolver({1: (0, 0, 0), 2: (1, 0, 0), 3: (0, 1, 0), 4: (0, 0, 1)})
+        elems = [np.array([1, 2, 3, 4])]
+        bulk = r.element_volumes_bulk(elems)
+        scalar = np.array([r.element_volume(e) for e in elems])
+        self.assertTrue(np.array_equal(bulk, scalar))
+
+    def test_bulk_conserves_total_volume(self):
+        # 4x3x2 unit-cube grid → total volume 24.0 exactly.
+        coords, elems = self._grid_hexes(4, 3, 2)
+        r = _resolver(coords)
+        self.assertAlmostEqual(float(r.element_volumes_bulk(elems).sum()), 24.0)
+
+    def test_lumped_mass_unchanged_by_bulk(self):
+        # one unit hex, density 8 → total mass 8, split 1.0 per node.
+        coords, elems = self._grid_hexes(1, 1, 1)
+        r = _resolver(coords)
+        defn = VolumeMassDef(target="vol", density=8.0)
+        recs = r.resolve_volume_lumped(defn, elems)
+        self.assertEqual(len(recs), 8)
+        for rec in recs:
+            np.testing.assert_allclose(rec.mass, (1.0, 1.0, 1.0, 0.0, 0.0, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

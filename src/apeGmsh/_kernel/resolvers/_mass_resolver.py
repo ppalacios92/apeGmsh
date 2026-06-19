@@ -57,6 +57,30 @@ from apeGmsh._kernel.records._masses import MassRecord
 # Helpers
 # ======================================================================
 
+# hex8 → 6-tetrahedron decomposition (must match element_volume's hex8 path
+# vertex-for-vertex so the vectorized bulk volume is bit-identical to the
+# scalar per-element computation).
+_HEX8_TETS = (
+    (0, 1, 2, 5), (0, 2, 3, 7), (0, 5, 2, 6),
+    (0, 5, 6, 7), (0, 7, 2, 6), (0, 4, 5, 7),
+)
+
+
+def _signed_six_volumes(pts: ndarray, a: int, b: int, c: int, d: int) -> ndarray:
+    """Per-element ``|(AB) · (AC × AD)|`` for the tet ``(a,b,c,d)``.
+
+    ``pts`` is ``(M, npe, 3)``.  Computed with the SAME primitive order as
+    the scalar path (``np.cross`` then a per-row dot) so the result is
+    bit-identical to :meth:`MassResolver.element_volume`.
+    """
+    ab = pts[:, b] - pts[:, a]
+    ac = pts[:, c] - pts[:, a]
+    ad = pts[:, d] - pts[:, a]
+    cr = np.cross(ac, ad)
+    dot = ab[:, 0] * cr[:, 0] + ab[:, 1] * cr[:, 1] + ab[:, 2] * cr[:, 2]
+    return np.abs(dot) / 6.0
+
+
 def _accumulate(accum: dict[int, ndarray], node_id: int, vec6: ndarray) -> None:
     """Accumulate a length-6 mass vector into the per-node sum."""
     if node_id in accum:
@@ -165,19 +189,13 @@ class MassResolver:
         n = len(conn_row)
         pts = np.array([self.coords_of(int(nid)) for nid in conn_row])
         if n == 4:
-            v = np.abs(np.dot(pts[1] - pts[0], np.cross(pts[2] - pts[0], pts[3] - pts[0]))) / 6.0
-            return float(v)
+            # single signed tet volume — shares _signed_six_volumes with the
+            # vectorized bulk path so both are bit-identical.
+            return float(_signed_six_volumes(pts[None, :, :], 0, 1, 2, 3)[0])
         if n == 8:
-            tets = [
-                (0, 1, 2, 5), (0, 2, 3, 7), (0, 5, 2, 6),
-                (0, 5, 6, 7), (0, 7, 2, 6), (0, 4, 5, 7),
-            ]
             tot = 0.0
-            for a, b, c, d in tets:
-                tot += np.abs(np.dot(
-                    pts[b] - pts[a],
-                    np.cross(pts[c] - pts[a], pts[d] - pts[a]),
-                )) / 6.0
+            for a, b, c, d in _HEX8_TETS:
+                tot += float(_signed_six_volumes(pts[None, :, :], a, b, c, d)[0])
             return float(tot)
         code = volume_code(n)
         if code is not None:
@@ -192,6 +210,42 @@ class MassResolver:
         # Unknown element type (pyramid, wedge15, …) — bbox last resort.
         mn, mx = pts.min(axis=0), pts.max(axis=0)
         return float(np.prod(mx - mn))
+
+    def element_volumes_bulk(self, elements: "list[ndarray]") -> ndarray:
+        """Vectorized volumes for a list of element connectivities.
+
+        Bit-identical to ``[self.element_volume(e) for e in elements]`` but
+        groups by node count and computes the hex8 / tet4 bulk (the common
+        solid-mesh case) with a few whole-array passes instead of per-element
+        ``np.cross`` — the per-element loop spent ~95% of its time in
+        ``np.cross`` axis-handling overhead (648k tiny calls for a 108k-hex
+        model).  Non-hex8/tet4 types fall back to the scalar path.
+        """
+        m = len(elements)
+        vols = np.empty(m, dtype=np.float64)
+        by_n: dict[int, list[int]] = {}
+        for i, row in enumerate(elements):
+            by_n.setdefault(len(row), []).append(i)
+        for n, idxs in by_n.items():
+            if n in (8, 4):
+                pos = np.asarray(idxs, dtype=np.intp)
+                conn = np.stack([np.asarray(elements[i]) for i in idxs])  # (M,n)
+                conn_idx = np.array(
+                    [[self._node_to_idx[int(t)] for t in row] for row in conn],
+                    dtype=np.intp,
+                )
+                pts = self.node_coords[conn_idx]  # (M, n, 3)
+                if n == 8:
+                    tot = np.zeros(len(idxs), dtype=np.float64)
+                    for a, b, c, d in _HEX8_TETS:
+                        tot += _signed_six_volumes(pts, a, b, c, d)
+                else:  # n == 4
+                    tot = _signed_six_volumes(pts, 0, 1, 2, 3)
+                vols[pos] = tot
+            else:
+                for i in idxs:
+                    vols[i] = self.element_volume(elements[i])
+        return vols
 
     # ------------------------------------------------------------------
     # Lumped mass — translational only, equal split per node
@@ -275,8 +329,9 @@ class MassResolver:
         dofs = defn.dofs
         rot = defn.rotational
         accum: dict[int, ndarray] = {}
-        for conn_row in elements:
-            V = self.element_volume(conn_row)
+        vols = self.element_volumes_bulk(elements)
+        for conn_row, V in zip(elements, vols):
+            V = float(V)
             if V <= 0:
                 continue
             m_share = rho * V / len(conn_row)
@@ -502,8 +557,9 @@ class MassResolver:
         rot = defn.rotational
         derive = getattr(defn, "derive_rotational", False)
         accum: dict[int, ndarray] = {}
-        for conn_row in elements:
-            V = self.element_volume(conn_row)
+        vols = self.element_volumes_bulk(elements)
+        for conn_row, V in zip(elements, vols):
+            V = float(V)
             if V <= 0:
                 continue
             code = volume_code(len(conn_row))
