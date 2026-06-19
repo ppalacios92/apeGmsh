@@ -427,5 +427,75 @@ class TestGeometryHelpers(unittest.TestCase):
         self.assertAlmostEqual(V, 1.0)
 
 
+# =====================================================================
+# element_volumes_bulk / element_measures_bulk — vectorized volume (must
+# be bit-identical to the per-element scalar path; replaces the np.cross loop)
+# =====================================================================
+
+class TestBulkElementVolume(unittest.TestCase):
+
+    def _grid_hexes(self, nx, ny, nz):
+        """A structured unit-cube hex grid → (coords_by_tag, elements)."""
+        coords: dict[int, tuple[float, float, float]] = {}
+        tag = {}
+        t = 1
+        for k in range(nz + 1):
+            for j in range(ny + 1):
+                for i in range(nx + 1):
+                    tag[(i, j, k)] = t
+                    coords[t] = (float(i), float(j), float(k))
+                    t += 1
+        elems = []
+        for k in range(nz):
+            for j in range(ny):
+                for i in range(nx):
+                    elems.append(np.array([
+                        tag[(i, j, k)], tag[(i + 1, j, k)],
+                        tag[(i + 1, j + 1, k)], tag[(i, j + 1, k)],
+                        tag[(i, j, k + 1)], tag[(i + 1, j, k + 1)],
+                        tag[(i + 1, j + 1, k + 1)], tag[(i, j + 1, k + 1)],
+                    ]))
+        return coords, elems
+
+    def test_bulk_bit_identical_to_scalar_hex8(self):
+        coords, elems = self._grid_hexes(4, 3, 2)
+        r = _resolver(coords)
+        bulk = r.element_volumes_bulk(elems)
+        scalar = np.array([r.element_volume(e) for e in elems])
+        self.assertTrue(np.array_equal(bulk, scalar))
+
+    def test_bulk_bit_identical_to_scalar_tet4(self):
+        r = _resolver({1: (0, 0, 0), 2: (1, 0, 0), 3: (0, 1, 0), 4: (0, 0, 1)})
+        elems = [np.array([1, 2, 3, 4])]
+        bulk = r.element_volumes_bulk(elems)
+        scalar = np.array([r.element_volume(e) for e in elems])
+        self.assertTrue(np.array_equal(bulk, scalar))
+
+    def test_measures_bulk_dim3_matches_volumes(self):
+        coords, elems = self._grid_hexes(3, 2, 2)
+        r = _resolver(coords)
+        self.assertTrue(np.array_equal(
+            r.element_measures_bulk(elems, 3), r.element_volumes_bulk(elems)))
+
+    def test_measures_bulk_dim2_matches_scalar(self):
+        # 2D quad faces → area path falls back to per-element scalar.
+        coords = {1: (0, 0, 0), 2: (2, 0, 0), 3: (2, 2, 0), 4: (0, 2, 0)}
+        r = _resolver(coords)
+        elems = [np.array([1, 2, 3, 4])]
+        bulk = r.element_measures_bulk(elems, 2)
+        scalar = np.array([r.element_measure(e, 2) for e in elems])
+        self.assertTrue(np.array_equal(bulk, scalar))
+
+    def test_gravity_tributary_unchanged_by_bulk(self):
+        # one unit hex, density 8, g=(0,0,-1) → total weight 8, per node 1.
+        coords, elems = self._grid_hexes(1, 1, 1)
+        r = _resolver(coords)
+        defn = GravityLoadDef(target="v", density=8.0, g=(0.0, 0.0, -1.0))
+        recs = r.resolve_gravity_tributary(defn, elems)
+        self.assertEqual(len(recs), 8)
+        for rec in recs:
+            np.testing.assert_allclose(rec.force_xyz, (0.0, 0.0, -1.0))
+
+
 if __name__ == "__main__":
     unittest.main()
