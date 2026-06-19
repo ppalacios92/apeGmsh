@@ -431,7 +431,7 @@ def _write_split_tcl(
         ) as f:
             f.write(f"# apeGmsh split fragment: {label or 'host'}\n")
             if body:
-                f.write("\n".join(body) + "\n")
+                f.writelines(ln + "\n" for ln in body)
         source_lines.append(
             f"source [file join [file dirname [info script]] "
             f"parts {safe}.tcl]"
@@ -445,7 +445,7 @@ def _write_split_tcl(
         + lines[layout.module_end:]
     )
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 def _write_per_rank_tcl(
@@ -491,7 +491,7 @@ def _write_per_rank_tcl(
                 f"rank {span.rank}, block {n}\n"
             )
             if body:
-                f.write("\n".join(body) + "\n")
+                f.writelines(ln + "\n" for ln in body)
         driver.append(
             f"if {{[getPID] == {span.rank}}} {{ source [file join "
             f"[file dirname [info script]] ranks {fname}] }}"
@@ -500,7 +500,7 @@ def _write_per_rank_tcl(
         cursor = span.end
     driver.extend(lines[cursor:])
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 def _write_split_py(
@@ -557,7 +557,7 @@ def _write_split_py(
     )
     driver = lines[: layout.module_start] + inject + lines[layout.module_end:]
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(driver) + "\n")
+        f.writelines(ln + "\n" for ln in driver)
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +623,11 @@ class BuiltModel:
     # references (Option B: the def holds the bond name, the bridge owns
     # the tag). Populated from the name-alias table at build() time.
     name_to_tag:             dict[str, int] = field(default_factory=dict)
+    # ADR 0065 Tier 2 — stream per-node masses straight from
+    # ``fem.nodes.masses`` at emit instead of materializing one bridge
+    # ``MassRecord`` per node (the 7M-object double-store). Set by
+    # ``apeSees.mass_from_model()``; consumed in the mass emit paths.
+    mass_from_model:         bool = False
 
     def _claimed_recorder_ids(self) -> "set[int]":
         """``id(...)``-set of recorders claimed by stage builders
@@ -2172,6 +2177,16 @@ class BuiltModel:
         }
         fix_plan_by_rank = self._bucket_fix_targets_by_rank(node_owners)
         mass_plan_by_rank = self._bucket_mass_targets_by_rank(primary_owner)
+        # ADR 0065 Tier 2 — model masses streamed from fem.nodes.masses,
+        # bucketed by PRIMARY owner (mass is additive under MP, so each node
+        # emits on one rank only), in snapshot order so the per-rank lines
+        # match an explicit per-node ops.mass loop byte-for-byte.
+        model_mass_by_rank: "dict[int, list[Any]]" = {}
+        if self.mass_from_model and self._guard_mass_from_model(emitter):
+            for _m in self.fem.nodes.masses:
+                _prk = primary_owner.get(int(_m.node_id))
+                if _prk is not None:
+                    model_mass_by_rank.setdefault(_prk, []).append(_m)
 
         # Pre-compute the post-element rank-local plan for the bridge's
         # fix / mass / region / load passes.  We use the same shapes
@@ -2243,6 +2258,11 @@ class BuiltModel:
                             mass_rec.values,
                             int(eff_ndf.get(nid, self.ndf)),
                             kind="mass", node=nid))
+                for _m in model_mass_by_rank.get(rank, ()):
+                    _nid = int(_m.node_id)
+                    emitter.mass(_nid, *fit_dof_vector(
+                        _m.mass, int(eff_ndf.get(_nid, self.ndf)),
+                        kind="mass", node=_nid))
 
                 # 7-bis. Named regions (per-rank intersection — INV-4).
                 self._emit_regions_partitioned(
@@ -3715,6 +3735,44 @@ class BuiltModel:
             for node_tag in self._resolve_node_target(rec.pg, rec.nodes):
                 emitter.fix(node_tag, *rec.dofs)
 
+    def _guard_mass_from_model(self, emitter: Emitter) -> bool:
+        """Validate a ``mass_from_model`` emit (ADR 0065 Tier 2).
+
+        Returns True when there are snapshot masses to stream, False when
+        none (a no-op declaration). Raises ``BridgeError`` if the emitter is
+        the H5 archival emitter (masses already persist in ``model.h5`` via
+        ``fem.nodes.masses`` — re-streaming would rebuild the 7M-object
+        materialization the feature exists to avoid), or if any node carries
+        both a snapshot mass and an explicit ``ops.mass`` (additive under MP
+        assembly → silent double-count).
+        """
+        masses = getattr(self.fem.nodes, "masses", None)
+        if not masses:
+            return False
+        if hasattr(emitter, "write_opensees_into"):
+            raise BridgeError(
+                "mass_from_model() is deck/live-only — nodal masses already "
+                "persist in model.h5 via fem.nodes.masses; do not re-stream "
+                "them through the H5 emitter."
+            )
+        if self.mass_records:
+            explicit = {
+                int(n)
+                for rec in self.mass_records
+                for n in self._resolve_node_target(rec.pg, rec.nodes)
+            }
+            overlap = sorted(
+                int(m.node_id) for m in masses if int(m.node_id) in explicit
+            )
+            if overlap:
+                raise BridgeError(
+                    "mass_from_model() and explicit ops.mass(...) both target "
+                    f"node(s) {overlap[:5]} (+{max(0, len(overlap) - 5)} more) "
+                    "— nodal mass is additive under MP assembly, so emitting "
+                    "both would double-count. Use exactly one mass channel."
+                )
+        return True
+
     def _emit_masses(
         self, emitter: Emitter,
         inferred_ndf: "dict[int, int] | None" = None,
@@ -3726,6 +3784,12 @@ class BuiltModel:
                 emitter.mass(node, *fit_dof_vector(
                     rec.values, int(eff.get(node, self.ndf)),
                     kind="mass", node=node))
+        if self.mass_from_model and self._guard_mass_from_model(emitter):
+            for m in self.fem.nodes.masses:
+                nid = int(m.node_id)
+                emitter.mass(nid, *fit_dof_vector(
+                    m.mass, int(eff.get(nid, self.ndf)),
+                    kind="mass", node=nid))
 
     def _emit_fixes_partitioned(
         self, emitter: Emitter, owned_nodes: set[int],
@@ -3764,6 +3828,13 @@ class BuiltModel:
                     emitter.mass(node, *fit_dof_vector(
                         rec.values, int(eff.get(node, self.ndf)),
                         kind="mass", node=node))
+        if self.mass_from_model and self._guard_mass_from_model(emitter):
+            for m in self.fem.nodes.masses:
+                nid = int(m.node_id)
+                if nid in owned_nodes:
+                    emitter.mass(nid, *fit_dof_vector(
+                        m.mass, int(eff.get(nid, self.ndf)),
+                        kind="mass", node=nid))
 
     def _bucket_fix_targets_by_rank(
         self, node_owners: "dict[int, set[int]]",
@@ -4862,6 +4933,10 @@ class apeSees:
         self._ndf: int | None = None
         self._fix_records: list[FixRecord] = []
         self._mass_records: list[MassRecord] = []
+        # ADR 0065 Tier 2 — opt-in: stream per-node masses from the snapshot
+        # at emit instead of one bridge MassRecord per node. Set by
+        # ``mass_from_model()``; threaded into the BuiltModel.
+        self._mass_from_model: bool = False
         # ADR 0049 — ``ops.ndf`` directives (element-less decoupled nodes only).
         self._ndf_records: list[NdfRecord] = []
         self._region_records: list[RegionAssignmentRecord] = []
@@ -5224,6 +5299,26 @@ class apeSees:
                 overwrite=bool(overwrite),
             ),
         )
+
+    def mass_from_model(self) -> None:
+        """Stream per-node lumped masses straight from the model snapshot.
+
+        Equivalent to looping ``ops.mass(nodes=[m.node_id], values=m.mass)``
+        over every entry in ``fem.nodes.masses`` (e.g. the per-node tributary
+        masses produced by ``g.masses.volume(...)``), but **without
+        materializing one bridge ``MassRecord`` per node** — the snapshot
+        masses are streamed at emit time. On a multi-million-node model this
+        avoids a multi-GB resident list and millions of small objects (ADR
+        0065 Tier 2). Emits byte-identical deck lines and honours per-node
+        ``ndf`` via the same ``fit_dof_vector`` as :meth:`mass`.
+
+        Model-wide declaration (no arguments). May be combined with explicit
+        :meth:`mass` calls only on *disjoint* node sets — overlap raises at
+        emit (nodal mass is additive under MP assembly). Deck/live emit only;
+        the H5 archival emitter rejects it (masses already persist in
+        ``model.h5`` via ``fem.nodes.masses``).
+        """
+        self._mass_from_model = True
 
     def ndf(self, target: object = None, *, ndf: int) -> None:
         """State the per-node ``ndf`` of an element-LESS decoupled node
@@ -6024,7 +6119,7 @@ class apeSees:
                 _write_per_rank_tcl(path, emitter.lines(), spans)
             else:
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(emitter.lines()) + "\n")
+                    emitter.write_to(f)
         else:
             layout = bm.emit(emitter, split=True)
             for _verb, _vargs in pre_prof:
@@ -6088,7 +6183,7 @@ class apeSees:
             for _verb, _vargs in post_prof:
                 emitter.profiler(_verb, *_vargs)
             with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(emitter.lines()) + "\n")
+                emitter.write_to(f)
         else:
             layout = bm.emit(emitter, split=True)
             for _verb, _vargs in pre_prof:
@@ -6471,6 +6566,7 @@ class apeSees:
             name_to_tag={
                 nm: tag for nm, _kind, tag in self._name_records()
             },
+            mass_from_model=self._mass_from_model,
         )
 
     # -- Internal helpers ------------------------------------------------

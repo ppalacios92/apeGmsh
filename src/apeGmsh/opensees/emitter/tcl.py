@@ -181,6 +181,20 @@ class TclEmitter:
         """Return a copy of the accumulated Tcl lines."""
         return list(self._lines)
 
+    def write_to(self, f: "Any") -> None:
+        """Stream the accumulated deck to an open text handle.
+
+        Writes the internal buffer line-by-line, so neither the
+        ``list(self._lines)`` copy of :meth:`lines` nor a single joined
+        deck-sized string is materialized — peak write-time memory drops
+        to the OS write buffer (ADR 0065 Tier 1). Output is byte-identical
+        to ``f.write("\\n".join(self.lines()) + "\\n")``.
+        """
+        write = f.write
+        for line in self._lines:
+            write(line)
+            write("\n")
+
     def preamble(self, text: str) -> None:
         """Insert ``text`` as a leading comment line. Idempotent."""
         self._lines.insert(0, f"# {text}")
