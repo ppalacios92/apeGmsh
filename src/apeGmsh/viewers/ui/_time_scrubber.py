@@ -328,6 +328,10 @@ class TimeScrubberDock:
             finally:
                 self._btn_play.blockSignals(False)
 
+    def stop_animation(self) -> None:
+        """Public API: stop animation from external callers (e.g. on pick)."""
+        self._stop_animation()
+
     def _loop_mode(self) -> str:
         mode = self._loop_combo.currentData()
         return mode if mode in self.LOOP_MODES else "once"
