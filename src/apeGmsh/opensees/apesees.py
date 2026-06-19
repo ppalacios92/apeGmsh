@@ -628,6 +628,16 @@ class BuiltModel:
     # ``MassRecord`` per node (the 7M-object double-store). Set by
     # ``apeSees.mass_from_model()``; consumed in the mass emit paths.
     mass_from_model:         bool = False
+    # ADR 0062 — per-build cache of resolved moment-tensor ``(node, force)``
+    # pairs, keyed by ``id(rec)``. The host search in
+    # ``resolve_moment_tensor_pairs`` runs against the full FEM snapshot and is
+    # rank-independent, but ``_owned_moment_tensor_lines`` is invoked per-rank
+    # (and a second time per-rank by the staged pre-check) — without this cache
+    # the O(N_elements) search re-runs ~2·np times (the multi-hour emit wall).
+    # Fresh per build and mutated in place (frozen-safe: we mutate the dict, not
+    # rebind the field), so ``id(rec)`` reuse across builds is not a hazard.
+    _mt_pairs_cache:         "dict[int, list[tuple[int, Any]]]" = field(
+        default_factory=dict, compare=False)
 
     def _claimed_recorder_ids(self) -> "set[int]":
         """``id(...)``-set of recorders claimed by stage builders
@@ -4596,7 +4606,13 @@ class BuiltModel:
         eff = inferred_ndf or {}
         out: list[tuple[int, tuple[float, ...]]] = []
         for rec in moment_tensors:
-            for node, force in resolve_moment_tensor_pairs(rec, self.fem):
+            # Resolve the rank-independent host search ONCE per build; every
+            # other rank (and the staged pre-check) reuses the cached pairs.
+            pairs = self._mt_pairs_cache.get(id(rec))
+            if pairs is None:
+                pairs = resolve_moment_tensor_pairs(rec, self.fem)
+                self._mt_pairs_cache[id(rec)] = pairs
+            for node, force in pairs:
                 if int(node) in load_nodes:
                     node_ndf = int(eff.get(int(node), self.ndf))
                     nl = NodalLoadRecord(
