@@ -201,3 +201,69 @@ def test_non_zero_t0_fails_loud(box_fem):
         )
     with pytest.raises(NotImplementedError, match="onset"):
         ops.build().emit(RecordingEmitter())
+
+
+def test_host_search_runs_once_regardless_of_ranks(monkeypatch):
+    """Regression (ADR 0062): the rank-independent host search must run ONCE
+    per build, not once per rank.  Before the BuiltModel._mt_pairs_cache, the
+    O(N_elements) search in resolve_moment_tensor_pairs re-ran ~2·np times
+    (per-rank emit + per-rank staged pre-check) — the multi-hour emit wall.
+    """
+    import os
+    import tempfile
+
+    import apeGmsh.opensees._internal.build as build_mod
+
+    def _emit_at(nparts):
+        g = apeGmsh(model_name=f"mt_ranks_{nparts}", verbose=False)
+        g.begin()
+        try:
+            g.model.geometry.add_box(0.0, 0.0, 0.0, 4.0, 4.0, 4.0, label="soil")
+            g.physical.add(3, "soil", name="soil")
+            g.mesh.structured.set_transfinite("soil", n=5)
+            g.mesh.generation.generate(dim=3)
+            g.mesh.partitioning.partition(nparts)
+            fem = g.mesh.queries.get_fem_data()
+        finally:
+            g.end()
+
+        calls = {"n": 0}
+        orig = build_mod._collect_continuum_hosts
+
+        def _counting(f, region=None):
+            calls["n"] += 1
+            return orig(f, region)
+
+        monkeypatch.setattr(build_mod, "_collect_continuum_hosts", _counting)
+
+        ops = apeSees(fem)
+        ops.model(ndm=3, ndf=3)
+        mat = ops.register(ElasticIsotropic(E=1.0e7, nu=0.25, rho=2000.0))
+        ops.element.stdBrick(pg="soil", material=mat)
+        with ops.stage(name="src") as s:
+            with s.pattern(series=ops.timeSeries.Linear()) as p:
+                p.moment_tensor(
+                    position=(2.0, 2.0, 2.0), frame="z-down", M0=1.0e6,
+                    mech=dict(strike=350, dip=40, rake=113), method="consistent",
+                )
+            s.analysis(
+                test=ops.test.NormDispIncr(tol=1e-4, max_iter=50),
+                algorithm=ops.algorithm.Newton(),
+                integrator=ops.integrator.LoadControl(dlam=0.1),
+                constraints=ops.constraints.Transformation(),
+                numberer=ops.numberer.RCM(),
+                system=ops.system.UmfPack(),
+                analysis=ops.analysis.Static(),
+            )
+            s.run(n_increments=1, dt=0.01)
+        fd, path = tempfile.mkstemp(suffix=".tcl")
+        os.close(fd)
+        try:
+            ops.tcl(path)
+        finally:
+            os.remove(path)
+        return calls["n"]
+
+    # One source → exactly one host search per build, independent of rank count.
+    assert _emit_at(2) == 1
+    assert _emit_at(8) == 1
