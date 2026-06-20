@@ -180,6 +180,10 @@ class ContourDiagram(ScalarColorSupport, Diagram):
         if topology == _TOPO_GAUSS:
             # Peek at step 0 to choose cell-vs-node sub-path.
             self._attach_gauss(scene)
+            # Pre-warm the visual store gauss slab now (at attach) so the
+            # first step-change reads from the float16 RAM cache instead of
+            # triggering a blocking full (T × GP) HDF5 read mid-playback.
+            self._visual_gauss_slab()
         else:
             self._effective_topology = _EFFECTIVE_NODES
             self._attach_nodes(scene)
