@@ -167,7 +167,7 @@ hinge-zone densification) into a flat list of stations.
 class DetailingStandard(Protocol):
     name: str
     def bar_diameter(self, designation) -> float        # db, model units
-    def bar_area(self, designation) -> float             # As, model units²  (= π·d²/4)
+    def bar_area(self, designation) -> float             # As (ASTM table for #N; π·d²/4 for raw/mm)
     def min_bend_diameter(self, db, *, kind="primary") -> float   # INSIDE diameter
     def hook_tail(self, angle, db) -> float
     def default_corner_radius(self, db, *, kind="primary") -> float  # scalar; NOT fed to add_arc
@@ -181,22 +181,31 @@ class ACI318_seismic(ACI318):           ...  # §18.8.5 / §25.3.4 seismic 135°
 
 `bar_diameter`/`bar_area` are the **upstream producers** of
 `ReinforceDef.bar_diameter`/`bar_area` (already live floats, validated
-`>0`); `bar_area(raw_float d) = π·d²/4` is the exact inverse of
-`ReinforceDef.diameter = 2·√(As/π)`, so a `(db, As)` pair round-trips.
+`>0`).  Area convention (Gate-A correction): an imperial `"#N"`
+designation returns the **ASTM A615 nominal area** (the design area
+engineers expect, e.g. #8 → 0.79 in²), while a metric `"<N>mm"`
+designation or a raw-float diameter returns the geometric `π·d²/4`.
+`ReinforceDef` stores diameter and area independently, so the `(db, As)`
+pair stays ASTM-consistent (it need not satisfy `As = π·d²/4`).
 
 Tables encoded (cited so the implementer can verify):
 
 - **Min inside bend diameter** — ACI 318-19 Table 25.3.1: #3–#8 → 6db,
   #9–#11 → 8db, #14/#18 → 10db.  Table 25.3.2 (stirrups/ties): #3–#5 →
   4db, #6–#8 → 6db.
-- **Hook tail** — 90° → 12db; 180° → max(4db, 2.5 in·`unit_length`);
-  135° seismic → max(6db, 3 in·`unit_length`).
+- **Standard hook tail** — primary §25.3.1: 90° → 12db, 180° →
+  max(4db, 2.5 in).  **Non-seismic** stirrup/tie §25.3.2 is **bar-size
+  dependent**: 90° and 135° → 6db (#3–#5) / 12db (#6–#8).  **Seismic**
+  hook §25.3.4 is a flat 6db with a 3 in floor → max(6db, 3 in),
+  independent of bar size (do NOT apply the 25.3.2 12db split to a
+  seismic hoop).
 
 Units: a single `unit_length` knob lives on `BarCatalog` (model length
 per inch / per mm); the only place an absolute imperial constant enters
-is scaling the 2.5 in / 3 in floors.  ACI buckets key off the **bar
-size number** (explicit map), never the db magnitude (metric bars carry
-no imperial number; raw floats get a documented nearest-equivalent).
+is scaling the 2.5 in / 3 in floors.  ACI bend/size buckets key off the
+**bar diameter converted to inches** (`catalog.to_inches`) — unit-safe,
+exactly equal to the size-number bucket for imperial designations, and
+the documented nearest-equivalent for metric/raw diameters.
 `DetailingError(ValueError)` is introduced in
 `apeGmsh/rebar/detailing.py` (subclassing `ValueError` keeps existing
 call-site `except` clauses working).

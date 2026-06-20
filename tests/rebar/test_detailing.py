@@ -93,10 +93,27 @@ def test_aci_hook_tail_primary():
     assert s.hook_tail(180, 0.5) == pytest.approx(2.5)
 
 
-def test_aci_hook_tail_stirrup():
+def test_aci_hook_tail_stirrup_is_bar_size_dependent():
+    # Table 25.3.2: #3-#5 -> 6db, #6-#8 -> 12db (BOTH 90 and 135 rows)
     s = ACI318()
-    assert s.hook_tail(90, 0.5, kind="stirrup_tie") == pytest.approx(3.0)   # 6db
-    assert s.hook_tail(135, 0.5, kind="stirrup_tie") == pytest.approx(3.0)  # 6db, no floor
+    assert s.hook_tail(90, 0.5, kind="stirrup_tie") == pytest.approx(3.0)    # #4 -> 6db
+    assert s.hook_tail(135, 0.5, kind="stirrup_tie") == pytest.approx(3.0)   # #4 -> 6db
+    assert s.hook_tail(90, 1.0, kind="stirrup_tie") == pytest.approx(12.0)   # #8 -> 12db
+    assert s.hook_tail(135, 1.0, kind="stirrup_tie") == pytest.approx(12.0)  # #8 -> 12db
+
+
+def test_aci_seismic_hook_is_flat_6db_not_the_size_split():
+    # §25.3.4 seismic hook = flat 6db (+3in floor), NOT the Table 25.3.2
+    # 12db that a #8 NON-seismic tie gets
+    s = ACI318()
+    assert s.hook_tail(135, 1.0, kind="seismic_hoop") == pytest.approx(6.0)
+    assert s.hook_tail(135, 1.0, kind="stirrup_tie") == pytest.approx(12.0)
+
+
+def test_aci_primary_135_has_no_standard_hook():
+    # Table 25.3.1 defines only 90 and 180 standard development hooks
+    with pytest.raises(DetailingError):
+        ACI318().hook_tail(135, 1.0, kind="primary")
 
 
 def test_aci_hook_tail_unknown_angle_raises():
@@ -104,6 +121,15 @@ def test_aci_hook_tail_unknown_angle_raises():
         ACI318().hook_tail(45, 1.0)
     with pytest.raises(DetailingError):
         ACI318().min_bend_diameter(1.0, kind="bogus")
+
+
+def test_make_hook_constructs_resolved_standard_hook():
+    s = ACI318()
+    h = s.make_hook("primary", 1.0, angle=90)
+    assert h.angle == 90.0 and h.tail == pytest.approx(12.0)
+    assert h.bend_radius == pytest.approx(3.5)
+    with pytest.raises(DetailingError):
+        Raw().make_hook("primary", 1.0, angle=90)
 
 
 # ── ACI318_seismic 135° floor ────────────────────────────────────────

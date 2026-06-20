@@ -34,7 +34,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from .._kernel.defs.rebar import Hook, _is_db_token
+from .._kernel.defs.rebar import Hook, _parse_db_token
 
 # ── errors ───────────────────────────────────────────────────────────
 
@@ -124,7 +124,16 @@ class BarCatalog:
         return float(designation)
 
     def bar_area(self, designation: float | str) -> float:
-        """Cross-section area in model units²."""
+        """Cross-section area in model units².
+
+        Convention: an imperial ``"#N"`` designation returns the ASTM
+        A615 **nominal** area (the design area engineers expect, e.g.
+        #8 → 0.79 in²), which differs from π·d²/4 by the nominal-diameter
+        rounding (~0.6%). A metric ``"<N>mm"`` designation or a raw-float
+        diameter returns the geometric π·d²/4. Both are passed to
+        ``ReinforceDef.bar_area`` (which stores diameter and area
+        independently), so the (db, As) pair stays ASTM-consistent.
+        """
         if isinstance(designation, str):
             m = _HASH.match(designation)
             if m:
@@ -162,6 +171,7 @@ class DetailingStandard(Protocol):
     def default_corner_radius(self, db: float, *, kind: str = _PRIMARY) -> float: ...
     def resolve_length(self, spec: float | str, db: float) -> float: ...
     def resolve_hook(self, hook: Hook, db: float, *, kind: str = _PRIMARY) -> Hook: ...
+    def make_hook(self, kind: str, db: float, *, angle: float) -> Hook: ...
 
 
 def _check_kind(kind: str, owner: str) -> None:
@@ -186,8 +196,8 @@ class _BaseStandard:
         return self.catalog.bar_area(designation)
 
     def resolve_length(self, spec: float | str, db: float) -> float:
-        if _is_db_token(spec):
-            k = float(re.match(r"^\s*(\d+(?:\.\d+)?)", spec).group(1))
+        k = _parse_db_token(spec)        # shared parser → never drifts from L1
+        if k is not None:
             return k * db
         if isinstance(spec, bool) or not isinstance(spec, (int, float)):
             raise DetailingError(
@@ -220,12 +230,17 @@ class Raw(_BaseStandard):
 
     def resolve_hook(self, hook: Hook, db: float, *, kind: str = _PRIMARY) -> Hook:
         # Raw can still resolve a hook IF every field is already explicit.
+        if hook.tail is None:
+            self._no("resolve_hook (tail=None)")
         if hook.bend_radius is None:
             self._no("resolve_hook (bend_radius=None)")
         tail = self.resolve_length(hook.tail, db)
         radius = self.resolve_length(hook.bend_radius, db)
         return Hook(angle=hook.angle, tail=tail, bend_radius=radius,
                     turn=hook.turn, true_arc=hook.true_arc, name=hook.name)
+
+    def make_hook(self, kind: str, db: float, *, angle: float) -> Hook:
+        self._no("make_hook")
 
 
 class ACI318(_BaseStandard):
@@ -243,7 +258,9 @@ class ACI318(_BaseStandard):
                 return 4.0 * db
             if d_in <= 1.000 + 1e-9:        # #6–#8
                 return 6.0 * db
-            # larger ties are uncommon — fall through to the primary table
+            # Table 25.3.2 only tabulates transverse reinforcement up to
+            # #8; for a tie/hoop larger than #8 fall through to the
+            # primary Table 25.3.1 minimum bend diameters (8db/10db).
         # Table 25.3.1 — primary bars
         if d_in <= 1.000 + 1e-9:            # #3–#8
             return 6.0 * db
@@ -263,13 +280,34 @@ class ACI318(_BaseStandard):
             return 2.5 * upi
         return 0.0
 
+    @staticmethod
+    def _stirrup_tail_multiple(d_in: float) -> float:
+        # Table 25.3.2: the stirrup/tie/hoop standard-hook tail extension
+        # (BOTH the 90° and 135° rows) is bar-size dependent — 6db for
+        # #3–#5, 12db for #6–#8. #6–#8 column ties are common, so the flat
+        # 6db used previously under-detailed them by ~2x.
+        return 6.0 if d_in <= 0.625 + 1e-9 else 12.0
+
     def hook_tail(self, angle: float, db: float, *, kind: str = _PRIMARY) -> float:
         _check_kind(kind, self.name)
         a = int(round(angle))
         if kind == _PRIMARY:
-            nominal = {90: 12.0, 135: 6.0, 180: 4.0}.get(a)
-        else:  # stirrup / tie / hoop
-            nominal = {90: 6.0, 135: 6.0, 180: 4.0}.get(a)
+            # Table 25.3.1 standard development hooks define only 90° and
+            # 180°; there is no 135° standard development hook.
+            nominal = {90: 12.0, 180: 4.0}.get(a)
+        elif kind == _SEISMIC:
+            # §25.3.4 seismic hook: a FLAT 6db extension (not the Table
+            # 25.3.2 size split) for the 135° (and 90° circular-hoop)
+            # hook; the "not less than 3 in" floor comes from
+            # ACI318_seismic._tail_floor.
+            nominal = 6.0 if a in (90, 135) else (4.0 if a == 180 else None)
+        else:  # _STIRRUP — non-seismic standard tie, Table 25.3.2
+            if a in (90, 135):
+                nominal = self._stirrup_tail_multiple(self.catalog.to_inches(db))
+            elif a == 180:
+                nominal = 4.0
+            else:
+                nominal = None
         if nominal is None:
             raise DetailingError(
                 f"{self.name}: no standard hook tail for a {angle}° hook "
@@ -293,6 +331,15 @@ class ACI318(_BaseStandard):
             radius = self.resolve_length(hook.bend_radius, db)
         return Hook(angle=hook.angle, tail=tail, bend_radius=radius,
                     turn=hook.turn, true_arc=hook.true_arc, name=hook.name)
+
+    def make_hook(self, kind: str, db: float, *, angle: float,
+                  turn: str = "centroid", true_arc: bool = False,
+                  name: str | None = None) -> Hook:
+        """Construct a fully-numeric standard Hook for *kind* at bend
+        *angle* and diameter *db* (model units) — the code-aware factory
+        the L2 column/beam generators (ADR §8) call."""
+        base = Hook(angle=angle, turn=turn, true_arc=true_arc, name=name)
+        return self.resolve_hook(base, db, kind=kind)
 
 
 class ACI318_seismic(ACI318):

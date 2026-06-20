@@ -4,34 +4,49 @@ from __future__ import annotations
 import pytest
 
 from apeGmsh._kernel.defs.rebar import (
-    METADATA, Bar, Cage, Hook, Path, Stirrup,
+    CAGE_SCHEMA, CAGE_SCHEMA_VERSION, METADATA, Bar, Cage, Hook, Path, Stirrup,
 )
 
 
 # ── Hook ─────────────────────────────────────────────────────────────
 
-def test_hook_factories_set_aci_angles_and_db_tails():
+def test_hook_factories_set_aci_angles_and_defer_tail():
+    # factories carry only the bend ANGLE; tail/bend_radius are filled by
+    # the DetailingStandard at bind time (the ACI multiples live there)
     assert Hook.standard_90().angle == 90.0
-    assert Hook.standard_90().tail == "12db"
+    assert Hook.standard_90().tail is None
+    assert Hook.standard_135().angle == 135.0
     assert Hook.standard_180().angle == 180.0
-    assert Hook.standard_180().tail == "4db"
-    assert Hook.seismic_135().angle == 135.0
-    assert Hook.seismic_135().tail == "6db"
-    # factories leave bend_radius unresolved for the standard to fill
+    assert Hook.seismic_135().angle == 135.0      # alias of standard_135
+    assert Hook.seismic_135().tail is None
     assert Hook.seismic_135().bend_radius is None
+
+
+def test_hook_allows_none_tail_and_explicit_override():
+    assert Hook(angle=90).tail is None
+    assert Hook(angle=90, tail="12db").tail == "12db"
+    assert Hook(angle=90, tail=5.0).tail == 5.0
 
 
 @pytest.mark.parametrize("bad", [
     dict(angle=200, tail="6db"),          # angle > 180
     dict(angle=0, tail="6db"),            # angle <= 0
+    dict(angle=float("nan"), tail=1.0),   # non-finite angle
     dict(angle=90, tail="6mm"),           # not a "<k>db" token nor number
     dict(angle=90, tail=-5.0),            # non-positive length
+    dict(angle=90, tail="0db"),           # zero-multiple token (was accepted)
+    dict(angle=90, tail=float("nan")),    # non-finite length
+    dict(angle=90, bend_radius=float("inf"), tail=1.0),   # non-finite radius
     dict(angle=90, tail="6db", turn=(0, 0, 0)),     # zero turn vector
     dict(angle=90, tail="6db", turn="sideways"),    # unknown turn token
 ])
 def test_hook_rejects_bad_input(bad):
     with pytest.raises(ValueError):
         Hook(**bad)
+
+
+def test_hook_turn_vector_is_float_normalised():
+    assert Hook(angle=90, turn=(1, 0, 0)).turn == (1.0, 0.0, 0.0)
 
 
 def test_hook_turn_accepts_token_and_vector():
@@ -51,10 +66,19 @@ def test_path_defaults_to_metadata_bend_and_floats_points():
 @pytest.mark.parametrize("bad", [
     [(0, 0, 0)],                          # < 2 points
     [(0, 0), (1, 1)],                     # not 3D
+    [(0, 0, 0), (0, 0, 0)],               # zero-length (coincident) segment
+    [(0, 0, 0), (1, 0, 0), (1, 0, 0)],    # duplicate consecutive interior vertex
+    [(0, 0, 0), (float("inf"), 0, 0)],    # non-finite coordinate
 ])
 def test_path_rejects_bad_points(bad):
     with pytest.raises(ValueError):
         Path(bad)
+
+
+def test_path_allows_closed_loop_first_equals_last():
+    # non-consecutive first==last (a closed tie) is fine
+    p = Path([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 0, 0)])
+    assert p.points[0] == p.points[-1]
 
 
 def test_path_numeric_corner_radius_is_not_metadata():
@@ -90,6 +114,17 @@ def test_stirrup_rect_degenerate_section_raises():
         Stirrup.rect(0.1, 0.1, 0.04, db=0.04, material="rebar")
 
 
+@pytest.mark.parametrize("kw", [
+    dict(bx=float("nan"), by=0.5, cover=0.04, db=0.012),   # nan section
+    dict(bx=float("inf"), by=float("inf"), cover=0.04, db=0.012),
+    dict(bx=-0.5, by=0.5, cover=0.04, db=0.012),           # negative section
+    dict(bx=0.5, by=0.5, cover=0.04, db=float("nan")),     # nan db
+])
+def test_stirrup_rect_rejects_non_finite_or_nonpositive(kw):
+    with pytest.raises(ValueError):
+        Stirrup.rect(material="rebar", **kw)
+
+
 def test_stirrup_rect_designation_db_needs_db_value():
     with pytest.raises(ValueError):
         Stirrup.rect(0.5, 0.5, 0.04, db="#4", material="rebar")
@@ -117,12 +152,29 @@ def test_cage_round_trip_is_stable():
     cage2 = Cage.from_dict(d)
     assert cage2.to_dict() == d
     assert cage2.bars[0].end_hook.angle == 90.0
-    assert cage2.bars[0].end_hook.tail == "12db"
+    assert cage2.bars[0].end_hook.tail is None       # deferred to the standard
     assert cage2.stirrups[0].closure_hook.angle == 135.0
     assert cage2.bars[0].name == "L1"
 
 
-def test_cage_to_dict_omits_standard_and_handles():
+def test_cage_to_dict_is_schema_tagged_and_omits_standard():
     cage = _sample_cage()
     d = cage.to_dict()
-    assert set(d) == {"bars", "stirrups"}
+    assert set(d) == {"__schema__", "version", "bars", "stirrups"}
+    assert d["__schema__"] == CAGE_SCHEMA
+    assert d["version"] == CAGE_SCHEMA_VERSION
+
+
+def test_cage_from_dict_rejects_unknown_version():
+    d = _sample_cage().to_dict()
+    d["version"] = CAGE_SCHEMA_VERSION + 99
+    with pytest.raises(ValueError):
+        Cage.from_dict(d)
+
+
+def test_cage_from_dict_accepts_untagged_legacy_dict():
+    # a dict without __schema__/version still loads (defaults to current)
+    cage = _sample_cage()
+    legacy = {"bars": [b.to_dict() for b in cage.bars],
+              "stirrups": [s.to_dict() for s in cage.stirrups]}
+    assert Cage.from_dict(legacy).to_dict() == cage.to_dict()

@@ -23,18 +23,28 @@ the L1/L2/L3 split. The detailing standards + bar catalogue live in
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 Vec3 = tuple[float, float, float]
 
-# A "<k>db" length token: a positive number immediately followed by "db",
-# e.g. "12db", "4db", "2.5db". Resolved to k * bar_diameter at bind time.
-_DB_TOKEN = re.compile(r"^\s*\d+(?:\.\d+)?\s*db\s*$", re.IGNORECASE)
+# Current on-disk schema version for Cage.to_dict (bump on a breaking
+# change; from_dict accepts this version and the un-tagged legacy form).
+CAGE_SCHEMA = "apeGmsh.rebar.cage"
+CAGE_SCHEMA_VERSION = 1
+
+# A "<k>db" length token: a *positive* number immediately followed by
+# "db", e.g. "12db", "4db", "2.5db". Resolved to k * bar_diameter at bind
+# time. _parse_db_token is the single source of truth shared with the
+# detailing resolver so acceptance and resolution can never drift.
+_DB_TOKEN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*db\s*$", re.IGNORECASE)
 
 # Sentinel for "store the bend/corner radius as metadata, emit a sharp
-# polyline corner" — the default fidelity (ADR 0066 §5).
+# polyline corner" — the default fidelity (ADR 0066 §5). Path uses
+# corner_radius == METADATA and Hook uses true_arc is False to express
+# the same "sharp polyline, radius is metadata" intent.
 METADATA = "metadata"
 
 # Bend-plane selector tokens accepted by Hook.turn (besides an explicit
@@ -45,19 +55,42 @@ _TURN_TOKENS = frozenset(
 )
 
 
+def _parse_db_token(value: Any) -> float | None:
+    """Return ``k > 0`` for a ``"<k>db"`` token, else ``None``.
+
+    The one place the token grammar lives; both :func:`_is_db_token`
+    (L1 acceptance) and the detailing ``resolve_length`` (bind-time
+    resolution) go through it, so a ``"0db"`` can never be accepted at
+    construction and then explode at resolve.
+    """
+    if not isinstance(value, str):
+        return None
+    m = _DB_TOKEN.match(value)
+    if m is None:
+        return None
+    k = float(m.group(1))
+    return k if k > 0.0 else None
+
+
 def _is_db_token(value: Any) -> bool:
-    """True iff *value* is a ``"<k>db"`` length string."""
-    return isinstance(value, str) and bool(_DB_TOKEN.match(value))
+    """True iff *value* is a valid (positive) ``"<k>db"`` length string."""
+    return _parse_db_token(value) is not None
 
 
 def _validate_length(value: float | str, *, field_name: str, owner: str,
                      allow_metadata: bool = False) -> None:
-    """Fail-loud check for a length field: a positive float, a ``"<k>db"``
-    token, or (optionally) the ``"metadata"`` sentinel."""
+    """Fail-loud check for a length field: a positive finite float, a
+    positive ``"<k>db"`` token, or (optionally) the ``"metadata"``
+    sentinel."""
     if allow_metadata and value == METADATA:
         return
     if isinstance(value, str):
-        if _is_db_token(value):
+        if _DB_TOKEN.match(value):
+            if _parse_db_token(value) is None:
+                raise ValueError(
+                    f'{owner}: {field_name}={value!r} must use a positive '
+                    f'multiple, e.g. "12db" (a zero multiple is not allowed).'
+                )
             return
         extra = ' or "metadata"' if allow_metadata else ""
         raise ValueError(
@@ -70,6 +103,10 @@ def _validate_length(value: float | str, *, field_name: str, owner: str,
             f"{owner}: {field_name} must be a number or a \"<k>db\" "
             f"string, got {type(value).__name__}."
         )
+    if not math.isfinite(float(value)):
+        raise ValueError(
+            f"{owner}: {field_name} must be finite, got {value}."
+        )
     if value <= 0.0:
         raise ValueError(
             f"{owner}: {field_name} must be > 0, got {value}."
@@ -77,10 +114,10 @@ def _validate_length(value: float | str, *, field_name: str, owner: str,
 
 
 def _validate_db(value: float | str, *, owner: str) -> None:
-    """A bar size: a positive float (model-unit diameter) or a catalogue
-    designation string (e.g. ``"#8"``, ``"20mm"``, ``"20M"``). The
+    """A bar size: a positive finite float (model-unit diameter) or a
+    catalogue designation string (e.g. ``"#8"``, ``"20mm"``). The
     designation is resolved by a :class:`DetailingStandard` at bind time,
-    so here we only reject the empty/obviously-wrong cases."""
+    so here we only reject the empty/non-finite/non-positive cases."""
     if isinstance(value, str):
         if not value.strip():
             raise ValueError(f"{owner}: db designation is empty.")
@@ -90,8 +127,20 @@ def _validate_db(value: float | str, *, owner: str) -> None:
             f"{owner}: db must be a positive number or a designation "
             f"string (e.g. \"#8\"), got {type(value).__name__}."
         )
+    if not math.isfinite(float(value)):
+        raise ValueError(f"{owner}: db must be finite, got {value}.")
     if value <= 0.0:
         raise ValueError(f"{owner}: db must be > 0, got {value}.")
+
+
+def _norm_vec3(v: Any) -> Vec3 | None:
+    """Return a float-normalised (x, y, z) tuple, or None if *v* is not a
+    well-formed 3-vector."""
+    if (isinstance(v, tuple) and len(v) == 3
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool)
+                    for c in v)):
+        return tuple(float(c) for c in v)
+    return None
 
 
 # ── Hook ─────────────────────────────────────────────────────────────
@@ -104,15 +153,17 @@ class Hook:
     here. The bend *plane* is fixed at bind time from :attr:`turn`
     (default ``"centroid"`` ⇒ toward the host/cage centroid).
 
-    ``bend_radius=None`` defers to the :class:`DetailingStandard`
-    (``min_bend_diameter``); ``tail`` / ``bend_radius`` accept a number or
-    a ``"<k>db"`` token. ``true_arc=False`` (default) emits a sharp
-    polyline corner with the radius carried as metadata; ``true_arc=True``
-    builds a real fillet (L2 concern).
+    ``tail=None`` and ``bend_radius=None`` defer to the
+    :class:`DetailingStandard` (``hook_tail`` / ``min_bend_diameter``) at
+    bind time — the ACI multiples live in *one* place, the standard, not
+    duplicated on every hook. An explicit number or ``"<k>db"`` token
+    overrides. ``true_arc=False`` (default) emits a sharp polyline corner
+    with the radius carried as metadata; ``true_arc=True`` builds a real
+    fillet (L2 concern).
     """
 
     angle: float                                  # 90 | 135 | 180 (deg)
-    tail: float | str                             # length or "<k>db"
+    tail: float | str | None = None               # None ⇒ from standard
     bend_radius: float | str | None = None        # None ⇒ from standard
     turn: str | Vec3 = "centroid"                 # bend-plane selector
     true_arc: bool = False
@@ -121,11 +172,14 @@ class Hook:
     def __post_init__(self) -> None:
         if not isinstance(self.angle, (int, float)) or isinstance(self.angle, bool):
             raise ValueError(f"Hook: angle must be a number, got {self.angle!r}.")
+        if not math.isfinite(float(self.angle)):
+            raise ValueError(f"Hook: angle must be finite, got {self.angle}.")
         if not (0.0 < float(self.angle) <= 180.0):
             raise ValueError(
                 f"Hook: angle must be in (0, 180] degrees, got {self.angle}."
             )
-        _validate_length(self.tail, field_name="tail", owner="Hook")
+        if self.tail is not None:
+            _validate_length(self.tail, field_name="tail", owner="Hook")
         if self.bend_radius is not None:
             _validate_length(self.bend_radius, field_name="bend_radius",
                              owner="Hook")
@@ -140,40 +194,41 @@ class Hook:
                     f"({sorted(_TURN_TOKENS)}) or a 3-vector."
                 )
             return
-        if (isinstance(turn, tuple) and len(turn) == 3
-                and all(isinstance(c, (int, float)) and not isinstance(c, bool)
-                        for c in turn)):
-            if all(c == 0.0 for c in turn):
-                raise ValueError("Hook: turn vector must be non-zero.")
-            return
-        raise ValueError(
-            f"Hook: turn must be a token string or an (x, y, z) vector, "
-            f"got {turn!r}."
-        )
+        vec = _norm_vec3(turn)
+        if vec is None:
+            raise ValueError(
+                f"Hook: turn must be a token string or an (x, y, z) vector, "
+                f"got {turn!r}."
+            )
+        if all(c == 0.0 for c in vec):
+            raise ValueError("Hook: turn vector must be non-zero.")
+        object.__setattr__(self, "turn", vec)
 
-    # Code-aware factories. They set only the ACI-standard angle + a
-    # "<k>db" tail default and leave bend_radius=None so the
-    # DetailingStandard fills it at bind time (no standard needed here).
+    # Code-aware factories. They set only the ACI bend ANGLE and leave
+    # tail/bend_radius=None so the DetailingStandard fills them at bind
+    # time (the nominal 12db/6db/etc. live in ONE place — the standard).
     @classmethod
-    def seismic_135(cls, *, tail: float | str = "6db",
-                    turn: str | Vec3 = "centroid", true_arc: bool = False,
-                    name: str | None = None) -> "Hook":
-        return cls(angle=135.0, tail=tail, turn=turn, true_arc=true_arc,
-                   name=name)
+    def standard_90(cls, *, turn: str | Vec3 = "centroid",
+                    true_arc: bool = False, name: str | None = None) -> "Hook":
+        return cls(angle=90.0, turn=turn, true_arc=true_arc, name=name)
 
     @classmethod
-    def standard_90(cls, *, tail: float | str = "12db",
-                    turn: str | Vec3 = "centroid", true_arc: bool = False,
-                    name: str | None = None) -> "Hook":
-        return cls(angle=90.0, tail=tail, turn=turn, true_arc=true_arc,
-                   name=name)
+    def standard_135(cls, *, turn: str | Vec3 = "centroid",
+                     true_arc: bool = False, name: str | None = None) -> "Hook":
+        return cls(angle=135.0, turn=turn, true_arc=true_arc, name=name)
 
     @classmethod
-    def standard_180(cls, *, tail: float | str = "4db",
-                     turn: str | Vec3 = "centroid", true_arc: bool = False,
-                     name: str | None = None) -> "Hook":
-        return cls(angle=180.0, tail=tail, turn=turn, true_arc=true_arc,
-                   name=name)
+    def standard_180(cls, *, turn: str | Vec3 = "centroid",
+                     true_arc: bool = False, name: str | None = None) -> "Hook":
+        return cls(angle=180.0, turn=turn, true_arc=true_arc, name=name)
+
+    # Ergonomic alias: a 135° hook. "Seismic-ness" (the 3 in tail floor)
+    # is a property of the ACI318_seismic standard + the seismic_hoop
+    # kind at resolve time, NOT of the hook itself.
+    @classmethod
+    def seismic_135(cls, *, turn: str | Vec3 = "centroid",
+                    true_arc: bool = False, name: str | None = None) -> "Hook":
+        return cls.standard_135(turn=turn, true_arc=true_arc, name=name)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -191,7 +246,7 @@ class Hook:
         if isinstance(turn, list):
             turn = tuple(turn)
         return cls(
-            angle=d["angle"], tail=d["tail"], bend_radius=d.get("bend_radius"),
+            angle=d["angle"], tail=d.get("tail"), bend_radius=d.get("bend_radius"),
             turn=turn, true_arc=d.get("true_arc", False), name=d.get("name"),
         )
 
@@ -206,6 +261,8 @@ class Path:
     ``corner_radius="metadata"`` (default) emits sharp polyline corners
     and stores the radius as metadata; a number or ``"<k>db"`` token sets
     a true fillet radius consumed by the L2 builder under ``true_arc``.
+    Consecutive points must differ (no zero-length segments); a closed
+    loop's first==last (non-consecutive) is allowed.
     """
 
     points: tuple[Vec3, ...]
@@ -218,10 +275,18 @@ class Path:
                 raise ValueError(
                     f"Path: every point must be (x, y, z), got {p!r}."
                 )
+            if not all(math.isfinite(c) for c in p):
+                raise ValueError(f"Path: point has non-finite coordinate: {p!r}.")
         if len(pts) < 2:
             raise ValueError(
                 f"Path: need at least 2 points, got {len(pts)}."
             )
+        for a, b in zip(pts, pts[1:]):
+            if a == b:
+                raise ValueError(
+                    f"Path: consecutive points coincide (zero-length "
+                    f"segment) at {a!r}."
+                )
         object.__setattr__(self, "points", pts)
         _validate_length(self.corner_radius, field_name="corner_radius",
                          owner="Path", allow_metadata=True)
@@ -358,12 +423,23 @@ class Stirrup:
         the inset when ``db`` is a designation string; for a numeric
         ``db`` it defaults to ``db``.
         """
-        d = db_value if db_value is not None else (db if isinstance(db, (int, float)) else None)
+        d = db_value if db_value is not None else (
+            db if isinstance(db, (int, float)) and not isinstance(db, bool) else None)
         if d is None:
             raise ValueError(
                 "Stirrup.rect: pass db_value=<diameter> when db is a "
                 "designation string, so the cover→centerline inset is known."
             )
+        for v, nm in ((bx, "bx"), (by, "by"), (cover, "cover"), (z, "z"),
+                      (d, "db")):
+            if not isinstance(v, (int, float)) or isinstance(v, bool) \
+                    or not math.isfinite(float(v)):
+                raise ValueError(f"Stirrup.rect: {nm} must be a finite number, got {v!r}.")
+        for v, nm in ((bx, "bx"), (by, "by"), (d, "db")):
+            if v <= 0.0:
+                raise ValueError(f"Stirrup.rect: {nm} must be > 0, got {v}.")
+        if cover < 0.0:
+            raise ValueError(f"Stirrup.rect: cover must be >= 0, got {cover}.")
         inset = cover + d / 2.0
         if 2.0 * inset >= min(bx, by):
             raise ValueError(
@@ -372,8 +448,8 @@ class Stirrup:
             )
         x0, y0 = inset, inset
         x1, y1 = bx - inset, by - inset
-        # open corner polyline that returns to the start corner (closure
-        # overlap + seam stagger is an L2 geometry concern)
+        # open corner polyline that returns to the start corner (the
+        # closure overlap + seam stagger is an L2 geometry concern)
         corners = [
             (x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z), (x0, y0, z),
         ]
@@ -395,10 +471,11 @@ class Stirrup:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Stirrup":
+        ch = d.get("closure_hook")
         return cls(
             path=Path.from_dict(d["path"]),
             db=d["db"], material=d["material"], role=d.get("role", "tie"),
-            closure_hook=Hook.from_dict(d["closure_hook"]),
+            closure_hook=Hook.from_dict(ch) if ch else Hook.seismic_135(),
             name=d.get("name"),
         )
 
@@ -411,8 +488,10 @@ class Cage:
     truth that feeds both binding surfaces (inline + composed-Part).
 
     The optional ``standard`` is a :class:`DetailingStandard` reference;
-    it is *not* serialised by name here (the L2 composite re-binds it at
-    ``place`` time), so ``to_dict`` carries only the geometry+intent.
+    it is *not* serialised (the L2 composite re-binds it at ``place``
+    time), so ``to_dict`` carries only geometry+intent, tagged with a
+    schema version so the composed-Part / H5 path (ADR §6.3) can evolve
+    it forward-compatibly.
     """
 
     bars: tuple[Bar, ...] = ()
@@ -440,14 +519,23 @@ class Cage:
         object.__setattr__(self, "stirrups", stirrups)
 
     def to_dict(self) -> dict[str, Any]:
-        """Geometry+intent only (no standard, no OpenSees handles)."""
+        """Geometry+intent only (no standard, no OpenSees handles),
+        tagged with the schema name+version."""
         return {
+            "__schema__": CAGE_SCHEMA,
+            "version": CAGE_SCHEMA_VERSION,
             "bars": [b.to_dict() for b in self.bars],
             "stirrups": [s.to_dict() for s in self.stirrups],
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Cage":
+        ver = d.get("version", CAGE_SCHEMA_VERSION)
+        if ver != CAGE_SCHEMA_VERSION:
+            raise ValueError(
+                f"Cage.from_dict: unsupported schema version {ver!r} "
+                f"(this build reads version {CAGE_SCHEMA_VERSION})."
+            )
         return cls(
             bars=tuple(Bar.from_dict(b) for b in d.get("bars", [])),
             stirrups=tuple(Stirrup.from_dict(s) for s in d.get("stirrups", [])),
@@ -455,5 +543,6 @@ class Cage:
 
 
 __all__ = [
-    "Vec3", "METADATA", "Hook", "Path", "Bar", "Stirrup", "Cage",
+    "Vec3", "METADATA", "CAGE_SCHEMA", "CAGE_SCHEMA_VERSION",
+    "Hook", "Path", "Bar", "Stirrup", "Cage",
 ]
