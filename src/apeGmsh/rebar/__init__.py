@@ -9,14 +9,16 @@ catalogue. The L2 ``g.rebar`` composite lives in
 from __future__ import annotations
 
 from .._kernel.defs.rebar import (
-    Bar, Cage, Hook, Path, Stirrup, METADATA, Vec3,
+    Bar, BarBuilder, BarLayout, Cage, Hook, Path, Stirrup, TieLayout,
+    METADATA, Vec3,
 )
 from .detailing import (
     ACI318, ACI318_seismic, BarCatalog, DetailingError, DetailingStandard, Raw,
 )
 
 __all__ = [
-    "Bar", "Cage", "Hook", "Path", "Stirrup", "METADATA", "Vec3",
+    "Bar", "BarBuilder", "BarLayout", "Cage", "Hook", "Path", "Stirrup",
+    "TieLayout", "METADATA", "Vec3",
     "ACI318", "ACI318_seismic", "BarCatalog", "DetailingError",
     "DetailingStandard", "Raw",
 ]

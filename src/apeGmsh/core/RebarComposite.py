@@ -25,7 +25,10 @@ from typing import TYPE_CHECKING, Any, Iterable
 import gmsh
 import numpy as np
 
-from .._kernel.defs.rebar import METADATA, Bar, Cage, Hook, Path, Stirrup, Vec3
+from .._kernel.defs.rebar import (
+    METADATA, Bar, BarBuilder, BarLayout, Cage, Hook, Path, Stirrup,
+    TieLayout, Vec3,
+)
 from ..rebar._geometry import hook_primitives, outward_tangent
 from ._compose_errors import chain_phase_guard
 from ._helpers import resolve_to_tags
@@ -85,11 +88,16 @@ class RebarComposite:
         cages (resolves ``"<k>db"`` tokens + hook factories at bind)."""
         self._standard = standard
 
-    # ---- L1 spec emitters (thin) ------------------------------------
-    def bar(self, points: Iterable[Vec3], *, db, material,
+    # ---- L1 spec emitters (thin) / L3 fluent ------------------------
+    def bar(self, points: Iterable[Vec3] | None = None, *, db, material,
             role: str = "longitudinal", element: str = "truss",
             start_hook: Hook | None = None, end_hook: Hook | None = None,
-            corner_radius=METADATA, name: str | None = None) -> Bar:
+            corner_radius=METADATA, name: str | None = None):
+        """With ``points`` → an L1 :class:`Bar`. Without ``points`` → an L3
+        fluent :class:`BarBuilder` (``.through(...).hook_end(...).as_(...)``)."""
+        if points is None:
+            return BarBuilder(db=db, material=material, role=role,
+                              element=element)
         return Bar(path=Path(tuple(points), corner_radius=corner_radius),
                    db=db, material=material, role=role, element=element,
                    start_hook=start_hook, end_hook=end_hook, name=name)
@@ -105,6 +113,134 @@ class RebarComposite:
     def stirrup_rect(self, bx: float, by: float, cover: float, *,
                      db, material, **kw) -> Stirrup:
         return Stirrup.rect(bx, by, cover, db=db, material=material, **kw)
+
+    # ---- standardized members (L2 generators) -----------------------
+    def column(self, *, section, height: float, cover: float,
+               longitudinal: BarLayout, ties: TieLayout, base_z: float = 0.0,
+               origin: tuple[float, float] = (0.0, 0.0), standard=None,
+               top_hook: Hook | None = None,
+               bottom_hook: Hook | None = None) -> Cage:
+        """Build a rectangular RC column cage (vertical, z-axis): perimeter
+        longitudinal bars + tie rings (densified in the end hinge zones).
+        Returns a :class:`Cage` — ``place()`` it into the concrete host."""
+        kind, bx, by = self._rect_section(section, "column")
+        std = standard if standard is not None else self._standard
+        dia = self._dia(std, longitudinal.db)
+        ox, oy = origin
+        inset = cover + dia / 2.0
+        xs = self._linspace(inset, bx - inset, longitudinal.n_x)
+        ys = self._linspace(inset, by - inset, longitudinal.n_y)
+        bars = tuple(
+            Bar(path=Path(((ox + x, oy + y, base_z),
+                           (ox + x, oy + y, base_z + height))),
+                db=longitudinal.db, material=longitudinal.material,
+                start_hook=bottom_hook, end_hook=top_hook)
+            for x, y in self._perimeter(xs, ys))
+        dia_tie = (ties.db_value if ties.db_value is not None
+                   else self._dia(std, ties.db))
+        levels = self._tie_levels(base_z, base_z + height, ties.spacing,
+                                  ties.hinge_spacing, ties.hinge_length)
+        stirrups = tuple(
+            Stirrup.rect(bx, by, cover, db=ties.db, material=ties.material,
+                         z=z, plane="xy", origin=origin, db_value=dia_tie,
+                         closure_hook=ties.hook)
+            for z in levels)
+        return Cage(bars=bars, stirrups=stirrups, standard=std)
+
+    def beam(self, *, section, length: float, cover: float, top: BarLayout,
+             bottom: BarLayout, stirrups: TieLayout, base_x: float = 0.0,
+             origin: tuple[float, float] = (0.0, 0.0), standard=None) -> Cage:
+        """Build a rectangular RC beam cage (horizontal, x-axis): top +
+        bottom longitudinal bars (count = ``BarLayout.n_x``) + vertical
+        stirrups (y-z plane) densified in the end hinge zones."""
+        kind, width, height = self._rect_section(section, "beam")
+        std = standard if standard is not None else self._standard
+        oy, oz = origin
+        bars: list[Bar] = []
+        for layout, at_top in ((top, True), (bottom, False)):
+            dia = self._dia(std, layout.db)
+            ys = self._linspace(oy + cover + dia / 2.0,
+                                oy + width - cover - dia / 2.0, layout.n_x)
+            z = (oz + height - cover - dia / 2.0 if at_top
+                 else oz + cover + dia / 2.0)
+            for y in ys:
+                bars.append(Bar(
+                    path=Path(((base_x, y, z), (base_x + length, y, z))),
+                    db=layout.db, material=layout.material,
+                    role="top" if at_top else "bottom"))
+        dia_st = (stirrups.db_value if stirrups.db_value is not None
+                  else self._dia(std, stirrups.db))
+        stations = self._tie_levels(base_x, base_x + length, stirrups.spacing,
+                                    stirrups.hinge_spacing, stirrups.hinge_length)
+        sts = tuple(
+            Stirrup.rect(width, height, cover, db=stirrups.db,
+                         material=stirrups.material, z=x, plane="yz",
+                         origin=origin, db_value=dia_st,
+                         closure_hook=stirrups.hook)
+            for x in stations)
+        return Cage(bars=tuple(bars), stirrups=sts, standard=std)
+
+    # ---- layout helpers ---------------------------------------------
+    @staticmethod
+    def _rect_section(section, who: str):
+        if (not isinstance(section, (tuple, list)) or len(section) != 3
+                or section[0] != "rect"):
+            raise ValueError(
+                f"g.rebar.{who}: section must be ('rect', b1, b2), "
+                f"got {section!r}.")
+        return section[0], float(section[1]), float(section[2])
+
+    @staticmethod
+    def _linspace(a: float, b: float, n: int) -> list[float]:
+        if n < 1:
+            raise ValueError("g.rebar: bar count must be ≥ 1.")
+        if n == 1:
+            return [(a + b) / 2.0]
+        return [a + i * (b - a) / (n - 1) for i in range(n)]
+
+    @staticmethod
+    def _perimeter(xs: list[float], ys: list[float]):
+        pts: list[tuple[float, float]] = []
+        seen: set = set()
+
+        def add(x: float, y: float) -> None:
+            k = (round(x, 9), round(y, 9))
+            if k not in seen:
+                seen.add(k)
+                pts.append((x, y))
+
+        for x in xs:                       # bottom + top faces
+            add(x, ys[0])
+            add(x, ys[-1])
+        for y in ys[1:-1]:                 # left + right faces (interior)
+            add(xs[0], y)
+            add(xs[-1], y)
+        return pts
+
+    @staticmethod
+    def _tie_levels(a: float, b: float, spacing: float,
+                    hinge_spacing: float | None,
+                    hinge_length: float | None) -> list[float]:
+        span = b - a
+        if spacing <= 0:
+            raise ValueError("g.rebar: tie spacing must be > 0.")
+        if hinge_spacing is None or hinge_length is None:
+            n = max(1, round(span / spacing))
+            return [a + i * span / n for i in range(n + 1)]
+        levels: list[float] = []
+        z = a
+        while z < a + hinge_length - 1e-9:        # bottom hinge (dense)
+            levels.append(z)
+            z += hinge_spacing
+        z = a + hinge_length
+        while z < b - hinge_length - 1e-9:        # middle (regular)
+            levels.append(z)
+            z += spacing
+        z = b - hinge_length
+        while z <= b + 1e-9:                       # top hinge (dense)
+            levels.append(z)
+            z += hinge_spacing
+        return sorted({round(v, 9) for v in levels})
 
     # ---- placement / coupling router --------------------------------
     def place(self, cage: Cage, into: str, *, coupling: str = "conformal",

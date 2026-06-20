@@ -414,15 +414,22 @@ class Stirrup:
 
     @classmethod
     def rect(cls, bx: float, by: float, cover: float, *, db: float | str,
-             material: str, z: float = 0.0, db_value: float | None = None,
+             material: str, z: float = 0.0, plane: str = "xy",
+             origin: tuple[float, float] = (0.0, 0.0),
+             db_value: float | None = None,
              closure_hook: Hook | None = None, role: str = "tie",
              name: str | None = None) -> "Stirrup":
-        """A rectangular tie at height ``z``. ``cover`` is clear cover to
-        the *outside* of the tie bar; the centerline is inset by
-        ``cover + db/2``. ``db_value`` (model-unit diameter) is used for
-        the inset when ``db`` is a designation string; for a numeric
-        ``db`` it defaults to ``db``.
+        """A rectangular tie. ``bx``/``by`` are the two in-plane section
+        dimensions; ``cover`` is clear cover to the *outside* of the tie bar
+        (centerline inset by ``cover + db/2``). ``plane`` places the ring:
+        ``"xy"`` (column tie, ring in x-y at height ``z``), ``"yz"`` (beam
+        stirrup, ring in y-z at station ``z`` along x), or ``"xz"``.
+        ``origin`` offsets the in-plane corner. ``db_value`` (model-unit
+        diameter) sizes the inset when ``db`` is a designation string.
         """
+        if plane not in ("xy", "yz", "xz"):
+            raise ValueError(
+                f"Stirrup.rect: plane must be 'xy'|'yz'|'xz', got {plane!r}.")
         d = db_value if db_value is not None else (
             db if isinstance(db, (int, float)) and not isinstance(db, bool) else None)
         if d is None:
@@ -446,13 +453,21 @@ class Stirrup:
                 f"Stirrup.rect: cover+db/2={inset} too large for section "
                 f"{bx}x{by} (degenerate tie polygon)."
             )
-        x0, y0 = inset, inset
-        x1, y1 = bx - inset, by - inset
+        ou, ov = origin
+        u0, v0 = ou + inset, ov + inset
+        u1, v1 = ou + bx - inset, ov + by - inset
+
+        def _xyz(u: float, v: float) -> Vec3:
+            if plane == "xy":
+                return (u, v, z)
+            if plane == "yz":
+                return (z, u, v)
+            return (u, z, v)                     # xz
+
         # open corner polyline that returns to the start corner (the
         # closure overlap + seam stagger is an L2 geometry concern)
-        corners = [
-            (x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z), (x0, y0, z),
-        ]
+        corners = [_xyz(u0, v0), _xyz(u1, v0), _xyz(u1, v1),
+                   _xyz(u0, v1), _xyz(u0, v0)]
         return cls(
             path=Path(points=tuple(corners)),
             db=db, material=material, role=role,
@@ -542,7 +557,87 @@ class Cage:
         )
 
 
+# ── standardized-member layout inputs + fluent builder (pure data) ───
+
+@dataclass(frozen=True)
+class BarLayout:
+    """Longitudinal-bar layout for a standardized member. ``n_x``/``n_y``
+    are bars along each face (corners shared); for a beam line use ``n_x``
+    as the count."""
+    n_x: int
+    n_y: int = 2
+    db: float | str = "#8"
+    material: str = "rebar"
+
+
+@dataclass(frozen=True)
+class TieLayout:
+    """Transverse-reinforcement layout. ``spacing`` is the regular tie
+    spacing; ``hinge_spacing`` (denser) applies within ``hinge_length`` of
+    each member end (ACI seismic confinement zones)."""
+    db: float | str
+    spacing: float
+    material: str = "rebar"
+    hinge_spacing: float | None = None
+    hinge_length: float | None = None
+    db_value: float | None = None
+    hook: Hook | None = None
+
+
+class BarBuilder:
+    """L3 fluent sugar — chains into an L1 :class:`Bar`. Holds no gmsh
+    state; an abandoned builder emits nothing."""
+
+    def __init__(self, *, db, material, role: str = "longitudinal",
+                 element: str = "truss") -> None:
+        self._db, self._material = db, material
+        self._role, self._element = role, element
+        self._points: tuple | None = None
+        self._start: Hook | None = None
+        self._end: Hook | None = None
+        self._corner = METADATA
+        self._name: str | None = None
+
+    def through(self, points) -> "BarBuilder":
+        self._points = tuple(points)
+        return self
+
+    def hook_start(self, hook: Hook) -> "BarBuilder":
+        self._start = hook
+        return self
+
+    def hook_end(self, hook: Hook) -> "BarBuilder":
+        self._end = hook
+        return self
+
+    def corner_radius(self, radius) -> "BarBuilder":
+        self._corner = radius
+        return self
+
+    def role(self, role: str) -> "BarBuilder":
+        self._role = role
+        return self
+
+    def element(self, element: str) -> "BarBuilder":
+        self._element = element
+        return self
+
+    def build(self) -> "Bar":
+        if self._points is None:
+            raise ValueError("BarBuilder: call .through(points) before build().")
+        return Bar(path=Path(self._points, corner_radius=self._corner),
+                   db=self._db, material=self._material, role=self._role,
+                   element=self._element, start_hook=self._start,
+                   end_hook=self._end, name=self._name)
+
+    def as_(self, name: str) -> "Bar":
+        """Terminal: name the bar and return the built :class:`Bar`."""
+        self._name = name
+        return self.build()
+
+
 __all__ = [
     "Vec3", "METADATA", "CAGE_SCHEMA", "CAGE_SCHEMA_VERSION",
     "Hook", "Path", "Bar", "Stirrup", "Cage",
+    "BarLayout", "TieLayout", "BarBuilder",
 ]
