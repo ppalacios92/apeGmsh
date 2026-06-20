@@ -1,4 +1,4 @@
-# ADR 0066 — Reinforcement-cage authoring: a `g.rebar` geometry layer above `g.reinforce`
+# ADR 0067 — Reinforcement-cage authoring: a `g.rebar` geometry layer above `g.reinforce`
 
 **Status:** Proposed (2026-06-19; refined by a 14-agent design workflow,
 every signature cross-checked against `src/apeGmsh`).  Builds on — and
@@ -312,7 +312,7 @@ reuse (and, if needed, additively extend) `ReinforceTieRecord`.**
 20/R2; `emitter/h5.py:117-121, 900-907`).  `g.compose` is H5-source-only
 (ADR 0038).  So a composed cage arrives today as **free-floating bars
 with no host attachment** (warning at save, no error after compose).
-ADR 0066 chooses **option (B)**: scope v1 composed-Part cages to
+ADR 0067 chooses **option (B)**: scope v1 composed-Part cages to
 **Tcl/openseespy emit only**, and **raise** if a cage carrying reinforce
 ties is saved for the H5-compose path — with option (A) as the named
 follow-on (lift the R2 deferral: persist/read-back `ReinforceTieRecord`,

@@ -1,4 +1,4 @@
-# Handoff — `g.rebar` reinforcement-cage authoring (ADR 0066)
+# Handoff — `g.rebar` reinforcement-cage authoring (ADR 0067)
 
 Status: **P0–P4 shipped** (this PR). All three adversarial-review gates folded.
 101 rebar tests green. P5 is **blocked** on two external items (below).
@@ -9,7 +9,7 @@ concrete↔steel coupling to machinery that already ships in apeGmsh. It does
 not invent an embedding element; it routes to `g.reinforce`
 (`LadrunoEmbeddedRebar`) or to gmsh `embed`.
 
-See `src/apeGmsh/opensees/architecture/decisions/0066-reinforcement-cage-authoring.md`
+See `src/apeGmsh/opensees/architecture/decisions/0067-reinforcement-cage-authoring.md`
 for the full design rationale.
 
 ---
