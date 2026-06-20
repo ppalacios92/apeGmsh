@@ -1,0 +1,772 @@
+"""
+``g.rebar`` — the L2 reinforcement-cage authoring composite (ADR 0066).
+
+Sits **above** the shipped ``g.reinforce`` binding composite: it owns the
+L1 spec objects (:mod:`apeGmsh._kernel.defs.rebar`) + geometry generation
++ standardized-member generators, and **delegates** coupling —
+*conformal* via ``g.mesh.editing.embed`` (this module, P1) and *embedded*
+via ``g.reinforce`` (P2). It never emits an OpenSees element itself.
+
+P1 scope: ``bar`` / ``stirrup`` / ``stirrup_rect`` spec emitters, eager
+**polyline** geometry emission (``true_arc`` is deferred to P3), and
+``place(cage, into, coupling="conformal")`` which embeds the bar curves
+into the host solid before meshing so the host mesh conforms and the bars
+share its nodes (perfect bond — the ``ladruno_rc.py`` behaviour
+generalised off the grid).
+"""
+
+from __future__ import annotations
+
+import math
+import warnings
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Iterable
+
+import gmsh
+import numpy as np
+
+from .._kernel.defs.rebar import (
+    METADATA, Bar, BarBuilder, BarLayout, Cage, Hook, Path, Stirrup,
+    TieLayout, Vec3,
+)
+from ..rebar._geometry import hook_primitives, outward_tangent
+from ._compose_errors import chain_phase_guard
+from ._helpers import resolve_to_tags
+
+_AXIS_TOKENS = {
+    "up": (0.0, 0.0, 1.0), "down": (0.0, 0.0, -1.0),
+    "+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0),
+    "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0),
+    "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0),
+}
+
+if TYPE_CHECKING:
+    from .._core import _ApeGmshSession
+
+
+# ── resolution-side records (not L1 specs) ───────────────────────────
+
+@dataclass(frozen=True)
+class RebarMember:
+    """A placed bar/stirrup: the curve physical group + everything the
+    bridge needs to realise a Truss/CorotTruss/DispBeamColumn on it
+    (diameter + area resolved for BOTH couplings)."""
+    pg: str
+    role: str
+    db: float | str
+    diameter: float
+    area: float
+    material: str
+    element: str
+    coupling: str
+    line_tags: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class RebarPlacement:
+    """The record of one ``place()`` call."""
+    name: str
+    host: str
+    coupling: str
+    members: tuple[RebarMember, ...]
+
+
+# ── the composite ────────────────────────────────────────────────────
+
+class RebarComposite:
+    """``g.rebar`` — reinforcement-cage authoring (ADR 0066)."""
+
+    def __init__(self, parent: "_ApeGmshSession") -> None:
+        self._parent = parent
+        self._standard: Any = None
+        self._place_seq = 0          # per-session counter → unique default PG base
+        self.placements: list[RebarPlacement] = []
+
+    # ---- detailing standard (used at resolve time, P3) --------------
+    def use_standard(self, standard: Any) -> None:
+        """Set the default :class:`DetailingStandard` for this session's
+        cages (resolves ``"<k>db"`` tokens + hook factories at bind)."""
+        self._standard = standard
+
+    # ---- L1 spec emitters (thin) / L3 fluent ------------------------
+    def bar(self, points: Iterable[Vec3] | None = None, *, db, material,
+            role: str = "longitudinal", element: str = "truss",
+            start_hook: Hook | None = None, end_hook: Hook | None = None,
+            corner_radius=METADATA, name: str | None = None):
+        """With ``points`` → an L1 :class:`Bar`. Without ``points`` → an L3
+        fluent :class:`BarBuilder` (``.through(...).hook_end(...).as_(...)``)."""
+        if points is None:
+            if (start_hook is not None or end_hook is not None
+                    or corner_radius != METADATA or name is not None):
+                raise ValueError(
+                    "g.rebar.bar(): on the fluent path (no points) set hooks/"
+                    "corner_radius/name via the chain (.hook_end(...), "
+                    ".corner_radius(...), .as_(name)), not as bar() kwargs.")
+            return BarBuilder(db=db, material=material, role=role,
+                              element=element)
+        return Bar(path=Path(tuple(points), corner_radius=corner_radius),
+                   db=db, material=material, role=role, element=element,
+                   start_hook=start_hook, end_hook=end_hook, name=name)
+
+    def stirrup(self, points: Iterable[Vec3], *, db, material,
+                closure_hook: Hook | None = None, role: str = "tie",
+                corner_radius=METADATA, name: str | None = None) -> Stirrup:
+        return Stirrup(path=Path(tuple(points), corner_radius=corner_radius),
+                       db=db, material=material, role=role,
+                       closure_hook=closure_hook or Hook.seismic_135(),
+                       name=name)
+
+    def stirrup_rect(self, bx: float, by: float, cover: float, *,
+                     db, material, **kw) -> Stirrup:
+        return Stirrup.rect(bx, by, cover, db=db, material=material, **kw)
+
+    # ---- standardized members (L2 generators) -----------------------
+    def column(self, *, section, height: float, cover: float,
+               longitudinal: BarLayout, ties: TieLayout, base_z: float = 0.0,
+               origin: tuple[float, float] = (0.0, 0.0), standard=None,
+               top_hook: Hook | None = None, bottom_hook: Hook | None = None,
+               end_cover: float | None = None) -> Cage:
+        """Build a rectangular RC column cage (vertical, z-axis): perimeter
+        longitudinal bars + tie rings (densified in the end hinge zones).
+
+        Bars/ties are inset from the section faces (``cover + tie + db/2``)
+        AND from the top/bottom faces (``end_cover``, default ``cover``) so
+        the cage is interior to the host — both couplings mesh, and
+        conformal embedding does not trip a boundary-facet PLC error.
+        """
+        kind, bx, by = self._rect_section(section, "column")
+        self._require_positive(height, "height", "column")
+        if longitudinal.n_x < 2 or longitudinal.n_y < 2:
+            raise ValueError(
+                "g.rebar.column: longitudinal n_x and n_y must be ≥ 2 (a "
+                "rectangular perimeter cage); author a single bar line "
+                "directly for a wall curtain.")
+        std = standard if standard is not None else self._standard
+        if longitudinal.n_x > 2 or longitudinal.n_y > 2:
+            warnings.warn(
+                "g.rebar.column: intermediate longitudinal bars (n>2) are "
+                "generated but only a single perimeter hoop is emitted; ACI "
+                "318 §25.7.2.3 cross-ties / supplementary legs for the "
+                "intermediate bars are a v1 gap — add them manually.",
+                stacklevel=2)
+        if (std is not None and type(std).__name__ == "ACI318_seismic"
+                and (ties.hinge_spacing is None or ties.hinge_length is None)):
+            warnings.warn(
+                "g.rebar.column: a seismic standard is set but TieLayout has "
+                "no hinge_spacing/hinge_length — no ACI §18.7.5 confinement "
+                "zone is generated (uniform tie spacing).", stacklevel=2)
+        dia = self._dia(std, longitudinal.db)
+        dia_tie = (ties.db_value if ties.db_value is not None
+                   else self._dia(std, ties.db))
+        ox, oy = origin
+        inset = cover + dia_tie + dia / 2.0       # bars nest INSIDE the ties
+        if 2.0 * inset >= min(bx, by):
+            raise ValueError(
+                f"g.rebar.column: cover+tie+db/2={inset} too large for "
+                f"section {bx}x{by} (longitudinal bars would cross).")
+        ec = cover if end_cover is None else end_cover
+        z0, z1 = base_z + ec, base_z + height - ec
+        if z1 <= z0:
+            raise ValueError(
+                f"g.rebar.column: end_cover {ec} too large for height {height}.")
+        xs = self._linspace(inset, bx - inset, longitudinal.n_x)
+        ys = self._linspace(inset, by - inset, longitudinal.n_y)
+        bars = tuple(
+            Bar(path=Path(((ox + x, oy + y, z0), (ox + x, oy + y, z1))),
+                db=longitudinal.db, material=longitudinal.material,
+                start_hook=bottom_hook, end_hook=top_hook)
+            for x, y in self._perimeter(xs, ys))
+        levels = self._tie_levels(z0, z1, ties.spacing, ties.hinge_spacing,
+                                  ties.hinge_length)
+        stirrups = tuple(
+            Stirrup.rect(bx, by, cover, db=ties.db, material=ties.material,
+                         z=z, plane="xy", origin=origin, db_value=dia_tie,
+                         closure_hook=ties.hook)
+            for z in levels)
+        return Cage(bars=bars, stirrups=stirrups, standard=std)
+
+    def beam(self, *, section, length: float, cover: float, top: BarLayout,
+             bottom: BarLayout, stirrups: TieLayout, base_x: float = 0.0,
+             origin: tuple[float, float] = (0.0, 0.0), standard=None,
+             end_cover: float | None = None) -> Cage:
+        """Build a rectangular RC beam cage (horizontal, x-axis): top +
+        bottom longitudinal bars (count = ``BarLayout.n_x``; ``n_y`` is
+        ignored) + vertical stirrups (y-z plane) densified in the end hinge
+        zones. Bars/stirrups are inset interior (see :meth:`column`)."""
+        kind, width, height = self._rect_section(section, "beam")
+        self._require_positive(length, "length", "beam")
+        std = standard if standard is not None else self._standard
+        dia_st = (stirrups.db_value if stirrups.db_value is not None
+                  else self._dia(std, stirrups.db))
+        oy, oz = origin
+        ec = cover if end_cover is None else end_cover
+        x0, x1 = base_x + ec, base_x + length - ec
+        if x1 <= x0:
+            raise ValueError(
+                f"g.rebar.beam: end_cover {ec} too large for length {length}.")
+        bars: list[Bar] = []
+        for layout, at_top in ((top, True), (bottom, False)):
+            dia = self._dia(std, layout.db)
+            inset_y = cover + dia_st + dia / 2.0      # bars nest inside stirrups
+            if 2.0 * inset_y >= width:
+                raise ValueError(
+                    f"g.rebar.beam: cover+tie+db/2={inset_y} too large for "
+                    f"width {width} ({'top' if at_top else 'bottom'} bars "
+                    f"would cross).")
+            ys = self._linspace(oy + inset_y, oy + width - inset_y, layout.n_x)
+            z = (oz + height - cover - dia_st - dia / 2.0 if at_top
+                 else oz + cover + dia_st + dia / 2.0)
+            for y in ys:
+                bars.append(Bar(
+                    path=Path(((x0, y, z), (x1, y, z))),
+                    db=layout.db, material=layout.material,
+                    role="top" if at_top else "bottom"))
+        stations = self._tie_levels(x0, x1, stirrups.spacing,
+                                    stirrups.hinge_spacing, stirrups.hinge_length)
+        sts = tuple(
+            Stirrup.rect(width, height, cover, db=stirrups.db,
+                         material=stirrups.material, z=x, plane="yz",
+                         origin=origin, db_value=dia_st,
+                         closure_hook=stirrups.hook)
+            for x in stations)
+        return Cage(bars=tuple(bars), stirrups=sts, standard=std)
+
+    @staticmethod
+    def _require_positive(v, nm: str, who: str) -> None:
+        if (not isinstance(v, (int, float)) or isinstance(v, bool)
+                or not v > 0):
+            raise ValueError(f"g.rebar.{who}: {nm} must be > 0, got {v!r}.")
+
+    # ---- layout helpers ---------------------------------------------
+    @staticmethod
+    def _rect_section(section, who: str):
+        if (not isinstance(section, (tuple, list)) or len(section) != 3
+                or section[0] != "rect"):
+            raise ValueError(
+                f"g.rebar.{who}: section must be ('rect', b1, b2), "
+                f"got {section!r}.")
+        return section[0], float(section[1]), float(section[2])
+
+    @staticmethod
+    def _linspace(a: float, b: float, n: int) -> list[float]:
+        if n < 1:
+            raise ValueError("g.rebar: bar count must be ≥ 1.")
+        if n == 1:
+            return [(a + b) / 2.0]
+        return [a + i * (b - a) / (n - 1) for i in range(n)]
+
+    @staticmethod
+    def _perimeter(xs: list[float], ys: list[float]):
+        pts: list[tuple[float, float]] = []
+        seen: set = set()
+
+        def add(x: float, y: float) -> None:
+            k = (round(x, 9), round(y, 9))
+            if k not in seen:
+                seen.add(k)
+                pts.append((x, y))
+
+        for x in xs:                       # bottom + top faces
+            add(x, ys[0])
+            add(x, ys[-1])
+        for y in ys[1:-1]:                 # left + right faces (interior)
+            add(xs[0], y)
+            add(xs[-1], y)
+        return pts
+
+    @staticmethod
+    def _tie_levels(a: float, b: float, spacing: float,
+                    hinge_spacing: float | None,
+                    hinge_length: float | None) -> list[float]:
+        span = b - a
+        if span <= 0:
+            raise ValueError(f"g.rebar: tie span must be > 0, got {span}.")
+        if spacing <= 0:
+            raise ValueError("g.rebar: tie spacing must be > 0.")
+        if hinge_spacing is None or hinge_length is None:
+            n = max(1, round(span / spacing))
+            return [a + i * span / n for i in range(n + 1)]
+        if 2.0 * hinge_length >= span:
+            # hinge zones cover the whole member → fully confined (one dense
+            # zone, no rings outside the span).
+            n = max(1, round(span / hinge_spacing))
+            return [a + i * span / n for i in range(n + 1)]
+        levels: list[float] = []
+        z = a
+        while z < a + hinge_length - 1e-9:        # bottom hinge (dense)
+            levels.append(z)
+            z += hinge_spacing
+        z = a + hinge_length
+        while z < b - hinge_length - 1e-9:        # middle (regular)
+            levels.append(z)
+            z += spacing
+        z = b - hinge_length
+        while z <= b + 1e-9:                       # top hinge (dense)
+            levels.append(z)
+            z += hinge_spacing
+        # clamp: never emit a ring outside the member span [a, b]
+        return sorted({round(v, 9) for v in levels if a - 1e-9 <= v <= b + 1e-9})
+
+    # ---- placement / coupling router --------------------------------
+    def place(self, cage: Cage, into: str, *, coupling: str = "conformal",
+              per_member_coupling: dict[str, str] | None = None,
+              bond: str | None = None, perfect: float | None = None,
+              kt=None, kt_alpha=None, enforce: str = "penalty",
+              bipenalty: bool = False, dtcr=None, tolerance: float = 1.0e-6,
+              snap: bool = False, host_dim: int | None = None,
+              true_arc: bool = False, on_conformal_infeasible: str = "fail",
+              name: str | None = None) -> RebarPlacement:
+        """Emit the cage geometry and couple each member to host ``into``.
+
+        ``coupling="conformal"`` embeds the bar curves into the host so the
+        mesh conforms (shared nodes, perfect bond). ``coupling="embedded"``
+        meshes the bars independently and forwards to ``g.reinforce`` (→
+        ``LadrunoEmbeddedRebar``); it needs ``bond=`` (a ``LadrunoBondSlip``
+        material name) **or** ``perfect=`` (a perfect-bond axial penalty).
+        ``per_member_coupling={role: coupling}`` overrides per role for
+        **mixed** cages (e.g. longitudinal conformal + ties embedded).
+        """
+        chain_phase_guard(self._parent, "g.rebar.place")
+        if not isinstance(cage, Cage):
+            raise TypeError(
+                f"g.rebar.place: cage must be a Cage, got {type(cage).__name__}."
+            )
+        if coupling not in ("conformal", "embedded"):
+            raise ValueError(
+                f"g.rebar.place: coupling must be 'conformal' or 'embedded', "
+                f"got {coupling!r}."
+            )
+        if on_conformal_infeasible not in ("fail", "embedded"):
+            raise ValueError(
+                f"g.rebar.place: on_conformal_infeasible must be 'fail' or "
+                f"'embedded', got {on_conformal_infeasible!r}."
+            )
+        pmc = per_member_coupling or {}
+        std = cage.standard if cage.standard is not None else self._standard
+        rein_kw = dict(bond=bond, perfect=perfect, kt=kt, kt_alpha=kt_alpha,
+                       enforce=enforce, bipenalty=bipenalty, dtcr=dtcr,
+                       tolerance=tolerance, snap=snap)
+        # Pass 0 — validate EVERYTHING (cage + host) before mutating gmsh, so a
+        # bad cage never leaves the model half-emitted.
+        plan = self._plan(cage, into, default_coupling=coupling,
+                          per_member_coupling=pmc, std=std, rein_kw=rein_kw,
+                          on_conformal_infeasible=on_conformal_infeasible,
+                          host_dim=host_dim, name=name, true_arc=true_arc)
+        return self._emit_plan(plan, into, rein_kw=rein_kw,
+                               on_conformal_infeasible=on_conformal_infeasible)
+
+    # ---- Pass 0: validation + planning (no gmsh mutation) -----------
+    def _plan(self, cage: Cage, into: str, *, default_coupling: str,
+              per_member_coupling: dict[str, str], std, rein_kw: dict,
+              on_conformal_infeasible: str, host_dim: int | None,
+              name: str | None, true_arc: bool) -> dict:
+        in_dim = host_dim if host_dim is not None else self._detect_host_dim(into)
+        host_tags = resolve_to_tags(into, dim=in_dim, session=self._parent)
+        base = name or f"rebar{self._place_seq}"
+
+        planned: list = []
+        roles_seen: set[str] = set()
+        names_seen: set[str] = set()
+        has_conf = has_emb = False
+        idx = 0
+        for default_role, items, is_stirrup in (
+                ("longitudinal", cage.bars, False),
+                ("tie", cage.stirrups, True)):
+            for m in items:
+                role = getattr(m, "role", default_role)
+                roles_seen.add(role)
+                eff = per_member_coupling.get(role, default_coupling)
+                if eff not in ("conformal", "embedded"):
+                    raise ValueError(
+                        f"g.rebar.place: per_member_coupling[{role!r}]={eff!r} "
+                        f"must be 'conformal' or 'embedded'."
+                    )
+                key = m.name or f"{role}_{idx}"
+                if key in names_seen:
+                    raise ValueError(
+                        f"g.rebar.place: duplicate member identity {key!r}; "
+                        f"member names must be unique within a cage."
+                    )
+                names_seen.add(key)
+                pg = f"{base}.{key}"
+                if self._is_physical_group(pg):
+                    raise ValueError(
+                        f"g.rebar.place: physical group {pg!r} already exists "
+                        f"(name collision across placements); pass a distinct "
+                        f"name= or member name."
+                    )
+                elem = getattr(m, "element", "truss")
+                if elem == "beam" and (
+                        len(m.path.points) > 2 or m.start_hook is not None
+                        or m.end_hook is not None
+                        or getattr(m, "closure_hook", None) is not None):
+                    raise NotImplementedError(
+                        "g.rebar: element='beam' on a curved/hooked bar needs "
+                        "the ADR-0010 Phase-4 orientation fan-out (not yet "
+                        "wired); use element='truss' or a straight bar."
+                    )
+                if is_stirrup:
+                    pts = m.path.points
+                    distinct = pts[:-1] if pts[0] == pts[-1] else pts
+                    if len(set(distinct)) < 3:
+                        raise ValueError(
+                            f"g.rebar: stirrup {key!r} closed loop needs ≥3 "
+                            f"distinct corners, got {len(set(distinct))}."
+                        )
+                if eff == "embedded":
+                    self._check_embedded_args(rein_kw["bond"], rein_kw["perfect"],
+                                              member=key)
+                    has_emb = True
+                else:
+                    has_conf = True
+                dia = self._dia(std, m.db)
+                hooks = {
+                    "start": self._resolve_hook(
+                        std, getattr(m, "start_hook", None), dia, "primary",
+                        required=True, true_arc=true_arc),
+                    "end": self._resolve_hook(
+                        std, getattr(m, "end_hook", None), dia, "primary",
+                        required=True, true_arc=true_arc),
+                    "closure": self._resolve_hook(
+                        std, getattr(m, "closure_hook", None), dia,
+                        "seismic_hoop", required=False, true_arc=true_arc)
+                    if is_stirrup else None,
+                }
+                planned.append((role, eff, m, pg, elem, dia,
+                                self._area(std, m.db), hooks))
+                idx += 1
+
+        for k in per_member_coupling:
+            if k not in roles_seen:
+                warnings.warn(
+                    f"g.rebar.place: per_member_coupling key {k!r} matches no "
+                    f"member role {sorted(roles_seen)}; ignored.", stacklevel=3)
+
+        host_tag = host_tags[0] if host_tags else None
+        if has_conf:
+            if len(host_tags) != 1:
+                raise ValueError(
+                    f"g.rebar.place: conformal coupling needs a single host "
+                    f"volume; {into!r} resolved to {len(host_tags)} entities. "
+                    f"Name one volume or use coupling='embedded'."
+                )
+            if self._host_is_meshed(in_dim, host_tag):
+                raise RuntimeError(
+                    "g.rebar.place: conformal coupling must run BEFORE "
+                    "g.mesh.generation.generate() — embedding into an already-"
+                    "meshed host is a silent no-op."
+                )
+            self._reject_foreign_part(into)
+            if on_conformal_infeasible == "embedded":
+                self._check_embedded_args(rein_kw["bond"], rein_kw["perfect"],
+                                          member="conformal-fallback")
+        if has_emb:
+            if not self._is_physical_group(into):
+                raise ValueError(
+                    f"g.rebar.place: embedded coupling needs host {into!r} to "
+                    f"be a physical group (e.g. g.physical.add_volume(...)); a "
+                    f"bare geometry label is not resolvable by g.reinforce."
+                )
+            warnings.warn(
+                "g.rebar.place: embedded coupling uses LadrunoEmbeddedRebar, "
+                "which is single-process today; partitioned/MPI models must "
+                "use coupling='conformal'.", stacklevel=3)
+
+        # Centroid for "centroid"/"in"/"out" hook turn directions — the host
+        # volume's centre of mass (hooks bend toward the section core).
+        centroid = None
+        any_hook = any(any(v is not None for v in hk.values())
+                       for *_rest, hk in planned)
+        if any_hook and host_tag is not None:
+            try:
+                com = self._parent.model.queries.center_of_mass(
+                    host_tag, dim=in_dim)
+                centroid = tuple(float(c) for c in com)
+            except Exception:
+                centroid = None
+
+        self._place_seq += 1
+        return dict(base=base, in_dim=in_dim, host_tag=host_tag,
+                    planned=planned, centroid=centroid)
+
+    def _resolve_hook(self, std, hook, dia, kind: str, *, required: bool,
+                      true_arc: bool):
+        """Resolve a hook to numeric tail+bend_radius at bind time. Returns
+        None for an absent hook (or a defaulted stirrup closure when no
+        standard is available). A global ``true_arc`` forces arc geometry."""
+        if hook is None:
+            return None
+        if true_arc and not hook.true_arc:
+            hook = replace(hook, true_arc=True)
+        if std is not None:
+            return std.resolve_hook(hook, dia, kind=kind)
+        # No standard: only a fully-numeric hook is self-resolving.
+        numeric = (isinstance(hook.tail, (int, float))
+                   and not isinstance(hook.tail, bool)
+                   and isinstance(hook.bend_radius, (int, float))
+                   and not isinstance(hook.bend_radius, bool))
+        if numeric:
+            return hook
+        if required:
+            raise ValueError(
+                "g.rebar: a hook needs a DetailingStandard "
+                "(g.rebar.use_standard(...) or Cage(standard=...)) or a "
+                "fully-numeric tail + bend_radius."
+            )
+        warnings.warn(
+            "g.rebar: a stirrup closure hook was dropped — no DetailingStandard "
+            "to resolve its tail, so the tie is emitted as an un-anchored loop. "
+            "Set g.rebar.use_standard(...) for a seismic 135° closure.",
+            stacklevel=4)
+        return None                      # defaulted stirrup closure, no std
+
+    # ---- emit (mutates gmsh; all inputs pre-validated) --------------
+    def _emit_plan(self, plan: dict, into: str, *, rein_kw: dict,
+                   on_conformal_infeasible: str) -> RebarPlacement:
+        g = self._parent
+        geom = g.model.geometry
+        base, in_dim, host_tag = plan["base"], plan["in_dim"], plan["host_tag"]
+        centroid = plan["centroid"]
+
+        # Pass 1 — emit all curve geometry (no PGs yet), including hooks.
+        emitted: list = []
+        arc_centers: list[int] = []
+        for role, eff, m, pg, elem, dia, area, hooks in plan["planned"]:
+            lts, pts = self._emit_polyline(geom, m.path.points)
+            pts_xyz = m.path.points
+            for slot, anchor_tag, anchor_xyz, at_start in (
+                    ("start", pts[0], pts_xyz[0], True),
+                    ("end", pts[-1], pts_xyz[-1], False),
+                    ("closure", pts[-1], pts_xyz[-1], False)):
+                if hooks[slot] is None:
+                    continue
+                t, centers = self._emit_hook(
+                    geom, anchor_tag, anchor_xyz,
+                    outward_tangent(pts_xyz, at_start=at_start),
+                    hooks[slot], centroid)
+                lts += t
+                arc_centers += centers
+            emitted.append((role, eff, m, pg, elem, dia, area, lts))
+        # Drop the arc-center construction points so they don't survive as
+        # stray meshed nodes inside the host (occ bakes the arc geometry).
+        if arc_centers:
+            gmsh.model.occ.remove([(0, c) for c in arc_centers], recursive=False)
+        # Sync once so the curve entities exist before we wrap them in PGs.
+        g.model.sync()
+
+        # Pass 2 — physical groups + coupling registration.
+        members: list[RebarMember] = []
+        conformal_tags: list[int] = []
+        conformal_specs: list = []
+        for role, eff, m, pg, elem, dia, area, lts in emitted:
+            g.physical.add_curve(lts, name=pg)
+            member = RebarMember(
+                pg=pg, role=role, db=m.db, diameter=dia, area=area,
+                material=m.material, element=elem, coupling=eff,
+                line_tags=tuple(lts),
+            )
+            members.append(member)
+            if eff == "conformal":
+                conformal_tags.extend(lts)
+                conformal_specs.append((member, dia, area))
+            else:
+                self._register_embedded(into, pg, dia, area, **rein_kw)
+
+        if conformal_tags:
+            try:
+                g.mesh.editing.embed(conformal_tags, host_tag, dim=1, in_dim=in_dim)
+            except Exception as exc:                       # embed-time failure
+                if on_conformal_infeasible != "embedded":
+                    raise
+                warnings.warn(
+                    f"g.rebar.place: conformal embed failed ({exc}); falling "
+                    f"back to embedded coupling for {len(conformal_specs)} "
+                    f"member(s).", stacklevel=2,
+                )
+                members = [mm if mm.coupling == "embedded"
+                           else replace(mm, coupling="embedded")
+                           for mm in members]
+                for member, dia, area in conformal_specs:
+                    self._register_embedded(into, member.pg, dia, area, **rein_kw)
+
+        couplings = {mm.coupling for mm in members}
+        placement = RebarPlacement(
+            name=base, host=into,
+            coupling=next(iter(couplings)) if len(couplings) == 1 else "mixed",
+            members=tuple(members),
+        )
+        self.placements.append(placement)
+        return placement
+
+    def _register_embedded(self, into: str, pg: str, diameter: float,
+                           area: float, *, bond, perfect, kt, kt_alpha,
+                           enforce, bipenalty, dtcr, tolerance, snap) -> None:
+        """Forward one embedded member to the shipped ``g.reinforce`` binding
+        composite (→ ``LadrunoEmbeddedRebar``), then invalidate the FEMData
+        cache (ADR §9: a def-append is a broker mutation)."""
+        self._parent.reinforce.reinforce(
+            host=into, bars=pg, bond=bond, perfect=perfect,
+            bar_diameter=diameter, bar_area=area,
+            kt=kt, kt_alpha=kt_alpha, enforce=enforce, bipenalty=bipenalty,
+            dtcr=dtcr, tolerance=tolerance, snap=snap, name=pg,
+        )
+        bump = getattr(self._parent, "_bump_fem_counter", None)
+        if bump is not None:
+            bump()
+
+    # ---- small resolvers / host checks ------------------------------
+    @staticmethod
+    def _check_embedded_args(bond, perfect, *, member: str) -> None:
+        if (bond is None) == (perfect is None):
+            raise ValueError(
+                f"g.rebar.place: embedded coupling for {member!r} needs "
+                f"exactly one of bond=<LadrunoBondSlip name> or "
+                f"perfect=<axial penalty>."
+            )
+
+    @staticmethod
+    def _dia(std, db) -> float:
+        if isinstance(db, (int, float)) and not isinstance(db, bool):
+            return float(db)
+        if std is not None:
+            return float(std.bar_diameter(db))
+        raise ValueError(
+            f"g.rebar: db {db!r} is a designation but no DetailingStandard is "
+            f"set; pass a numeric db, a Cage(standard=...), or call "
+            f"g.rebar.use_standard(ACI318())."
+        )
+
+    @staticmethod
+    def _area(std, db) -> float:
+        if isinstance(db, (int, float)) and not isinstance(db, bool):
+            return math.pi * float(db) ** 2 / 4.0
+        if std is not None:
+            return float(std.bar_area(db))
+        raise ValueError(
+            f"g.rebar: db {db!r} is a designation but no DetailingStandard is "
+            f"set; pass a numeric db, a Cage(standard=...), or call "
+            f"g.rebar.use_standard(ACI318())."
+        )
+
+    @staticmethod
+    def _is_physical_group(name: str) -> bool:
+        for d, t in gmsh.model.getPhysicalGroups():
+            try:
+                if gmsh.model.getPhysicalName(int(d), int(t)) == name:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    @staticmethod
+    def _host_is_meshed(in_dim: int, host_tag) -> bool:
+        if host_tag is None:
+            return False
+        try:
+            _types, etags, _ = gmsh.model.mesh.getElements(in_dim, host_tag)
+            return any(len(t) > 0 for t in etags)
+        except Exception:
+            return False
+
+    def _reject_foreign_part(self, into: str) -> None:
+        parts = getattr(self._parent, "parts", None)
+        try:
+            labels = parts.labels() if parts is not None else []
+        except Exception:
+            labels = []
+        if into in labels:
+            raise ValueError(
+                f"g.rebar.place: conformal coupling requires same-session "
+                f"authoring, but host {into!r} is a composed Part — use "
+                f"coupling='embedded' (ADR 0066 §6.4)."
+            )
+
+    # ---- geometry helpers -------------------------------------------
+    def _emit_polyline(self, geom, points: tuple[Vec3, ...]):
+        """Emit a polyline as gmsh points + line segments. Returns
+        ``(line_tags, point_tags)``. A closed loop (first == last) reuses
+        the first point so the loop welds into one node ring."""
+        closed = len(points) >= 2 and points[0] == points[-1]
+        pt_tags: list[int] = []
+        first_tag: int | None = None
+        n = len(points)
+        for i, p in enumerate(points):
+            if closed and i == n - 1 and first_tag is not None:
+                pt_tags.append(first_tag)
+            else:
+                t = geom.add_point(p[0], p[1], p[2], sync=False)
+                if i == 0:
+                    first_tag = t
+                pt_tags.append(t)
+        line_tags = [geom.add_line(pt_tags[i], pt_tags[i + 1], sync=False)
+                     for i in range(len(pt_tags) - 1)]
+        return line_tags, pt_tags
+
+    def _emit_hook(self, geom, anchor_tag: int, anchor_xyz, tangent,
+                   hook: Hook, centroid) -> tuple[list[int], list[int]]:
+        """Realise a resolved hook as gmsh curves appended at ``anchor_tag``,
+        reusing point tags between primitives so the chain welds without
+        make_conformal. Returns ``(curve_tags, arc_center_point_tags)`` — the
+        caller deletes the centers (stray construction points)."""
+        turn_dir = self._turn_dir(hook.turn, anchor_xyz, centroid)
+        prims, fell_back = hook_primitives(
+            anchor_xyz, tangent, turn_dir, hook.angle, hook.tail,
+            hook.bend_radius, hook.true_arc)
+        if fell_back:
+            warnings.warn(
+                "g.rebar: hook turn direction is collinear with the bar; "
+                "picked a deterministic seed bend plane.", stacklevel=3)
+        tags: list[int] = []
+        centers: list[int] = []
+        prev = anchor_tag
+        for prim in prims:
+            if prim[0] == "line":
+                _, _p0, p1 = prim
+                end = geom.add_point(float(p1[0]), float(p1[1]), float(p1[2]),
+                                     sync=False)
+                tags.append(geom.add_line(prev, end, sync=False))
+                prev = end
+            else:                                    # ("arc", p_start, center, p_end)
+                _, _ps, center, p_end = prim
+                ct = geom.add_point(float(center[0]), float(center[1]),
+                                    float(center[2]), sync=False)
+                end = geom.add_point(float(p_end[0]), float(p_end[1]),
+                                     float(p_end[2]), sync=False)
+                tags.append(geom.add_arc(prev, ct, end, sync=False))
+                centers.append(ct)
+                prev = end
+        return tags, centers
+
+    @staticmethod
+    def _turn_dir(turn, anchor, centroid):
+        anchor = np.asarray(anchor, dtype=float)
+        if isinstance(turn, str):
+            tl = turn.lower()
+            if tl in ("centroid", "in"):
+                return (np.asarray(centroid, float) - anchor
+                        if centroid is not None else np.zeros(3))
+            if tl == "out":
+                return (anchor - np.asarray(centroid, float)
+                        if centroid is not None else np.zeros(3))
+            axis = _AXIS_TOKENS.get(tl)
+            if axis is None:
+                raise ValueError(f"g.rebar: unknown turn token {turn!r}.")
+            return np.asarray(axis, float)
+        return np.asarray(turn, dtype=float)
+
+    def _detect_host_dim(self, into: str) -> int:
+        """Resolve the host's dimension (3D solid preferred, then 2D)."""
+        for d in (3, 2):
+            try:
+                if resolve_to_tags(into, dim=d, session=self._parent):
+                    return d
+            except Exception:
+                continue
+        raise ValueError(
+            f"g.rebar.place: cannot resolve host {into!r} as a 3-D or 2-D "
+            f"entity. Pass host_dim= explicitly or check the label."
+        )
+
+    # validate hook — resolution at get_fem_data (P3); nothing pre-mesh yet
+    def validate_pre_mesh(self) -> None:
+        return None
