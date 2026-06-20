@@ -15,7 +15,7 @@ not pollute prior state.
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from .base import StrategySpec
 
@@ -225,6 +225,21 @@ class PyEmitter:
         # pre-built by ``embedded_rebar_args``; fork-only at run time.
         self._lines.append(
             _ops_call("element", "LadrunoEmbeddedRebar", ele_tag, *args))
+
+    def equationConstraint(
+        self, cnode: int, cdof: int, ccoef: float,
+        retained: "Sequence[tuple[int, int, float]]",
+    ) -> None:
+        # EQ_Constraint via openseespy (ADR 0068): one call per tied DOF,
+        # flat varargs ops.equationConstraint(cNode, cDOF, cCoef, rn, rd,
+        # rc, ...).
+        flat: list[int | float] = []
+        for rn, rd, rc in retained:
+            flat += [int(rn), int(rd), float(rc)]
+        self._lines.append(
+            _ops_call("equationConstraint", int(cnode), int(cdof),
+                      float(ccoef), *flat)
+        )
 
     def mp_constraint_comment(self, name: str) -> None:
         # Hash-comment line, matching Tcl's ``# {name}`` convention.

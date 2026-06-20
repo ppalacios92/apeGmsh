@@ -3755,6 +3755,23 @@ def _emit_one_interpolation(
     from apeGmsh._kernel.records._kinds import ConstraintKind
 
     _emit_name(emitter, rec.name)
+
+    # ADR 0068 — enforce route. The equation route is a domain-level
+    # EQ_Constraint (NOT an element), so it must branch BEFORE element-tag
+    # allocation: allocating a tag it never uses would perturb the
+    # deterministic element-tag stream. ``penalty`` / ``penalty_al`` keep
+    # the element paths below.
+    enforce = getattr(rec, "enforce", "penalty")
+    if enforce == "equation":
+        _emit_equation_tie(emitter, rec)
+        return
+    if enforce == "penalty_al":
+        raise NotImplementedError(
+            "enforce='penalty_al' (LadrunoEmbeddedNode coupling) is not "
+            "wired yet (ADR 0068 P4). Use enforce='penalty' "
+            "(ASDEmbeddedNodeElement) or 'equation' (EQ_Constraint)."
+        )
+
     ele_tag = tags.allocate("element")
     if rec.kind == ConstraintKind.DISTRIBUTING:
         ref = int(rec.slave_node)
@@ -3775,6 +3792,77 @@ def _emit_one_interpolation(
         rotational=rec.rotational,
         pressure=rec.pressure,
     )
+
+
+def _emit_equation_tie(
+    emitter: "Emitter", rec: "InterpolationRecord",
+) -> None:
+    """Expand one ``enforce="equation"`` :class:`InterpolationRecord` into
+    OpenSees ``equationConstraint`` rows — one per tied DOF (ADR 0068 §3).
+
+    For each translational DOF ``d`` in ``rec.dofs`` the tie is the exact
+    kinematic relation ``u_d(slave) = Σ_i w_i·u_d(master_i)``, written in
+    EQ_Constraint sum-to-zero form::
+
+        1·u_d(slave) + Σ_i (−w_i)·u_d(master_i) = 0
+
+    No element tag is allocated (EQ_Constraint is a domain command, not an
+    element); the 3/4-Rnode embedded guard does NOT apply (any face arity
+    the shape functions support is fine — ``len(weights)`` masters).
+    Rows are emitted in ``dofs`` order for determinism (INV-5).
+    """
+    weights = rec.weights
+    if weights is None:
+        raise ValueError(
+            f"equation tie (slave={rec.slave_node}) has no interpolation "
+            f"weights; the resolver must populate InterpolationRecord."
+            f"weights for enforce='equation'."
+        )
+    master_nodes = [int(m) for m in rec.master_nodes]
+    if len(master_nodes) != len(weights):
+        raise ValueError(
+            f"equation tie (slave={rec.slave_node}): {len(master_nodes)} "
+            f"master nodes but {len(weights)} weights — mismatch."
+        )
+    slave = int(rec.slave_node)
+    dofs = [int(d) for d in (rec.dofs or [1, 2, 3])]
+    # The equation route ties TRANSLATIONS ONLY: interpolating a rotational
+    # DOF from a (translational) master face is meaningless, and the master
+    # nodes typically have no DOF >3 — OpenSees would fail late in
+    # EQ_Constraint::setDomain ("retained DOF out of bounds"). Fail loud
+    # here (ADR 0068 INV-3, dof axis — distinct from the -rot knob).
+    bad = [d for d in dofs if d < 1 or d > 3]
+    if bad:
+        raise ValueError(
+            f"equation tie (slave={slave}): dofs {bad} out of range — the "
+            f"equation route ties translations only (1..3). Use "
+            f"enforce='penalty'/'penalty_al' or kinematic_coupling for "
+            f"rotational coupling."
+        )
+    for d in dofs:
+        # Drop zero-weight masters: OpenSees rejects ANY zero rcoef
+        # (EQ_Constraint.cpp:98) and aborts the WHOLE equationConstraint
+        # line — and a slave projecting onto a master face edge/node
+        # legitimately yields N_i=0. Without this filter that routine
+        # geometric case silently drops the entire tie.
+        retained = [
+            (m, d, -float(w))
+            for m, w in zip(master_nodes, weights) if float(w) != 0.0
+        ]
+        if not retained:
+            raise ValueError(
+                f"equation tie (slave={slave}, dof={d}): all interpolation "
+                f"weights are zero — degenerate projection."
+            )
+        # A self-referential EQ (slave also a retained master) puts u_c on
+        # both sides — guard rather than emit a singular row.
+        if any(m == slave for m, _, _ in retained):
+            raise ValueError(
+                f"equation tie: slave node {slave} is also one of its own "
+                f"master face nodes — degenerate self-referential tie "
+                f"(coincident/duplicate node?)."
+            )
+        emitter.equationConstraint(slave, d, 1.0, retained)
 
 
 def _check_embedded_rnode_count(rec: object) -> None:
@@ -4962,6 +5050,20 @@ def _plan_rank_constraints(
             for rec in interps_iter():
                 if not isinstance(rec, InterpolationRecord):
                     continue
+                # ADR 0068: the equation route is a domain-level
+                # EQ_Constraint, NOT an element — the single-canonical-host-
+                # rank ownership rule below is wrong for it (it would drop
+                # the constraint on slave-owning ranks and falsely error on
+                # a master face cut by a partition). Cross-partition EQ
+                # replication is deferred (Open item 2 / P5); fail loud
+                # rather than emit a silently mis-routed deck.
+                if getattr(rec, "enforce", "penalty") == "equation":
+                    raise NotImplementedError(
+                        "enforce='equation' ties are not yet supported under "
+                        "partitioned / MPI emit (cross-partition EQ_Constraint "
+                        "replication is ADR 0068 P5). Use a single partition, "
+                        "or enforce='penalty' for the partitioned interface."
+                    )
                 masters = [int(mn) for mn in rec.master_nodes]
                 if not masters:
                     continue
