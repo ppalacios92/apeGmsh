@@ -9,6 +9,7 @@ import pytest
 
 from apeGmsh import apeGmsh
 from apeGmsh._kernel.defs.rebar import Bar, Cage, Stirrup
+from apeGmsh.rebar.detailing import ACI318
 
 
 def _node_set(dim: int) -> set[int]:
@@ -65,9 +66,82 @@ def test_place_rejects_unknown_coupling_and_true_arc():
         with pytest.raises(ValueError):
             g.rebar.place(cage, into="V", coupling="bogus")
         with pytest.raises(NotImplementedError):
-            g.rebar.place(cage, into="V", coupling="embedded")
-        with pytest.raises(NotImplementedError):
             g.rebar.place(cage, into="V", coupling="conformal", true_arc=True)
+
+
+def test_embedded_place_forwards_to_reinforce():
+    with apeGmsh(model_name="rebar_embedded") as g:
+        g.model.geometry.add_box(0, 0, 0, 0.5, 0.5, 2.0, label="ConcreteVol")
+        bar = g.rebar.bar([(0.25, 0.25, 0.1), (0.25, 0.25, 1.9)],
+                          db=0.025, material="rebar", name="L1")
+        placement = g.rebar.place(Cage(bars=(bar,)), into="ConcreteVol",
+                                  coupling="embedded", perfect=1.0e8)
+        assert placement.coupling == "embedded"
+        # forwarded to the shipped g.reinforce binding composite
+        defs = g.reinforce.reinforce_defs
+        assert len(defs) == 1
+        assert defs[0].slave_label == "rebar.L1"
+        assert defs[0].master_label == "ConcreteVol"
+        assert defs[0].perfect == 1.0e8
+        assert defs[0].bar_diameter == pytest.approx(0.025)
+
+
+def test_embedded_requires_bond_or_perfect():
+    with apeGmsh(model_name="rebar_embedded_guard") as g:
+        g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="V")
+        bar = g.rebar.bar([(0.5, 0.5, 0.1), (0.5, 0.5, 0.9)], db=0.02,
+                          material="rebar")
+        with pytest.raises(ValueError):
+            g.rebar.place(Cage(bars=(bar,)), into="V", coupling="embedded")
+
+
+def test_embedded_designation_db_needs_standard():
+    with apeGmsh(model_name="rebar_embedded_std") as g:
+        g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="V")
+        bar = g.rebar.bar([(0.5, 0.5, 0.1), (0.5, 0.5, 0.9)], db="#8",
+                          material="rebar")
+        with pytest.raises(ValueError):           # no standard set
+            g.rebar.place(Cage(bars=(bar,)), into="V", coupling="embedded",
+                          perfect=1.0e8)
+        g.rebar.use_standard(ACI318())            # now the designation resolves
+        g.rebar.place(Cage(bars=(bar,)), into="V", coupling="embedded",
+                      perfect=1.0e8)
+        assert g.reinforce.reinforce_defs[-1].bar_diameter == pytest.approx(1.0)
+
+
+def test_mixed_coupling_splits_conformal_and_embedded():
+    with apeGmsh(model_name="rebar_mixed") as g:
+        g.model.geometry.add_box(0, 0, 0, 0.5, 0.5, 2.0, label="ConcreteVol")
+        bar = g.rebar.bar([(0.15, 0.15, 0.1), (0.15, 0.15, 1.9)], db=0.025,
+                          material="rebar", name="L1")
+        tie = g.rebar.stirrup_rect(0.5, 0.5, 0.04, db=0.012, material="rebar",
+                                   z=1.0, name="T1")
+        cage = Cage(bars=(bar,), stirrups=(tie,))
+        placement = g.rebar.place(
+            cage, into="ConcreteVol", coupling="conformal",
+            per_member_coupling={"tie": "embedded"}, perfect=1.0e8,
+        )
+        assert placement.coupling == "mixed"
+        # exactly the tie went to g.reinforce; the longitudinal bar is conformal
+        defs = g.reinforce.reinforce_defs
+        assert len(defs) == 1
+        assert defs[0].slave_label == "rebar.T1"
+        bar_member = next(m for m in placement.members if m.role == "longitudinal")
+        assert bar_member.coupling == "conformal"
+
+
+def test_embedded_resolves_at_get_fem_data():
+    with apeGmsh(model_name="rebar_embedded_resolve") as g:
+        vol = g.model.geometry.add_box(0, 0, 0, 0.5, 0.5, 2.0)
+        g.physical.add_volume([vol], name="ConcreteVol")   # real PG for resolve
+        bar = g.rebar.bar([(0.25, 0.25, 0.2), (0.25, 0.25, 1.8)], db=0.025,
+                          material="rebar", name="L1")
+        g.rebar.place(Cage(bars=(bar,)), into="ConcreteVol",
+                      coupling="embedded", perfect=1.0e8)
+        g.mesh.sizing.set_global_size(0.25)
+        g.mesh.generation.generate(dim=3)
+        g.mesh.queries.get_fem_data()             # triggers g.reinforce.resolve
+        assert g.reinforce.reinforce_records, "embedded bar did not resolve"
 
 
 def test_place_after_snapshot_is_chain_phase_guarded():

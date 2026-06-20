@@ -17,7 +17,9 @@ generalised off the grid).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+import warnings
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Iterable
 
 from .._kernel.defs.rebar import METADATA, Bar, Cage, Hook, Path, Stirrup, Vec3
@@ -39,6 +41,7 @@ class RebarMember:
     db: float | str
     material: str
     element: str
+    coupling: str
     line_tags: tuple[int, ...]
 
 
@@ -90,13 +93,22 @@ class RebarComposite:
 
     # ---- placement / coupling router --------------------------------
     def place(self, cage: Cage, into: str, *, coupling: str = "conformal",
-              host_dim: int | None = None, true_arc: bool = False,
+              per_member_coupling: dict[str, str] | None = None,
+              bond: str | None = None, perfect: float | None = None,
+              kt=None, kt_alpha=None, enforce: str = "penalty",
+              bipenalty: bool = False, dtcr=None, tolerance: float = 1.0e-6,
+              snap: bool = False, host_dim: int | None = None,
+              true_arc: bool = False, on_conformal_infeasible: str = "fail",
               name: str | None = None) -> RebarPlacement:
-        """Emit the cage geometry and couple it to host solid ``into``.
+        """Emit the cage geometry and couple each member to host ``into``.
 
-        ``coupling="conformal"`` (P1) embeds the bar curves into the host
-        so the mesh conforms (shared nodes, perfect bond).
-        ``coupling="embedded"`` (P2) forwards to ``g.reinforce``.
+        ``coupling="conformal"`` embeds the bar curves into the host so the
+        mesh conforms (shared nodes, perfect bond). ``coupling="embedded"``
+        meshes the bars independently and forwards to ``g.reinforce`` (→
+        ``LadrunoEmbeddedRebar``); it needs ``bond=`` (a ``LadrunoBondSlip``
+        material name) **or** ``perfect=`` (a perfect-bond axial penalty).
+        ``per_member_coupling={role: coupling}`` overrides per role for
+        **mixed** cages (e.g. longitudinal conformal + ties embedded).
         """
         chain_phase_guard(self._parent, "g.rebar.place")
         if not isinstance(cage, Cage):
@@ -108,54 +120,145 @@ class RebarComposite:
                 "g.rebar.place: true_arc fillet geometry is deferred to P3; "
                 "use the polyline default (true_arc=False) for now."
             )
-        if coupling == "conformal":
-            return self._place_conformal(cage, into, host_dim=host_dim,
-                                         name=name)
-        if coupling == "embedded":
-            raise NotImplementedError(
-                "g.rebar.place: coupling='embedded' is P2 (forwards to "
-                "g.reinforce → LadrunoEmbeddedRebar)."
+        if coupling not in ("conformal", "embedded"):
+            raise ValueError(
+                f"g.rebar.place: coupling must be 'conformal' or 'embedded', "
+                f"got {coupling!r}."
             )
-        raise ValueError(
-            f"g.rebar.place: coupling must be 'conformal' or 'embedded', "
-            f"got {coupling!r}."
+        if on_conformal_infeasible not in ("fail", "embedded"):
+            raise ValueError(
+                f"g.rebar.place: on_conformal_infeasible must be 'fail' or "
+                f"'embedded', got {on_conformal_infeasible!r}."
+            )
+        rein_kw = dict(bond=bond, perfect=perfect, kt=kt, kt_alpha=kt_alpha,
+                       enforce=enforce, bipenalty=bipenalty, dtcr=dtcr,
+                       tolerance=tolerance, snap=snap)
+        return self._place_members(
+            cage, into, default_coupling=coupling,
+            per_member_coupling=per_member_coupling or {},
+            host_dim=host_dim, on_conformal_infeasible=on_conformal_infeasible,
+            name=name, rein_kw=rein_kw,
         )
 
-    # ---- conformal (P1) ---------------------------------------------
-    def _place_conformal(self, cage: Cage, into: str, *,
-                         host_dim: int | None, name: str | None) -> RebarPlacement:
+    def _place_members(self, cage: Cage, into: str, *, default_coupling: str,
+                       per_member_coupling: dict[str, str], host_dim: int | None,
+                       on_conformal_infeasible: str, name: str | None,
+                       rein_kw: dict) -> RebarPlacement:
         g = self._parent
         geom = g.model.geometry
         in_dim = host_dim if host_dim is not None else self._detect_host_dim(into)
         base = name or "rebar"
 
         members: list[RebarMember] = []
-        all_line_tags: list[int] = []
+        conformal_tags: list[int] = []
+        # (RebarMember, spec) of conformal members, kept so an embed failure
+        # can fall back to the embedded path under on_conformal_infeasible.
+        conformal_specs: list = []
+
+        # Pass 1 — emit all curve geometry (no PGs yet); validate coupling.
+        emitted: list = []
         idx = 0
         for default_role, items in (("longitudinal", cage.bars),
                                     ("tie", cage.stirrups)):
             for m in items:
-                lts = self._emit_polyline(geom, m.path.points)
                 role = getattr(m, "role", default_role)
-                pg = f"{base}.{m.name or f'{role}_{idx}'}"
-                g.physical.add_curve(lts, name=pg)
-                members.append(RebarMember(
-                    pg=pg, role=role, db=m.db, material=m.material,
-                    element=getattr(m, "element", "truss"),
-                    line_tags=tuple(lts),
-                ))
-                all_line_tags.extend(lts)
+                eff = per_member_coupling.get(role, default_coupling)
+                if eff not in ("conformal", "embedded"):
+                    raise ValueError(
+                        f"g.rebar.place: per_member_coupling[{role!r}]={eff!r} "
+                        f"must be 'conformal' or 'embedded'."
+                    )
+                lts = self._emit_polyline(geom, m.path.points)
+                emitted.append((role, eff, m, lts, idx))
                 idx += 1
 
+        # Sync once so the new curve entities exist in the gmsh model before
+        # we wrap them in physical groups (an unsynced PG resolves to nothing).
         g.model.sync()
-        # Conformal coupling: force the host mesh to conform to the bar
-        # curves (gmsh embed) so generate() puts shared nodes on the bars.
-        g.mesh.editing.embed(all_line_tags, into, dim=1, in_dim=in_dim)
 
-        placement = RebarPlacement(name=base, host=into, coupling="conformal",
-                                   members=tuple(members))
+        # Pass 2 — physical groups + coupling registration.
+        for role, eff, m, lts, i in emitted:
+            pg = f"{base}.{m.name or f'{role}_{i}'}"
+            g.physical.add_curve(lts, name=pg)
+            member = RebarMember(
+                pg=pg, role=role, db=m.db, material=m.material,
+                element=getattr(m, "element", "truss"),
+                coupling=eff, line_tags=tuple(lts),
+            )
+            members.append(member)
+            if eff == "conformal":
+                conformal_tags.extend(lts)
+                conformal_specs.append((member, m))
+            else:
+                self._register_embedded(into, pg, m, **rein_kw)
+
+        if conformal_tags:
+            try:
+                # Conformal coupling: force the host mesh to conform to the
+                # bar curves so generate() shares nodes (perfect bond).
+                g.mesh.editing.embed(conformal_tags, into, dim=1, in_dim=in_dim)
+            except Exception as exc:                       # embed-time failure
+                if on_conformal_infeasible != "embedded":
+                    raise
+                warnings.warn(
+                    f"g.rebar.place: conformal embed failed ({exc}); falling "
+                    f"back to embedded coupling for {len(conformal_specs)} "
+                    f"member(s).", stacklevel=2,
+                )
+                members = [
+                    m if m.coupling == "embedded"
+                    else replace(m, coupling="embedded")
+                    for m in members
+                ]
+                for member, spec in conformal_specs:
+                    self._register_embedded(into, member.pg, spec, **rein_kw)
+
+        couplings = {m.coupling for m in members}
+        placement = RebarPlacement(
+            name=base, host=into,
+            coupling=next(iter(couplings)) if len(couplings) == 1 else "mixed",
+            members=tuple(members),
+        )
         self.placements.append(placement)
         return placement
+
+    def _register_embedded(self, into: str, pg: str, spec, *, bond, perfect,
+                           kt, kt_alpha, enforce, bipenalty, dtcr, tolerance,
+                           snap) -> None:
+        """Forward one embedded member to the shipped ``g.reinforce``
+        binding composite (→ ``LadrunoEmbeddedRebar``)."""
+        if bond is None and perfect is None:
+            raise ValueError(
+                f"g.rebar.place: embedded coupling for {pg!r} needs "
+                f"bond=<LadrunoBondSlip name> or perfect=<axial penalty>."
+            )
+        self._parent.reinforce.reinforce(
+            host=into, bars=pg, bond=bond, perfect=perfect,
+            bar_diameter=self._resolve_db_value(spec.db),
+            bar_area=self._resolve_area_value(spec.db),
+            kt=kt, kt_alpha=kt_alpha, enforce=enforce, bipenalty=bipenalty,
+            dtcr=dtcr, tolerance=tolerance, snap=snap, name=pg,
+        )
+
+    def _resolve_db_value(self, db) -> float:
+        if isinstance(db, (int, float)) and not isinstance(db, bool):
+            return float(db)
+        if self._standard is not None:
+            return float(self._standard.bar_diameter(db))
+        raise ValueError(
+            f"g.rebar: db {db!r} is a designation but no DetailingStandard "
+            f"is set; call g.rebar.use_standard(ACI318()) or pass a numeric db."
+        )
+
+    def _resolve_area_value(self, db) -> float:
+        if isinstance(db, (int, float)) and not isinstance(db, bool):
+            return math.pi * float(db) ** 2 / 4.0
+        if self._standard is not None:
+            return float(self._standard.bar_area(db))
+        raise ValueError(
+            f"g.rebar: db {db!r} is a designation but no DetailingStandard "
+            f"is set; call g.rebar.use_standard(ACI318()) or pass a numeric db."
+        )
 
     # ---- geometry helpers -------------------------------------------
     def _emit_polyline(self, geom, points: tuple[Vec3, ...]) -> list[int]:
