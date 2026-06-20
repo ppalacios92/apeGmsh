@@ -58,16 +58,13 @@ def test_conformal_place_shares_nodes_with_host():
         assert line_nodes <= vol_nodes
 
 
-def test_place_rejects_unknown_coupling_and_true_arc():
+def test_place_rejects_unknown_coupling():
     with apeGmsh(model_name="rebar_guard") as g:
         g.model.geometry.add_box(0, 0, 0, 1, 1, 1, label="V")
-        bar = g.rebar.bar([(0.5, 0.5, 0.0), (0.5, 0.5, 1.0)], db="#8",
+        bar = g.rebar.bar([(0.5, 0.5, 0.0), (0.5, 0.5, 1.0)], db=0.02,
                           material="rebar")
-        cage = Cage(bars=(bar,))
         with pytest.raises(ValueError):
-            g.rebar.place(cage, into="V", coupling="bogus")
-        with pytest.raises(NotImplementedError):
-            g.rebar.place(cage, into="V", coupling="conformal", true_arc=True)
+            g.rebar.place(Cage(bars=(bar,)), into="V", coupling="bogus")
 
 
 def test_embedded_place_forwards_to_reinforce():

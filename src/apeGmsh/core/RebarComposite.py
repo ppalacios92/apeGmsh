@@ -23,10 +23,19 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Iterable
 
 import gmsh
+import numpy as np
 
 from .._kernel.defs.rebar import METADATA, Bar, Cage, Hook, Path, Stirrup, Vec3
+from ..rebar._geometry import hook_primitives, outward_tangent
 from ._compose_errors import chain_phase_guard
 from ._helpers import resolve_to_tags
+
+_AXIS_TOKENS = {
+    "up": (0.0, 0.0, 1.0), "down": (0.0, 0.0, -1.0),
+    "+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0),
+    "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0),
+    "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0),
+}
 
 if TYPE_CHECKING:
     from .._core import _ApeGmshSession
@@ -121,11 +130,6 @@ class RebarComposite:
             raise TypeError(
                 f"g.rebar.place: cage must be a Cage, got {type(cage).__name__}."
             )
-        if true_arc:
-            raise NotImplementedError(
-                "g.rebar.place: true_arc fillet geometry is deferred to P3; "
-                "use the polyline default (true_arc=False) for now."
-            )
         if coupling not in ("conformal", "embedded"):
             raise ValueError(
                 f"g.rebar.place: coupling must be 'conformal' or 'embedded', "
@@ -146,7 +150,7 @@ class RebarComposite:
         plan = self._plan(cage, into, default_coupling=coupling,
                           per_member_coupling=pmc, std=std, rein_kw=rein_kw,
                           on_conformal_infeasible=on_conformal_infeasible,
-                          host_dim=host_dim, name=name)
+                          host_dim=host_dim, name=name, true_arc=true_arc)
         return self._emit_plan(plan, into, rein_kw=rein_kw,
                                on_conformal_infeasible=on_conformal_infeasible)
 
@@ -154,7 +158,7 @@ class RebarComposite:
     def _plan(self, cage: Cage, into: str, *, default_coupling: str,
               per_member_coupling: dict[str, str], std, rein_kw: dict,
               on_conformal_infeasible: str, host_dim: int | None,
-              name: str | None) -> dict:
+              name: str | None, true_arc: bool) -> dict:
         in_dim = host_dim if host_dim is not None else self._detect_host_dim(into)
         host_tags = resolve_to_tags(into, dim=in_dim, session=self._parent)
         base = name or f"rebar{self._place_seq}"
@@ -214,8 +218,21 @@ class RebarComposite:
                     has_emb = True
                 else:
                     has_conf = True
-                planned.append((role, eff, m, pg, elem,
-                                self._dia(std, m.db), self._area(std, m.db)))
+                dia = self._dia(std, m.db)
+                hooks = {
+                    "start": self._resolve_hook(
+                        std, getattr(m, "start_hook", None), dia, "primary",
+                        required=True, true_arc=true_arc),
+                    "end": self._resolve_hook(
+                        std, getattr(m, "end_hook", None), dia, "primary",
+                        required=True, true_arc=true_arc),
+                    "closure": self._resolve_hook(
+                        std, getattr(m, "closure_hook", None), dia,
+                        "seismic_hoop", required=False, true_arc=true_arc)
+                    if is_stirrup else None,
+                }
+                planned.append((role, eff, m, pg, elem, dia,
+                                self._area(std, m.db), hooks))
                 idx += 1
 
         for k in per_member_coupling:
@@ -254,8 +271,48 @@ class RebarComposite:
                 "which is single-process today; partitioned/MPI models must "
                 "use coupling='conformal'.", stacklevel=3)
 
+        # Centroid for "centroid"/"in"/"out" hook turn directions — the host
+        # volume's centre of mass (hooks bend toward the section core).
+        centroid = None
+        any_hook = any(any(v is not None for v in hk.values())
+                       for *_rest, hk in planned)
+        if any_hook and host_tag is not None:
+            try:
+                com = self._parent.model.queries.center_of_mass(
+                    host_tag, dim=in_dim)
+                centroid = tuple(float(c) for c in com)
+            except Exception:
+                centroid = None
+
         self._place_seq += 1
-        return dict(base=base, in_dim=in_dim, host_tag=host_tag, planned=planned)
+        return dict(base=base, in_dim=in_dim, host_tag=host_tag,
+                    planned=planned, centroid=centroid)
+
+    def _resolve_hook(self, std, hook, dia, kind: str, *, required: bool,
+                      true_arc: bool):
+        """Resolve a hook to numeric tail+bend_radius at bind time. Returns
+        None for an absent hook (or a defaulted stirrup closure when no
+        standard is available). A global ``true_arc`` forces arc geometry."""
+        if hook is None:
+            return None
+        if true_arc and not hook.true_arc:
+            hook = replace(hook, true_arc=True)
+        if std is not None:
+            return std.resolve_hook(hook, dia, kind=kind)
+        # No standard: only a fully-numeric hook is self-resolving.
+        numeric = (isinstance(hook.tail, (int, float))
+                   and not isinstance(hook.tail, bool)
+                   and isinstance(hook.bend_radius, (int, float))
+                   and not isinstance(hook.bend_radius, bool))
+        if numeric:
+            return hook
+        if required:
+            raise ValueError(
+                "g.rebar: a hook needs a DetailingStandard "
+                "(g.rebar.use_standard(...) or Cage(standard=...)) or a "
+                "fully-numeric tail + bend_radius."
+            )
+        return None                      # defaulted stirrup closure, no std
 
     # ---- emit (mutates gmsh; all inputs pre-validated) --------------
     def _emit_plan(self, plan: dict, into: str, *, rein_kw: dict,
@@ -263,11 +320,28 @@ class RebarComposite:
         g = self._parent
         geom = g.model.geometry
         base, in_dim, host_tag = plan["base"], plan["in_dim"], plan["host_tag"]
+        centroid = plan["centroid"]
 
-        # Pass 1 — emit all curve geometry (no PGs yet).
+        # Pass 1 — emit all curve geometry (no PGs yet), including hooks.
         emitted: list = []
-        for role, eff, m, pg, elem, dia, area in plan["planned"]:
-            lts = self._emit_polyline(geom, m.path.points)
+        for role, eff, m, pg, elem, dia, area, hooks in plan["planned"]:
+            lts, pts = self._emit_polyline(geom, m.path.points)
+            pts_xyz = m.path.points
+            if hooks["start"] is not None:
+                lts += self._emit_hook(
+                    geom, pts[0], pts_xyz[0],
+                    outward_tangent(pts_xyz, at_start=True),
+                    hooks["start"], centroid)
+            if hooks["end"] is not None:
+                lts += self._emit_hook(
+                    geom, pts[-1], pts_xyz[-1],
+                    outward_tangent(pts_xyz, at_start=False),
+                    hooks["end"], centroid)
+            if hooks["closure"] is not None:
+                lts += self._emit_hook(
+                    geom, pts[-1], pts_xyz[-1],
+                    outward_tangent(pts_xyz, at_start=False),
+                    hooks["closure"], centroid)
             emitted.append((role, eff, m, pg, elem, dia, area, lts))
         # Sync once so the curve entities exist before we wrap them in PGs.
         g.model.sync()
@@ -400,10 +474,10 @@ class RebarComposite:
             )
 
     # ---- geometry helpers -------------------------------------------
-    def _emit_polyline(self, geom, points: tuple[Vec3, ...]) -> list[int]:
-        """Emit a polyline as gmsh points + line segments, returning the
-        line tags. A closed loop (first == last) reuses the first point so
-        the loop welds into one node ring."""
+    def _emit_polyline(self, geom, points: tuple[Vec3, ...]):
+        """Emit a polyline as gmsh points + line segments. Returns
+        ``(line_tags, point_tags)``. A closed loop (first == last) reuses
+        the first point so the loop welds into one node ring."""
         closed = len(points) >= 2 and points[0] == points[-1]
         pt_tags: list[int] = []
         first_tag: int | None = None
@@ -416,8 +490,58 @@ class RebarComposite:
                 if i == 0:
                     first_tag = t
                 pt_tags.append(t)
-        return [geom.add_line(pt_tags[i], pt_tags[i + 1], sync=False)
-                for i in range(len(pt_tags) - 1)]
+        line_tags = [geom.add_line(pt_tags[i], pt_tags[i + 1], sync=False)
+                     for i in range(len(pt_tags) - 1)]
+        return line_tags, pt_tags
+
+    def _emit_hook(self, geom, anchor_tag: int, anchor_xyz, tangent,
+                   hook: Hook, centroid) -> list[int]:
+        """Realise a resolved hook as gmsh curves appended at ``anchor_tag``,
+        reusing point tags between primitives so the chain welds without
+        make_conformal. Returns the new curve tags."""
+        turn_dir = self._turn_dir(hook.turn, anchor_xyz, centroid)
+        prims, fell_back = hook_primitives(
+            anchor_xyz, tangent, turn_dir, hook.angle, hook.tail,
+            hook.bend_radius, hook.true_arc)
+        if fell_back:
+            warnings.warn(
+                "g.rebar: hook turn direction is collinear with the bar; "
+                "picked a deterministic seed bend plane.", stacklevel=3)
+        tags: list[int] = []
+        prev = anchor_tag
+        for prim in prims:
+            if prim[0] == "line":
+                _, _p0, p1 = prim
+                end = geom.add_point(float(p1[0]), float(p1[1]), float(p1[2]),
+                                     sync=False)
+                tags.append(geom.add_line(prev, end, sync=False))
+                prev = end
+            else:                                    # ("arc", p_start, center, p_end)
+                _, _ps, center, p_end = prim
+                ct = geom.add_point(float(center[0]), float(center[1]),
+                                    float(center[2]), sync=False)
+                end = geom.add_point(float(p_end[0]), float(p_end[1]),
+                                     float(p_end[2]), sync=False)
+                tags.append(geom.add_arc(prev, ct, end, sync=False))
+                prev = end
+        return tags
+
+    @staticmethod
+    def _turn_dir(turn, anchor, centroid):
+        anchor = np.asarray(anchor, dtype=float)
+        if isinstance(turn, str):
+            tl = turn.lower()
+            if tl in ("centroid", "in"):
+                return (np.asarray(centroid, float) - anchor
+                        if centroid is not None else np.zeros(3))
+            if tl == "out":
+                return (anchor - np.asarray(centroid, float)
+                        if centroid is not None else np.zeros(3))
+            axis = _AXIS_TOKENS.get(tl)
+            if axis is None:
+                raise ValueError(f"g.rebar: unknown turn token {turn!r}.")
+            return np.asarray(axis, float)
+        return np.asarray(turn, dtype=float)
 
     def _detect_host_dim(self, into: str) -> int:
         """Resolve the host's dimension (3D solid preferred, then 2D)."""
