@@ -450,6 +450,8 @@ def _from_gmsh(
     sp_records: list = []
     mass_records: list = []
     reinforce_ties: list = []
+    embed_ties: list = []
+    contacts: list = []
     rebar_elements: list = []
 
     if session is not None:
@@ -504,6 +506,23 @@ def _from_gmsh(
             reinforce_ties = reinforce_comp.resolve(
                 node_ids, node_coords_all)
 
+        # General node-to-host embedment (g.embed). Isotropic sibling of
+        # reinforcement: each node of the constrained set is inverse-mapped
+        # into its non-matching solid host, producing one EmbedTieRecord per
+        # node. Same fail-loud policy.
+        embed_comp = getattr(session, "embed", None)
+        if (embed_comp is not None
+                and getattr(embed_comp, "embed_defs", None)):
+            embed_ties = embed_comp.resolve(
+                node_ids, node_coords_all)
+
+        # Face-to-face contact (g.constraints.contact). The contact defs live
+        # on the constraints composite but resolve to an additive list (like
+        # reinforce/embed), not the MP-constraint dispatch.
+        if (constraints_comp is not None
+                and getattr(constraints_comp, "contact_defs", None)):
+            contacts = constraints_comp.resolve_contacts(
+                node_ids, node_coords_all)
         # Structural rebar elements (ADR 0067 P5.2 / B1): the cage's
         # auto-emit bars from g.rebar.place(emit_elements=True). resolve()
         # extracts each bar's line-cell connectivity from the live mesh (the
@@ -649,6 +668,8 @@ def _from_gmsh(
         partitions=partitions or None,
         part_elem_map=part_elem_map or None,
         reinforce_ties=reinforce_ties or None,
+        embed_ties=embed_ties or None,
+        contacts=contacts or None,
         rebar_elements=rebar_elements or None,
     )
 

@@ -42,6 +42,17 @@ _PROFILER_FORK_REQUIRED = (
     "profiled path."
 )
 
+#: Raised by :meth:`LiveOpsEmitter.contact_surface` / :meth:`contact` when the
+#: live build lacks the fork-only ``contactSurface`` / ``contact`` commands
+#: (i.e. stock openseespy). Deck emission (ops.tcl/ops.py) works on any build;
+#: only running the contact model in-process needs the Ladruno fork.
+_CONTACT_FORK_REQUIRED = (
+    "ops.contactSurface / ops.contact require the Ladruno fork build of "
+    "OpenSees (the contact subsystem is fork-only). Deck emission via "
+    "ops.tcl(...) / ops.py(...) works on any build; only running the contact "
+    "model in-process needs the fork."
+)
+
 #: Raised by :meth:`LiveOpsEmitter.ladruno_projection_tie_force` when the live
 #: build lacks the fork-only ``ladrunoProjectionTieForce`` query (i.e. stock
 #: openseespy). The query also requires the active constraint handler to be
@@ -391,6 +402,34 @@ class LiveOpsEmitter:
         self._ops.equationConstraint(
             int(cnode), int(cdof), float(ccoef), *flat,
         )
+
+    def embedded_node(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # LadrunoEmbeddedNode coupling (g.embed). Routed through
+        # self.element so the fork-only gate raises a clear "requires the
+        # Ladruno fork build" error on a stock OpenSees.
+        self.element("LadrunoEmbeddedNode", ele_tag, *args)
+
+    def contact_surface(
+        self, tag: int, *args: int | float | str,
+    ) -> None:
+        # Fork-only `contactSurface` command (g.constraints.contact). Stock
+        # openseespy has no such attribute — gate on it and raise a friendly
+        # fork-required error instead of a bare AttributeError.
+        fn = getattr(self._ops, "contactSurface", None)
+        if fn is None:
+            raise RuntimeError(_CONTACT_FORK_REQUIRED)
+        fn(tag, *args)
+
+    def contact(
+        self, tag: int, *args: int | float | str,
+    ) -> None:
+        # Fork-only `contact` command (g.constraints.contact).
+        fn = getattr(self._ops, "contact", None)
+        if fn is None:
+            raise RuntimeError(_CONTACT_FORK_REQUIRED)
+        fn(tag, *args)
 
     def mp_constraint_comment(self, name: str) -> None:
         # No-op — live execution can't carry comments. Argument exists

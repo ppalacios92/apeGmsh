@@ -747,6 +747,8 @@ class ElementComposite:
         part_elem_map: dict | None = None,
         module_label: dict[int, ndarray] | None = None,
         reinforce_ties=None,
+        embed_ties=None,
+        contacts=None,
         rebar_elements=None,
     ) -> None:
         self._groups: dict[int, ElementGroup] = dict(groups)
@@ -765,6 +767,19 @@ class ElementComposite:
         # snapshot stays byte-identical (the snapshot_id hash excludes ties).
         self.reinforce_ties: list = list(reinforce_ties or [])
 
+        # General node-to-host embedment ties (g.embed). A plain list of
+        # EmbedTieRecord — one LadrunoEmbeddedNode coupling per node.
+        # Runtime-only: the bridge build step consumes it
+        # (opensees._internal.build.emit_embed_ties); native H5 round-trip
+        # is deferred (same as reinforce_ties), so it is NOT persisted by
+        # FEMData.to_h5.
+        self.embed_ties: list = list(embed_ties or [])
+
+        # Face-to-face contact interactions (g.constraints.contact). A plain
+        # list of ContactRecord. Runtime-only (consumed by
+        # opensees._internal.build.emit_contacts); serial-only and not
+        # persisted to H5 (same as reinforce/embed ties).
+        self.contacts: list = list(contacts or [])
         # Structural rebar elements (ADR 0067 P5.2 / B1): the cage's
         # auto-emitted CorotTruss/dispBeamColumn intents from
         # g.rebar.place(emit_elements=True). A plain list of

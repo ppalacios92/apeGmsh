@@ -52,6 +52,8 @@ from ._internal.build import (
     emit_mp_constraints,
     emit_mp_constraints_partitioned,
     emit_reinforce_ties,
+    emit_embed_ties,
+    emit_contacts,
     emit_rebar_elements,
     emit_stage_mp_constraints,
     emit_stage_mp_constraints_partitioned,
@@ -276,6 +278,13 @@ def _kind_of(prim: Primitive) -> str:
     )
 
 
+def _fem_has_contacts(fem: "FEMData") -> bool:
+    """True iff the FEM snapshot carries any fork contact interactions
+    (``g.constraints.contact`` → ``fem.elements.contacts``)."""
+    elements = getattr(fem, "elements", None)
+    return bool(getattr(elements, "contacts", None)) if elements is not None else False
+
+
 def _fem_has_mp_constraints(fem: "FEMData") -> bool:
     """True iff the FEM snapshot carries any MP-constraint records.
 
@@ -347,6 +356,55 @@ def _fem_has_equation_ties(fem: "FEMData") -> bool:
             if getattr(rec, "enforce", "penalty") == "equation":
                 return True
     except TypeError:
+        pass
+    return False
+
+
+def _fem_has_handler_requiring_mp(fem: "FEMData") -> bool:
+    """True iff the FEM carries a constraint emitted as a true OpenSees
+    ``MP_Constraint`` (``equalDOF`` / ``equalDOF_mixed`` / ``rigidLink`` /
+    ``rigidDiaphragm``) that a Plain-style handler (``LadrunoContact``, fork
+    P1a) cannot enforce.
+
+    Used by the contact handler-conflict guard (#7) — distinct from the
+    broader :func:`_fem_has_mp_constraints` (which also counts penalty-element
+    interpolation ties). Node-side records emit MP_Constraints EXCEPT
+    ``kinematic_coupling`` (→ ``LadrunoKinematicCoupling`` element) and
+    ``rigid_body(as_element=True)`` (→ ``LadrunoRigidBody`` element) and
+    ``penalty`` (g.constraints.penalty → a stiff spring element, NOT an
+    MP_Constraint — it has no MP emit path in build.py), which are all
+    handler-independent. The interpolation ties (``tie`` / ``embedded`` /
+    ``distributing``) all emit penalty/coupling ELEMENTS — handler-independent
+    too; their only handler-requiring route is ``enforce="equation"``, caught
+    separately by :func:`_fem_has_equation_ties`. So only the node side, minus
+    those element-emitting kinds, requires a handler. Unknown node kinds
+    default to handler-requiring (conservative — better a false fail-loud than
+    a silently-unenforced MP constraint).
+    """
+    from apeGmsh._kernel.records._kinds import ConstraintKind
+
+    _HANDLER_INDEPENDENT = {
+        ConstraintKind.KINEMATIC_COUPLING,   # → LadrunoKinematicCoupling element
+        ConstraintKind.PENALTY,              # → stiff spring element
+    }
+
+    nodes = getattr(fem, "nodes", None)
+    node_constraints = (
+        getattr(nodes, "constraints", None) if nodes is not None else None
+    )
+    if node_constraints is None:
+        return False
+    try:
+        for rec in node_constraints:
+            kind = getattr(rec, "kind", None)
+            if kind in _HANDLER_INDEPENDENT:
+                continue
+            if (kind == ConstraintKind.RIGID_BODY
+                    and getattr(rec, "as_element", False)):
+                continue
+            return True
+    except TypeError:
+        # Not iterable — defensive on stubs without __iter__.
         pass
     return False
 
@@ -1321,6 +1379,13 @@ class BuiltModel:
         emit_reinforce_ties(
             emitter, self.fem, tags, name_to_tag=self.name_to_tag,
         )
+        # Node-to-host embedment ties (g.embed). One LadrunoEmbeddedNode
+        # per constrained node; no material-name resolution needed.
+        emit_embed_ties(emitter, self.fem, tags)
+        # Face-to-face contact (g.constraints.contact). contactSurface pairs
+        # + the contact verb; the LadrunoContact handler is forced by the
+        # constraint-handler auto-emit below.
+        emit_contacts(emitter, self.fem, tags)
 
         # 7b''. Auto-emitted structural rebar elements (g.rebar.place(
         # emit_elements=True), ADR 0067 P5.2 / B1). One CorotTruss per bar
@@ -1589,6 +1654,13 @@ class BuiltModel:
         emit_reinforce_ties(
             emitter, self.fem, tags, name_to_tag=self.name_to_tag,
         )
+        # Node-to-host embedment ties (g.embed). One LadrunoEmbeddedNode
+        # per constrained node; no material-name resolution needed.
+        emit_embed_ties(emitter, self.fem, tags)
+        # Face-to-face contact (g.constraints.contact). contactSurface pairs
+        # + the contact verb; the LadrunoContact handler is forced by the
+        # constraint-handler auto-emit below.
+        emit_contacts(emitter, self.fem, tags)
         emit_rebar_elements(
             emitter, self.fem, tags, name_to_tag=self.name_to_tag,
         )
@@ -2103,6 +2175,36 @@ class BuiltModel:
                 "cells is deferred (ADR 0067 P5.2). Emit single-process "
                 "(non-partitioned), or place with emit_elements=False and "
                 "hand-emit the bar elements."
+            )
+
+        # g.embed (LadrunoEmbeddedNode ties): like reinforce ties, an embed
+        # tie spans the constrained node + its host element's nodes, which may
+        # straddle ranks. Per-rank node-ownership routing is deferred — fail
+        # loud rather than silently dropping the embedment under MPI emit
+        # (the flat path emits these via emit_embed_ties; the partitioned
+        # path has no such call).
+        if getattr(elements_comp, "embed_ties", None):
+            raise BridgeError(
+                "apeSees: g.embed embedded-node ties (LadrunoEmbeddedNode) "
+                "are not yet supported under partitioned (MPI) emit — per-rank "
+                "node-ownership routing of the constrained node + host nodes "
+                "is deferred. Emit the embedded model single-process "
+                "(non-partitioned), or remove the embedment for the "
+                "partitioned run."
+            )
+
+        # g.constraints.contact (fork contactSurface/contact): the fork
+        # contact subsystem is serial-only (not parallel) — there is no
+        # per-rank contact routing. Fail loud rather than silently dropping
+        # the contact interaction under MPI emit (the flat path emits these
+        # via emit_contacts; the partitioned path has no such call).
+        if getattr(elements_comp, "contacts", None):
+            raise BridgeError(
+                "apeSees: g.constraints.contact interactions (fork "
+                "contactSurface/contact) are not supported under partitioned "
+                "(MPI) emit — the fork contact subsystem is serial-only. Emit "
+                "the contact model single-process (non-partitioned), or remove "
+                "the contact for the partitioned run."
             )
 
         # ADR 0049: a node-pair zeroLength-family element
@@ -4772,6 +4874,68 @@ class BuiltModel:
         | (any)                          | no MP -> no-op                  |
         +--------------------------------+-------------------------------+
         """
+        import warnings as _warnings
+
+        # Contact requires the LadrunoContact handler (it injects the contact
+        # FE adapters into the assembly). It supersedes the Transformation
+        # auto-emit: emit it whenever any contact interaction is present.
+        if _fem_has_contacts(self.fem):
+            # An enforce="equation" tie (EQ_Constraint) needs the Lagrange
+            # (implicit) or LadrunoProjection (explicit) handler — but contact
+            # needs LadrunoContact, and only ONE constraint handler can be
+            # active. The two are mutually exclusive. Without this guard the
+            # contact branch would emit LadrunoContact and return, silently
+            # dropping the equation tie (LadrunoContact cannot enforce
+            # EQ_Constraint). Fail loud rather than emit a broken deck.
+            if _fem_has_equation_ties(self.fem):
+                raise BridgeError(
+                    "Contact interactions and an enforce='equation' tie "
+                    "(EQ_Constraint) are both present, but they require "
+                    "different, mutually exclusive constraint handlers — "
+                    "contact needs 'LadrunoContact' while an equation tie "
+                    "needs 'Lagrange' (implicit) or 'LadrunoProjection' "
+                    "(explicit). A single OpenSees constraint handler cannot "
+                    "enforce both. Split the model into separate runs, or "
+                    "switch the tie to enforce='penalty' / 'penalty_al'."
+                )
+            # The LadrunoContact handler is Plain-style for MP constraints
+            # (fork P1a): with contact active, true MP_Constraints (equalDOF /
+            # equalDOF_mixed / rigidLink / rigidDiaphragm) are NOT enforced.
+            # Only one constraint handler can be active, and it must be
+            # LadrunoContact for the contact FE adapters — so a model with both
+            # contact and a handler-requiring MP constraint would silently drop
+            # the MP enforcement. Fail loud rather than emit a silently-wrong
+            # deck. NB this checks only HANDLER-REQUIRING constraints: penalty/
+            # penalty_al ties + kinematic/distributing couplings + rigid_body
+            # (as_element) emit handler-INDEPENDENT elements and coexist with
+            # contact fine; equation ties are caught above.
+            if _fem_has_handler_requiring_mp(self.fem):
+                raise BridgeError(
+                    "Contact interactions and a handler-requiring MP "
+                    "constraint (equalDOF / equalDOF_mixed / rigidLink / "
+                    "rigidDiaphragm) are both present, but the LadrunoContact "
+                    "handler required for contact is Plain-style for MP "
+                    "constraints (fork P1a) — the MP constraint would NOT be "
+                    "enforced. Only one constraint handler can be active. Split "
+                    "the model into separate runs, or remove the MP constraint "
+                    "from the contact run. (Penalty/penalty_al ties, "
+                    "kinematic/distributing couplings, and rigid_body "
+                    "as_element are handler-independent elements and are fine "
+                    "with contact.)"
+                )
+            declared = next(
+                (p for p in pre_element if isinstance(p, ConstraintHandler)), None)
+            if declared is not None:
+                _warnings.warn(
+                    "Contact interactions are present but a constraint handler "
+                    "was declared — contact requires 'LadrunoContact', so it is "
+                    "(re)emitted, overriding your handler. Remove the explicit "
+                    "handler to silence this.",
+                    OpenSeesAutoEmitWarning, stacklevel=2,
+                )
+            emitter.constraints("LadrunoContact")
+            return
+
         if not _fem_has_mp_constraints(self.fem):
             return
 

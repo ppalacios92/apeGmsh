@@ -243,6 +243,20 @@ class Emitter(Protocol):
         self, cnode: int, cdof: int, ccoef: float,
         retained: "Sequence[tuple[int, int, float]]",
     ) -> None: ...
+    # Contact engine (fork LadrunoContact, B1) — generic variadic-tail
+    # methods; the build pass formats the full ``contactSurface`` /
+    # ``contact`` argument lists. NB ``embedded_node`` (underscore, the
+    # generic node-to-host embed pass) is distinct from ``embeddedNode``
+    # (camelCase, the ASDEmbeddedNodeElement tie) above.
+    def embedded_node(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None: ...
+    def contact_surface(
+        self, tag: int, *args: int | float | str,
+    ) -> None: ...
+    def contact(
+        self, tag: int, *args: int | float | str,
+    ) -> None: ...
     def mp_constraint_comment(self, name: str) -> None: ...
 
     # -- Constitutive ----------------------------------------------------

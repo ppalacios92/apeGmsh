@@ -14,9 +14,59 @@ and :mod:`apeGmsh.mesh.records` for the full constraint taxonomy
 
 from __future__ import annotations
 
+import math
+import numbers
 from dataclasses import dataclass, field
 
 from .._coupling_control import CouplingControl
+
+
+def _is_real_number(v: object) -> bool:
+    """True for a real numeric scalar — including numpy float32/float64/int
+    scalars (which register as ``numbers.Real``) but EXCLUDING ``bool``
+    (``True``/``False`` are ``int`` subclasses and must not pass as a
+    penalty/coefficient)."""
+    return isinstance(v, numbers.Real) and not isinstance(v, bool)
+
+
+def _check_positive(
+    value: object, label: str, kind: str, *,
+    allow_zero: bool = False, integer: bool = False,
+) -> None:
+    """Validate an optional numeric knob: ``None`` skips; otherwise it must be
+    a real, FINITE number (numpy scalars OK, bool rejected), ``> 0`` (or
+    ``>= 0`` when ``allow_zero``), and a whole number when ``integer``. The
+    finiteness gate is load-bearing: ``nan``/``inf`` slip past every ``<``/
+    ``==`` comparison and a non-finite penalty poisons the contact tangent."""
+    if value is None:
+        return
+    if not _is_real_number(value):
+        raise ValueError(
+            f"{kind}: {label} must be a real number, got {value!r}")
+    if not math.isfinite(float(value)):  # type: ignore[arg-type]
+        raise ValueError(f"{kind}: {label} must be finite, got {value!r}")
+    if integer and not float(value).is_integer():  # type: ignore[arg-type]
+        raise ValueError(f"{kind}: {label} must be an integer, got {value!r}")
+    if value < 0 or (not allow_zero and value == 0):  # type: ignore[operator]
+        rel = ">= 0" if allow_zero else "> 0"
+        raise ValueError(f"{kind}: {label} must be {rel}, got {value!r}")
+
+
+def _check_auto_or_positive(
+    value: object, label: str, kind: str, *, allow_zero: bool = False,
+) -> None:
+    """Validate a knob that may be the literal ``"auto"`` sentinel or a
+    positive (or non-negative, when ``allow_zero``) real number. A non-
+    ``"auto"`` string (e.g. ``"AUTO"`` / a typo) is rejected at construction
+    rather than blowing up opaquely in the emitter's ``float()`` call."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value != "auto":
+            raise ValueError(
+                f"{kind}: {label} must be a number or 'auto', got {value!r}")
+        return
+    _check_positive(value, label, kind, allow_zero=allow_zero)
 
 
 def _validate_asd_embedded_options(
@@ -772,6 +822,273 @@ class ReinforceDef(ConstraintDef):
         return None
 
 
+@dataclass
+class EmbedDef(ConstraintDef):
+    """General node-to-host embedment: tie a node set into a non-matching
+    solid host via the Ladruno ``LadrunoEmbeddedNode`` coupling element
+    (ELE 33006, the isotropic sibling of ``LadrunoEmbeddedRebar``).
+
+    The geometry-side def captured by ``g.embed(...)``. Each node of the
+    constrained set is inverse-mapped into the host element it falls inside
+    (the same guarded inverse map as :class:`ReinforceDef`), and emits one
+    ``LadrunoEmbeddedNode`` per node with an isotropic translational
+    (U-only) penalty / AL tie and g0 stress-free birth.
+
+    Unlike :class:`EmbeddedDef` (which emits the upstream
+    ``ASDEmbeddedNodeElement`` with a raw 1e18 penalty), this targets the
+    *conditioned* fork element (``-k`` numeric / AL / explicit-safe
+    bipenalty / stress-free birth). It is a distinct, opt-in generator;
+    ``g.constraints.embedded`` is left untouched.
+
+    Parameters
+    ----------
+    master_label
+        The solid host PG / part label (``host=``).
+    slave_label
+        The constrained node set PG / part label (``nodes=``).
+    k
+        Isotropic penalty ``Ku`` (``-k``). ``None`` → the fork default.
+        ``"auto"`` is deferred (needs the ``-host``/``-xi`` host-query
+        path, like ``g.reinforce``); pass a numeric value or leave ``None``.
+    k_alpha
+        Auto-scale multiplier (``-kAlpha``) — only meaningful with
+        ``k="auto"`` (deferred); accepted for forward compatibility.
+    enforce
+        ``"penalty"`` (default) or ``"al"`` (augmented Lagrangian).
+    explicit, dtcr
+        Explicit bipenalty critical-time-step control (``-bipenalty
+        -dtcr``). ``explicit=True`` + a positive ``dtcr`` keeps the tie
+        stiffness from shrinking the explicit step below ``dtcr``.
+        Penalty-enforcement only (auto-disabled under ``"al"``); the
+        ``-wcap`` host-frequency form is deferred with the ``-xi`` path.
+    staged
+        ``True`` (default) → g0 stress-free birth (a node added onto an
+        already-deformed host activates at zero force). ``False`` → emit
+        ``-absolute`` (legacy absolute tie ``u_c = ΣN_i·u_host``).
+    tolerance
+        Inverse-map acceptance threshold on the parametric excess.
+    snap
+        ``False`` (default) → a node outside every host raises; ``True`` →
+        project it onto the nearest host + warn.
+    """
+
+    kind: str = field(init=False, default="embed")
+    host_entities: list[tuple[int, int]] | None = None
+    nodes_entities: list[tuple[int, int]] | None = None
+    k: float | None = None
+    k_alpha: float | None = None
+    enforce: str = "penalty"
+    explicit: bool = False
+    dtcr: float | None = None
+    staged: bool = True
+    tolerance: float = 1.0e-6
+    snap: bool = False
+
+    def __post_init__(self) -> None:
+        if self.enforce not in ("penalty", "al"):
+            raise ValueError(
+                f"EmbedDef: enforce must be 'penalty' or 'al', got "
+                f"{self.enforce!r}"
+            )
+        # Explicit bipenalty critical-time-step control. The `-shape` path
+        # (apeGmsh-computed weights, host-element-tag-free) supports the
+        # user-supplied `-dtcr <dt>` budget only; `-wcap` reads the host
+        # frequency and needs the `-host`/`-xi` form (deferred with `-xi`).
+        # bipenalty is auto-disabled under augmented Lagrangian.
+        if self.explicit:
+            if self.dtcr is None:
+                raise ValueError(
+                    "EmbedDef: explicit=True needs an explicit dtcr (the "
+                    "critical-time-step budget); the -wcap host-query form "
+                    "is deferred with the -xi path."
+                )
+            if self.enforce != "penalty":
+                raise ValueError(
+                    "EmbedDef: explicit bipenalty is gated on "
+                    "enforce='penalty' (auto-disabled under augmented "
+                    "Lagrangian)."
+                )
+        if self.dtcr is not None:
+            if not self.explicit:
+                raise ValueError(
+                    "EmbedDef: dtcr is only valid with explicit=True."
+                )
+            if self.dtcr <= 0:
+                raise ValueError(
+                    f"EmbedDef: dtcr must be > 0, got {self.dtcr!r}"
+                )
+        # v1 emits the `-shape` path (host-element-tag-free). `-k auto`
+        # reads the host stiffness and needs the `-host`/`-xi` form —
+        # deferred with the `-xi` optimisation (same as g.reinforce's kt).
+        if self.k == "auto":  # type: ignore[comparison-overlap]
+            raise ValueError(
+                "EmbedDef: k='auto' needs the `-xi` host-query path "
+                "(host stiffness scaling), which is deferred; pass a numeric "
+                "k or leave it None (fork default penalty)."
+            )
+        # Range validation — a non-positive penalty reaches the fork kernel
+        # unchecked and silently destabilises the tie. (k="auto" is rejected
+        # above; the helper accepts numpy scalars and rejects bool.)
+        _check_positive(self.k, "k (penalty stiffness)", "EmbedDef")
+        _check_positive(self.k_alpha, "k_alpha", "EmbedDef")
+
+
+@dataclass
+class ContactDef(ConstraintDef):
+    """Face-to-face contact between two meshed surfaces, emitted as the fork's
+    `contactSurface` + `contact` pair (node-to-segment or mortar/ALM).
+
+    The geometry-side def captured by ``g.constraints.contact(...)``. The
+    master is a faceted surface; the slave is a node set (NTS) or a faceted
+    surface (mortar). apeGmsh resolves the face connectivity + (optionally) an
+    outward normal from the CAD geometry, then emits `contactSurface` defs +
+    the `contact` verb + `constraints('LadrunoContact')`.
+
+    Parameters
+    ----------
+    master_label, slave_label
+        The two surface PG / part labels in contact.
+    formulation
+        ``"nts"`` (node-to-segment penalty, slave = node set) or ``"mortar"``
+        (segment-to-segment ALM, slave = faceted surface).
+    kn, kt, mu
+        NTS normal/tangential penalty + Coulomb friction. ``kn`` may be
+        ``"auto"`` (sized from the solid). Mortar rejects ``kn``/``kt``.
+    eps_n, eps_t
+        Mortar ALM normal/tangential penalty (``"auto"`` allowed). NTS rejects.
+    cohesion, tau_max
+        Mortar friction-cone adhesion intercept + Tresca shear cap.
+    aug_tol, max_aug, ngp
+        Mortar Uzawa augmentation tolerance / max augmentations / slave-facet
+        Gauss order.
+    tie
+        Permanent mesh-tie bond (mortar only; mutually exclusive with friction).
+    outward
+        Optional single outward direction. ``None`` (default) → emit no
+        ``-outward``; the fork derives a correct PER-FACET normal from
+        connectivity (the right choice for separated bodies and for curved /
+        closed / solid-part masters). Pass an explicit ``(ox, oy, oz)`` ONLY
+        for an initially-COINCIDENT (zero-gap) contact, where the fork's
+        per-pair sign reference (slave − segment-centroid) is in-plane and
+        ambiguous — there the explicit direction pins the sign (matches the
+        fork's "use -outward for just-penetrated starts"). A single global
+        outward is wrong on a non-flat master (it skips perpendicular facets
+        and inverts opposed ones), so only set it for an effectively flat
+        interface.
+    master_entities, slave_entities
+        Restrict each side to specific Gmsh entities (default = whole label).
+    """
+
+    kind: str = field(init=False, default="contact")
+    master_entities: list[tuple[int, int]] | None = None
+    slave_entities: list[tuple[int, int]] | None = None
+    formulation: str = "nts"
+    kn: float | str | None = None
+    kt: float | None = None
+    mu: float | None = None
+    eps_n: float | str | None = None
+    eps_t: float | str | None = None
+    cohesion: float | None = None
+    tau_max: float | None = None
+    aug_tol: float | None = None
+    max_aug: int | None = None
+    ngp: int | None = None
+    tie: bool = False
+    outward: tuple | None = None
+
+    _MORTAR_ONLY = ("eps_n", "eps_t", "cohesion", "tau_max",
+                    "aug_tol", "max_aug", "ngp")
+    _NTS_ONLY = ("kn", "kt")
+
+    def __post_init__(self) -> None:
+        if self.formulation not in ("nts", "mortar"):
+            raise ValueError(
+                f"ContactDef: formulation must be 'nts' or 'mortar', got "
+                f"{self.formulation!r}"
+            )
+        if self.formulation == "nts":
+            present = [f for f in self._MORTAR_ONLY
+                       if getattr(self, f) is not None]
+            if present:
+                raise ValueError(
+                    f"ContactDef: formulation='nts' does not accept the "
+                    f"mortar-only params {present}; use formulation='mortar' "
+                    f"or drop them."
+                )
+            if self.tie:
+                raise ValueError(
+                    "ContactDef: tie=True requires formulation='mortar' (a "
+                    "permanent mesh-tie bond is a mortar feature)."
+                )
+        else:  # mortar
+            present = [f for f in self._NTS_ONLY
+                       if getattr(self, f) is not None]
+            if present:
+                raise ValueError(
+                    f"ContactDef: formulation='mortar' does not accept the "
+                    f"NTS-only params {present} (use eps_n/eps_t instead)."
+                )
+            if self.tie and (self.mu is not None or self.cohesion is not None
+                             or self.tau_max is not None):
+                raise ValueError(
+                    "ContactDef: tie=True (mesh-tie bond) is mutually "
+                    "exclusive with friction (mu/cohesion/tau_max)."
+                )
+        if self.outward is not None:
+            if len(self.outward) != 3:
+                raise ValueError(
+                    f"ContactDef: outward must be a 3-vector (ox, oy, oz), got "
+                    f"{self.outward!r}"
+                )
+            if not any(abs(float(x)) > 0.0 for x in self.outward):
+                raise ValueError(
+                    f"ContactDef: outward must be a non-zero direction, got "
+                    f"all-zero {self.outward!r}"
+                )
+        # A mortar mesh-tie (tie=True) bonds a COINCIDENT, coplanar interface —
+        # so the fork's per-pair sign reference (slave − segment-centroid) lies
+        # in the surface plane and gate H2 (LadrunoContactProjection.h) silently
+        # refuses every tie pair, integrating the tie to ZERO force with no
+        # error. A single global outward IS correct for a flat tie interface, so
+        # require it explicitly (we never auto-derive — ADR 0073).
+        if self.tie and self.outward is None:
+            raise ValueError(
+                "ContactDef: a mortar mesh-tie (tie=True) needs an explicit "
+                "outward=(ox, oy, oz) — the master surface normal toward the "
+                "slave. A tie interface is coincident-flat, so without it the "
+                "fork's per-pair sign reference is in-plane and gate H2 "
+                "silently drops every tie pair to zero force (the tie would "
+                "bond nothing)."
+            )
+        # Range validation — the fork parser does NOT enforce these for the
+        # plain contact path; an out-of-range value reaches the C++ kernel
+        # unchecked (a negative penalty silently destabilises the solve). The
+        # helpers accept numpy scalars, reject bool, and validate the "auto"
+        # sentinel string (a typo like "AUTO" fails here, not opaquely later).
+        # kn / eps_n: zero is a documented fork sentinel (the P1b zero-force-
+        # topology / inert-contact path; addContact rejects only kn<0), so
+        # allow_zero. tau_max<=0 is the fork's "no Tresca cap" sentinel.
+        _check_auto_or_positive(self.kn, "kn (normal penalty)", "ContactDef",
+                                allow_zero=True)
+        _check_positive(self.kt, "kt (tangential penalty)", "ContactDef",
+                        allow_zero=True)
+        _check_positive(self.mu, "mu (friction coefficient)", "ContactDef",
+                        allow_zero=True)
+        _check_auto_or_positive(
+            self.eps_n, "eps_n (mortar normal penalty)", "ContactDef",
+            allow_zero=True)
+        _check_auto_or_positive(
+            self.eps_t, "eps_t (mortar tangential penalty)", "ContactDef")
+        _check_positive(self.cohesion, "cohesion", "ContactDef",
+                        allow_zero=True)
+        _check_positive(self.tau_max, "tau_max (Tresca shear cap)", "ContactDef",
+                        allow_zero=True)
+        _check_positive(self.aug_tol, "aug_tol", "ContactDef")
+        _check_positive(self.max_aug, "max_aug", "ContactDef", integer=True)
+        _check_positive(self.ngp, "ngp (Gauss order)", "ContactDef",
+                        integer=True)
+
+
 # ── Level 2b: Mixed-DOF coupling ────────────────────────────────────
 
 @dataclass
@@ -979,6 +1296,8 @@ __all__ = [
     "DistributingCouplingDef",
     "EmbeddedDef",
     "ReinforceDef",
+    "EmbedDef",
+    "ContactDef",
     "NodeToSurfaceDef",
     "NodeToSurfaceSpringDef",
     "TiedContactDef",

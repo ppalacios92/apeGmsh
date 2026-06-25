@@ -114,6 +114,8 @@ if TYPE_CHECKING:
 __all__ = [
     "H5Emitter", "SCHEMA_VERSION",
     "H5EquationConstraintDeviationWarning",
+    "H5FeatureDeferredWarning",
+    "H5ReinforceDeviationWarning",
 ]
 
 
@@ -123,6 +125,20 @@ class H5EquationConstraintDeviationWarning(UserWarning):
     deferred (ADR 0068, Open item 4; forward-only schema bump owed).
     Emit to Tcl / openseespy (or run live) for a complete model with the
     equation-constrained interface."""
+
+
+class H5FeatureDeferredWarning(UserWarning):
+    """A fork-only feature (g.embed LadrunoEmbeddedNode tie, or
+    g.constraints.contact contactSurface/contact) was dropped from the
+    OpenSees H5 deck — native H5 round-trip of the feature is deferred.
+    Emit to Tcl / openseespy (or run live) for the complete model."""
+
+
+#: Back-compat alias — the warning was originally named for g.reinforce
+#: (which no longer warns; its ties persist via the neutral zone). Retained
+#: so existing imports keep working; new code should use
+#: :class:`H5FeatureDeferredWarning`.
+H5ReinforceDeviationWarning = H5FeatureDeferredWarning
 
 
 #: Schema version string emitted in ``/meta/schema_version``. Bump
@@ -910,6 +926,8 @@ class H5Emitter:
         # tie and counts it (observability only — no warning, since the
         # neutral round-trip is complete). See ``embedded_rebar``.
         self._skipped_reinforce_ties: int = 0
+        self._skipped_embed_ties: int = 0
+        self._skipped_contacts: int = 0
 
         # ADR 0068, Open item 4: native H5 round-trip of the equation
         # route (EQ_Constraint) is deferred (forward-only schema bump
@@ -1361,6 +1379,53 @@ class H5Emitter:
         del ele_tag, args
         self._consume_pending_mp_name()
         self._skipped_reinforce_ties += 1
+
+    def embedded_node(
+        self, ele_tag: int, *args: int | float | str,
+    ) -> None:
+        # g.embed: native H5 persistence of the LadrunoEmbeddedNode coupling
+        # is deferred (same as reinforce). No-op the tie, consume any latched
+        # mp comment, and raise a one-time deviation warning.
+        import warnings as _warnings
+        del ele_tag, args
+        self._consume_pending_mp_name()
+        self._skipped_embed_ties += 1
+        if self._skipped_embed_ties == 1:
+            _warnings.warn(
+                "H5 emitter: LadrunoEmbeddedNode embedment ties are not "
+                "persisted to the OpenSees model.h5 — native H5 round-trip "
+                "of g.embed ties is deferred. The H5 deck will be missing "
+                "its embedment; emit to Tcl / openseespy (or run live) for a "
+                "complete model.",
+                H5FeatureDeferredWarning, stacklevel=2,
+            )
+
+    def contact_surface(
+        self, tag: int, *args: int | float | str,
+    ) -> None:
+        # g.constraints.contact: native H5 persistence of the fork contact
+        # subsystem is deferred. No-op, consume any latched mp comment so it
+        # can't leak onto the next real MP record, + one-time deviation warning.
+        import warnings as _warnings
+        del tag, args
+        self._consume_pending_mp_name()
+        self._skipped_contacts += 1
+        if self._skipped_contacts == 1:
+            _warnings.warn(
+                "H5 emitter: fork contact (contactSurface / contact) is not "
+                "persisted to the OpenSees model.h5 — native H5 round-trip of "
+                "g.constraints.contact is deferred. The H5 deck will be missing "
+                "its contact; emit to Tcl / openseespy (or run live) for a "
+                "complete model.",
+                H5FeatureDeferredWarning, stacklevel=2,
+            )
+
+    def contact(
+        self, tag: int, *args: int | float | str,
+    ) -> None:
+        # Companion to contact_surface — the warning fires once on the first
+        # contactSurface; just consume the call here.
+        del tag, args
 
     def mp_constraint_comment(self, name: str) -> None:
         # Latch the declaration label; the next MP-constraint call will
@@ -2232,6 +2297,16 @@ class H5Emitter:
         return self._analysis_attrs
 
     def constraints(self, c_type: str, *args: int | float | str) -> None:
+        # H5 defers the fork contact subsystem (contact_surface/contact are
+        # no-op'd + a one-time H5FeatureDeferredWarning). The LadrunoContact
+        # handler the bridge auto-emits for a contact model would otherwise be
+        # recorded against an archive with NO contact data — an inconsistent
+        # deck that, on round-trip, emits ``constraints LadrunoContact`` with
+        # nothing to handle (and LadrunoContact is Plain-style for MP). Skip it
+        # so the replayed deck falls back to the default handler (correct for
+        # "model minus the deferred contact").
+        if c_type == "LadrunoContact":
+            return
         attrs = self._chain_attrs
         attrs["handler"] = c_type
         if args:
