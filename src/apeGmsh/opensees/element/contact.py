@@ -15,8 +15,9 @@ slave is a node set (NTS, `-slave`) or a faceted surface (mortar,
 grammars — the `g.constraints.contact` generator + emit path call them.
 
 Fork-only: `contactSurface`/`contact` are unavailable on stock openseespy and
-bite only at run time. Core-first scope: the explicit-only `-soft`/`-visc` and
-the solver-coupled `-consistanttan`/`-geomtan` are deferred.
+bite only at run time. The explicit-only `-soft`/`-visc` and the solver-coupled
+`-consistanttan`/`-geomtan` modifiers are supported (ADR 0073); the edge-edge
+lane and the rigid-plane `contactPlane` command remain deferred.
 """
 from __future__ import annotations
 
@@ -82,6 +83,10 @@ def contact_args(
     max_aug: int | None = None,
     ngp: int | None = None,
     tie: bool = False,
+    soft: float | bool | None = None,
+    visc: float | None = None,
+    consistent_tan: bool = False,
+    geom_tan: bool = False,
     outward: Sequence[float] | None = None,
 ) -> list[int | float | str]:
     """Args **after** the contact tag for one `contact` call.
@@ -92,24 +97,38 @@ def contact_args(
     NTS emits ``kn [kt mu]`` (or ``auto``); the fork parser reads either 1 or 3
     numbers, so friction emits all three (kt/mu default 0.0). Mortar emits
     ``-mortar -epsN …`` + the friction-cone / augmentation flags.
+
+    The extension modifiers (``-soft``/``-visc``/``-consistanttan``/
+    ``-geomtan``) are parsed by the fork's order-independent option loop, so
+    they emit after the formulation block (and before ``-outward``).
+    ``soft=True`` emits a bare ``-soft`` (fork default SOFSCL 0.10); a float
+    emits ``-soft SOFSCL``. ``geom_tan`` is NTS-only (the def enforces it).
     """
     args: list[int | float | str] = [int(master_tag), int(slave_tag)]
 
     if formulation == "nts":
-        if kn is not None:
-            args.append("auto" if kn == "auto" else float(kn))
-            # The fork's numeric kn-slot reader (OPS_LadrunoContact) sizes its
-            # double read as ``m = (remaining >= 3) ? 3 : 1`` counting ALL
-            # trailing tokens — flags included. A bare numeric ``kn`` followed
-            # by ``-outward`` therefore makes it read ``-outward`` as the
-            # second double and abort the whole ``contact`` command. So emit
-            # the full ``kn kt mu`` triple (kt/mu default 0.0) whenever friction
-            # is given OR a numeric ``kn`` will be followed by ``-outward``.
-            # (The ``auto`` and no-``kn`` paths peek-and-unread the flag safely.)
-            if (kt is not None or mu is not None
-                    or (kn != "auto" and outward is not None)):
+        if kn == "auto":
+            # The ``auto`` path peeks-and-unreads a trailing flag safely, so
+            # kt/mu only need emitting when friction is requested.
+            args.append("auto")
+            if kt is not None or mu is not None:
                 args.append(float(kt) if kt is not None else 0.0)
                 args.append(float(mu) if mu is not None else 0.0)
+        elif kn is not None:
+            # Numeric kn: ALWAYS emit the full ``kn kt mu`` triple (kt/mu
+            # default 0.0 ⇒ frictionless). The fork's numeric kn-slot reader
+            # (OPS_LadrunoContact) sizes its double read as
+            # ``m = (remaining >= 3) ? 3 : 1`` counting ALL trailing tokens —
+            # flags included. A bare numeric ``kn`` followed by ANY trailing
+            # token (``-outward`` or an extension flag like ``-soft``/``-visc``)
+            # makes it read that token as a double and abort the whole
+            # ``contact`` command. Padding the triple is semantically identical
+            # (kt=mu=0 is frictionless) and immune to which trailing tokens
+            # follow — so we never have to keep this guard in sync with the set
+            # of trailing options.
+            args.append(float(kn))
+            args.append(float(kt) if kt is not None else 0.0)
+            args.append(float(mu) if mu is not None else 0.0)
     elif formulation == "mortar":
         args.append("-mortar")
         if eps_n is not None:
@@ -134,6 +153,23 @@ def contact_args(
         raise ValueError(
             f"contact: formulation must be 'nts' or 'mortar', got "
             f"{formulation!r}")
+
+    # Extension modifiers — the fork's option loop reads them in either lane
+    # order-independently (geom_tan is NTS-only, enforced on the def). A bare
+    # `-soft` (soft=True) takes the fork's default SOFSCL (0.10); a numeric soft
+    # emits `-soft SOFSCL`. The fork peeks-and-unreads the token after `-soft`,
+    # so a following flag (-visc/-outward/…) is safe.
+    if soft is not None and soft is not False:
+        if soft is True:
+            args.append("-soft")
+        else:
+            args += ["-soft", float(soft)]
+    if visc is not None:
+        args += ["-visc", float(visc)]
+    if consistent_tan:
+        args.append("-consistanttan")
+    if geom_tan:
+        args.append("-geomtan")
 
     if outward is not None:
         if len(outward) != 3:
