@@ -54,6 +54,7 @@ from ._internal.build import (
     emit_reinforce_ties,
     emit_embed_ties,
     emit_contacts,
+    emit_contact_planes,
     emit_rebar_elements,
     emit_stage_mp_constraints,
     emit_stage_mp_constraints_partitioned,
@@ -279,10 +280,15 @@ def _kind_of(prim: Primitive) -> str:
 
 
 def _fem_has_contacts(fem: "FEMData") -> bool:
-    """True iff the FEM snapshot carries any fork contact interactions
-    (``g.constraints.contact`` → ``fem.elements.contacts``)."""
+    """True iff the FEM snapshot carries any fork contact interactions that need
+    the ``LadrunoContact`` handler — face-to-face (``g.constraints.contact`` →
+    ``fem.elements.contacts``) OR rigid-plane (``g.constraints.contact_plane``
+    → ``fem.elements.contact_planes``)."""
     elements = getattr(fem, "elements", None)
-    return bool(getattr(elements, "contacts", None)) if elements is not None else False
+    if elements is None:
+        return False
+    return bool(getattr(elements, "contacts", None)
+                or getattr(elements, "contact_planes", None))
 
 
 def _fem_has_mp_constraints(fem: "FEMData") -> bool:
@@ -1386,6 +1392,7 @@ class BuiltModel:
         # + the contact verb; the LadrunoContact handler is forced by the
         # constraint-handler auto-emit below.
         emit_contacts(emitter, self.fem, tags)
+        emit_contact_planes(emitter, self.fem, tags)
 
         # 7b''. Auto-emitted structural rebar elements (g.rebar.place(
         # emit_elements=True), ADR 0067 P5.2 / B1). One CorotTruss per bar
@@ -1661,6 +1668,7 @@ class BuiltModel:
         # + the contact verb; the LadrunoContact handler is forced by the
         # constraint-handler auto-emit below.
         emit_contacts(emitter, self.fem, tags)
+        emit_contact_planes(emitter, self.fem, tags)
         emit_rebar_elements(
             emitter, self.fem, tags, name_to_tag=self.name_to_tag,
         )
@@ -2193,18 +2201,26 @@ class BuiltModel:
                 "partitioned run."
             )
 
-        # g.constraints.contact (fork contactSurface/contact): the fork
-        # contact subsystem is serial-only (not parallel) — there is no
-        # per-rank contact routing. Fail loud rather than silently dropping
-        # the contact interaction under MPI emit (the flat path emits these
-        # via emit_contacts; the partitioned path has no such call).
-        if getattr(elements_comp, "contacts", None):
+        # g.constraints.contact / contact_plane (fork contactSurface/contact/
+        # contactPlane): the fork contact subsystem is serial-only (not
+        # parallel) — there is no per-rank contact routing. Fail loud rather
+        # than silently dropping the interaction under MPI emit (the flat path
+        # emits these via emit_contacts / emit_contact_planes; the partitioned
+        # path has no such call). contact_planes MUST be guarded too: it is not
+        # in the per-rank `elements` fan-out, and leaving it through would not
+        # only drop the contactPlane silently but also auto-emit a spurious
+        # `constraints LadrunoContact` (via _fem_has_contacts) with zero contact
+        # elements — which downgrades the replicated cross-partition MP
+        # constraints to unenforced (ADR 0027).
+        if (getattr(elements_comp, "contacts", None)
+                or getattr(elements_comp, "contact_planes", None)):
             raise BridgeError(
-                "apeSees: g.constraints.contact interactions (fork "
-                "contactSurface/contact) are not supported under partitioned "
-                "(MPI) emit — the fork contact subsystem is serial-only. Emit "
-                "the contact model single-process (non-partitioned), or remove "
-                "the contact for the partitioned run."
+                "apeSees: g.constraints.contact / contact_plane interactions "
+                "(fork contactSurface/contact/contactPlane) are not supported "
+                "under partitioned (MPI) emit — the fork contact subsystem is "
+                "serial-only. Emit the contact model single-process "
+                "(non-partitioned), or remove the contact for the partitioned "
+                "run."
             )
 
         # ADR 0049: a node-pair zeroLength-family element
