@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/internal_docs/guide_absorbing_boundary/">
+        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/internal_docs/handoff_equation_tie_adr0068/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>apeGmsh absorbing boundaries - apeGmsh</title>
+        <title>Handoff — tied-interface enforce= routes (ADR 0068) - apeGmsh</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#apegmsh-absorbing-boundaries" class="md-skip">
+        <a href="#handoff-tied-interface-enforce-routes-adr-0068" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              apeGmsh absorbing boundaries
+              Handoff — tied-interface enforce= routes (ADR 0068)
             
           </span>
         </div>
@@ -5038,10 +5038,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#tasks-on-this-page" class="md-nav__link">
+  <a href="#the-three-enforce-routes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tasks on this page
+        The three enforce= routes
       
     </span>
   </a>
@@ -5049,10 +5049,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#1-the-30-second-picture" class="md-nav__link">
+  <a href="#handler-selection-equation-route" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. The 30-second picture
+        Handler selection (equation route)
       
     </span>
   </a>
@@ -5060,66 +5060,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-build-the-box-gpartsadd_plane_wave_box" class="md-nav__link">
+  <a href="#persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. Build the box: g.parts.add_plane_wave_box
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="2. Build the box: g.parts.add_plane_wave_box">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-absorbingskinresult" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The AbsorbingSkinResult
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-declare-the-skin-opselementabsorbing_boundary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Declare the skin: ops.element.absorbing_boundary
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="3. Declare the skin: ops.element.absorbing_boundary">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-impedance-material-is-never-emitted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The impedance material is never emitted
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-inject-the-input-motion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Inject the input motion
+        Persistence
       
     </span>
   </a>
@@ -5127,10 +5071,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-the-staged-lifecycle-hold-absorbing" class="md-nav__link">
+  <a href="#where-things-live" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. The staged lifecycle: hold → absorbing
+        Where things live
       
     </span>
   </a>
@@ -5138,10 +5082,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-the-modeling-recipe-run-verified" class="md-nav__link">
+  <a href="#adversarial-review-fixed" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. The modeling recipe (run-verified)
+        Adversarial review — fixed
       
     </span>
   </a>
@@ -5149,10 +5093,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#7-validating-the-boundary" class="md-nav__link">
+  <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        7. Validating the boundary
+        Testing
       
     </span>
   </a>
@@ -5160,10 +5104,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#8-pitfalls" class="md-nav__link">
+  <a href="#tie-force-recovery-shipped-p5-item-2" class="md-nav__link">
     <span class="md-ellipsis">
       
-        8. Pitfalls
+        Tie-force recovery — SHIPPED (P5 item 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handler-implicitexplicit-auto-detect-shipped-p5-open-item-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handler implicit/explicit auto-detect — SHIPPED (P5, Open item 1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-partition-eq-replication-shipped-p5-open-item-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-partition EQ replication — SHIPPED (P5, Open item 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remaining-p5-none-are-correctness-gaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remaining (P5 — none are correctness gaps)
       
     </span>
   </a>
@@ -5190,306 +5167,253 @@
   
 
 
-<h1 id="apegmsh-absorbing-boundaries">apeGmsh absorbing boundaries<a class="headerlink" href="#apegmsh-absorbing-boundaries" title="Permanent link">&para;</a></h1>
-<p>A guide to truncating a soil domain with the <code>ASDAbsorbingBoundary3D</code> / <code>2D</code>
-skin (ADR 0054): building the plane-wave box, declaring the skin on the
-bridge, the staged hold→absorbing lifecycle, and the run-verified modeling
-recipe — mass, damping, base input, and how to <em>validate</em> that the boundary
-is actually working. This document covers the apeGmsh abstraction; see
-<code>guide_opensees.md</code> for the bridge in general and <code>guide_masses.md</code> for the
-tributary-mass channel the recipe leans on.</p>
-<p>All snippets assume the usual pipeline:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeGmsh</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeSees</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.material.nd</span><span class="w"> </span><span class="kn">import</span> <span class="n">ElasticIsotropic</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.time_series.time_series</span><span class="w"> </span><span class="kn">import</span> <span class="n">Ricker</span>
-</span></code></pre></div>
-<h2 id="tasks-on-this-page">Tasks on this page<a class="headerlink" href="#tasks-on-this-page" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="#1-the-30-second-picture">The 30-second picture</a></li>
-<li><a href="#2-build-the-box-gpartsadd_plane_wave_box">Build the box</a> · <a href="#the-absorbingskinresult">What comes back</a></li>
-<li><a href="#3-declare-the-skin-opselementabsorbing_boundary">Declare the skin</a> · <a href="#the-impedance-material-is-never-emitted">Why the impedance material is never emitted</a></li>
-<li><a href="#4-inject-the-input-motion">Inject the input motion</a></li>
-<li><a href="#5-the-staged-lifecycle-hold-absorbing">The staged lifecycle</a></li>
-<li><a href="#6-the-modeling-recipe-run-verified">The modeling recipe</a></li>
-<li><a href="#7-validating-the-boundary">Validate the boundary</a></li>
-<li><a href="#8-pitfalls">Pitfalls</a></li>
-</ul>
-<h2 id="1-the-30-second-picture">1. The 30-second picture<a class="headerlink" href="#1-the-30-second-picture" title="Permanent link">&para;</a></h2>
-<p>Three calls and one stage verb, each on the layer where it belongs:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># 1 ── SESSION: soil box + absorbing skin in one call</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;site&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">skin</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">parts</span><span class="o">.</span><span class="n">add_plane_wave_box</span><span class="p">(</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>        <span class="n">x</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">y</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="n">z</span><span class="o">=</span><span class="p">[(</span><span class="mf">45.0</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="p">(</span><span class="mf">75.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="mf">80.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">)],</span>   <span class="c1"># layered, TOP → BOTTOM</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">for</span> <span class="n">pg</span><span class="p">,</span> <span class="n">layer</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">skin</span><span class="o">.</span><span class="n">soil_pgs</span><span class="p">,</span> <span class="n">LAYERS</span><span class="p">):</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="n">g</span><span class="o">.</span><span class="n">masses</span><span class="o">.</span><span class="n">volume</span><span class="p">(</span><span class="n">pg</span><span class="p">,</span> <span class="n">density</span><span class="o">=</span><span class="n">layer</span><span class="o">.</span><span class="n">gamma</span><span class="p">)</span>   <span class="c1"># soil only — never the skin</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">generation</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">fem</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">()</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># 2 ── BRIDGE: fan the whole skin from one declaration</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">ops</span> <span class="o">=</span> <span class="n">apeSees</span><span class="p">(</span><span class="n">fem</span><span class="p">)</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">soil_mats</span> <span class="o">=</span> <span class="p">[</span><span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">ElasticIsotropic</span><span class="p">(</span><span class="n">E</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">nu</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">nu</span><span class="p">,</span> <span class="n">rho</span><span class="o">=</span><span class="mf">0.0</span><span class="p">))</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>             <span class="k">for</span> <span class="n">L</span> <span class="ow">in</span> <span class="n">LAYERS</span><span class="p">]</span>                                   <span class="c1"># rho=0: mass is nodal</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="n">impedance</span> <span class="o">=</span> <span class="p">[</span><span class="n">ElasticIsotropic</span><span class="p">(</span><span class="n">E</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">nu</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">nu</span><span class="p">,</span> <span class="n">rho</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">gamma</span><span class="p">)</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>             <span class="k">for</span> <span class="n">L</span> <span class="ow">in</span> <span class="n">LAYERS</span><span class="p">]</span>                                   <span class="c1"># never emitted (§3)</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">ricker</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">Ricker</span><span class="p">(</span><span class="n">f_n</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">t_total</span><span class="o">=</span><span class="mf">2.5</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">,</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>                             <span class="n">t_center</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;velocity&quot;</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">0.01</span><span class="p">))</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="k">for</span> <span class="n">mat</span><span class="p">,</span> <span class="n">pg</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">soil_mats</span><span class="p">,</span> <span class="n">skin</span><span class="o">.</span><span class="n">soil_pgs</span><span class="p">):</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">stdBrick</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">pg</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">mat</span><span class="p">)</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="n">impedance</span><span class="p">,</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>                               <span class="n">base_series</span><span class="o">=</span><span class="n">ricker</span><span class="p">,</span> <span class="n">base_dirs</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,))</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="c1"># 3 ── STAGE: flip the skin from HOLD to ABSORBING, then run</span>
-</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">stage</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;dynamic&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">st</span><span class="p">:</span>
-</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">st</span><span class="o">.</span><span class="n">activate_absorbing</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">skin</span><span class="o">.</span><span class="n">skin_all_pg</span><span class="p">)</span>
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    <span class="n">st</span><span class="o">.</span><span class="n">analysis</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="n">st</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">n_increments</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">)</span>
-</span></code></pre></div>
-<p>The skin replaces <em>distance</em>: instead of pushing fixed boundaries kilometres
-away, the lateral cells enforce the free-field motion at the truncation and
-the base is a compliant (dashpot) boundary that injects the incident wave and
-absorbs the outgoing one through the same elements.</p>
-<h2 id="2-build-the-box-gpartsadd_plane_wave_box">2. Build the box: <code>g.parts.add_plane_wave_box</code><a class="headerlink" href="#2-build-the-box-gpartsadd_plane_wave_box" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">skin</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">parts</span><span class="o">.</span><span class="n">add_plane_wave_box</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">x</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>                <span class="c1"># (extent, n_elements) along X</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">y</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">z</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>               <span class="c1"># homogeneous: one (thickness, n) pair …</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="c1"># z=[(45, 8), (75, 4), (80, 4)],  # … or layered, TOP → BOTTOM</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="c1"># skin_thickness=…,          # default: adjacent soil element size; scalar or (tx, ty, tz)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="c1"># center=(x0, y0, z0), names={…},</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">)</span>
-</span></code></pre></div>
-<p>The builder constructs, <strong>in the live session</strong> (no Part/STEP round-trip), an
-axis-aligned structured (transfinite hex) soil box plus a one-element-thick
-absorbing <strong>offset shell</strong> on its five truncation faces — the local <code>+Z</code> top
-is the free surface and is never shelled. Soil + shell are sliced only at
-region breakpoints, giving 18 sub-volumes: one soil region and up to 17 skin
-regions (5 face panels, 4 vertical edges, 4 bottom edges, 4 bottom corners).
-Each skin region is tagged with its <code>btype</code> — the set of truncation faces it
-lies outside of, OR-combined (<code>L</code>=min-X, <code>R</code>=max-X, <code>F</code>=min-Y, <code>K</code>=max-Y,
-<code>B</code>=min-Z; e.g. a bottom corner is <code>"BLF"</code>). A layered <code>z=</code> stratifies the
-soil <em>and</em> the lateral skin, so each layer's boundary can carry its own
-impedance.</p>
-<p>If the skin comes out much thicker than the adjacent soil element (above
-~4:1; STKO ships ~2:1) the builder warns with <code>WarnAbsorbingSkinAspect</code> —
-elongated boundary hexes absorb poorly. Fail-soft: a thick skin is legal,
-just flagged.</p>
-<p>Siblings, same contract:</p>
-<ul>
-<li><code>g.parts.add_absorbing_shell(...)</code> — bring-your-own-box: wraps an existing
-  soil volume you already built.</li>
-<li><code>g.parts.add_plane_wave_box_2d(...)</code> / <code>add_absorbing_shell_2d(...)</code> —
-  plane-strain rectangle in the global X–Y plane (X lateral, Y vertical,
-  free surface on top); skin regions <code>L R B BL BR</code> fan out to
-  <code>ASDAbsorbingBoundary2D</code> quads.</li>
-</ul>
-<h3 id="the-absorbingskinresult">The <code>AbsorbingSkinResult</code><a class="headerlink" href="#the-absorbingskinresult" title="Permanent link">&para;</a></h3>
-<p>The return value is a bag of physical-group names, so nothing downstream
-touches a raw tag:</p>
+<h1 id="handoff-tied-interface-enforce-routes-adr-0068">Handoff — tied-interface <code>enforce=</code> routes (ADR 0068)<a class="headerlink" href="#handoff-tied-interface-enforce-routes-adr-0068" title="Permanent link">&para;</a></h1>
+<p>Status: <strong>P0–P4 shipped + Open item 5 closed</strong>, all on <code>main</code> (PRs
+<a href="https://github.com/nmorabowen/apeGmsh/pull/697">#697</a> →
+<a href="https://github.com/nmorabowen/apeGmsh/pull/701">#701</a> →
+<a href="https://github.com/nmorabowen/apeGmsh/pull/702">#702</a>). Every
+<em>silent-correctness</em> gap from the adversarial review is closed. Remaining
+P5 items are convenience/scope, not correctness.</p>
+<p><code>g.constraints.tie</code> / <code>tied_contact</code> now choose <strong>how</strong> a non-matching
+interface is coupled via <code>enforce=</code>. This is the apeGmsh analogue of
+LS-DYNA <code>*CONTACT_TIED_SURFACE_TO_SURFACE</code>: the penalty route is the
+offset-penalty variant; the equation route is the constrained (kinematic)
+variant. Origin: an OpenSees-H5DRM-vs-LS-DYNA-SSI review — the equation
+route is what lets a <strong>non-matching soil-structure interface run under
+explicit DRM</strong> (penalty ties shrink the critical Δt; the projection-handled
+equation tie does not).</p>
+<p>Design rationale: <code>src/apeGmsh/opensees/architecture/decisions/0068-equation-constraint-tied-interface.md</code>.</p>
+<hr />
+<h2 id="the-three-enforce-routes">The three <code>enforce=</code> routes<a class="headerlink" href="#the-three-enforce-routes" title="Permanent link">&para;</a></h2>
+<p>All three reuse the <strong>same</strong> geometry — <code>resolve_tie</code> Newton-projects each
+slave node onto the closest master face and evaluates the face shape
+functions; only the emission differs.</p>
 <table>
 <thead>
 <tr>
-<th>field</th>
-<th>what it names</th>
+<th><code>enforce=</code></th>
+<th>emits</th>
+<th>knobs</th>
+<th>enforcement</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>soil_pg</code> / <code>soil_pgs</code></td>
-<td>the intact interior soil volume (per layer when stratified)</td>
+<td><code>"penalty"</code> <em>(default)</em></td>
+<td><code>ASDEmbeddedNodeElement</code></td>
+<td><code>stiffness</code> / <code>stiffness_p</code> / <code>rotational</code> / <code>pressure</code></td>
+<td>penalty element (handler-independent); 3/4-node host only</td>
 </tr>
 <tr>
-<td><code>skin_pgs</code></td>
-<td><code>btype → PG</code> for every skin region (<code>{"L": "absorbing_L", "BLF": …}</code>)</td>
+<td><code>"penalty_al"</code></td>
+<td><code>LadrunoEmbeddedNode</code> (fork)</td>
+<td><code>control=CouplingControl(...)</code></td>
+<td>penalty + augmented-Lagrange + bipenalty; any host arity; <strong>translations only</strong></td>
 </tr>
 <tr>
-<td><code>skin_pgs_by_layer</code></td>
-<td><code>layer → (btype → PG)</code> for stratified skins</td>
-</tr>
-<tr>
-<td><code>skin_all_pg</code></td>
-<td>roll-up over every skin region — the stage-flip target</td>
-</tr>
-<tr>
-<td><code>bottom_pgs</code></td>
-<td>the <code>B</code>-containing PGs — where the base input attaches</td>
-</tr>
-<tr>
-<td><code>free_surface_pg</code></td>
-<td>dim-2 PG of the soil top face (tie structures here)</td>
-</tr>
-<tr>
-<td><code>axes</code>, <code>n_layers</code>, <code>ndm</code></td>
-<td>sizing descriptors and the 2D/3D dispatch flag</td>
+<td><code>"equation"</code></td>
+<td><code>equationConstraint</code> (<code>EQ_Constraint</code>)</td>
+<td>—</td>
+<td><strong>exact</strong>, handler-enforced; any host arity; <strong>translations only</strong></td>
 </tr>
 </tbody>
 </table>
-<h2 id="3-declare-the-skin-opselementabsorbing_boundary">3. Declare the skin: <code>ops.element.absorbing_boundary</code><a class="headerlink" href="#3-declare-the-skin-opselementabsorbing_boundary" title="Permanent link">&para;</a></h2>
-<p>One facade call registers one element declaration per <code>btype</code> PG; the
-bridge's fan-out then writes one <code>element ASDAbsorbingBoundary3D</code> line per
-hex cell with the shared properties:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># homogeneous skin — a single material (or raw G=, v=, rho=)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">imped</span><span class="p">)</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># stratified skin — one material per layer, TOP → BOTTOM</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="p">[</span><span class="n">m_top</span><span class="p">,</span> <span class="n">m_mid</span><span class="p">,</span> <span class="n">m_bot</span><span class="p">])</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># 2D skin — thickness is REQUIRED (out-of-plane plane-strain slab; match your quads&#39;)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin2d</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">imped</span><span class="p">,</span> <span class="n">thickness</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh._kernel._coupling_control</span><span class="w"> </span><span class="kn">import</span> <span class="n">CouplingControl</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">g</span><span class="o">.</span><span class="n">constraints</span><span class="o">.</span><span class="n">tie</span><span class="p">(</span><span class="s2">&quot;struct&quot;</span><span class="p">,</span> <span class="s2">&quot;soil&quot;</span><span class="p">,</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">&quot;penalty&quot;</span><span class="p">)</span>                 <span class="c1"># default, unchanged</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">g</span><span class="o">.</span><span class="n">constraints</span><span class="o">.</span><span class="n">tie</span><span class="p">(</span><span class="s2">&quot;struct&quot;</span><span class="p">,</span> <span class="s2">&quot;soil&quot;</span><span class="p">,</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">&quot;equation&quot;</span><span class="p">)</span>                <span class="c1"># exact kinematic tie</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">g</span><span class="o">.</span><span class="n">constraints</span><span class="o">.</span><span class="n">tie</span><span class="p">(</span><span class="s2">&quot;struct&quot;</span><span class="p">,</span> <span class="s2">&quot;soil&quot;</span><span class="p">,</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">&quot;penalty_al&quot;</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                  <span class="n">control</span><span class="o">=</span><span class="n">CouplingControl</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span> <span class="n">host</span><span class="o">=&lt;</span><span class="n">fem_eid</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                          <span class="n">enforce</span><span class="o">=</span><span class="s2">&quot;al&quot;</span><span class="p">))</span>                <span class="c1"># fork penalty+AL</span>
 </span></code></pre></div>
-<p>With <code>materials=</code> the length must equal <code>skin.n_layers</code>; each layer's lateral
-cells get that layer's properties and the base skin takes the <strong>bottom</strong>
-layer's. The raw per-PG primitive
-(<code>ops.element.ASDAbsorbingBoundary3D(pg=…, G=…, v=…, rho=…, btype=…)</code>) is the
-escape hatch when you built the skin PGs yourself.</p>
-<h3 id="the-impedance-material-is-never-emitted">The impedance material is never emitted<a class="headerlink" href="#the-impedance-material-is-never-emitted" title="Permanent link">&para;</a></h3>
-<p>The upstream element command has <strong>no material-tag slot</strong> — it takes raw
-<code>G v rho</code> doubles:</p>
-<div class="language-tcl highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">nDMaterial</span><span class="w"> </span>ElasticIsotropic<span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="mf">2567314.3</span><span class="w"> </span><span class="mf">0.3</span><span class="w"> </span><span class="mf">0.0</span><span class="w">                    </span><span class="err">#</span><span class="w"> </span>soil:<span class="w"> </span>registered,<span class="w"> </span>has<span class="w"> </span>a<span class="w"> </span>tag
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nv">element</span><span class="w"> </span>stdBrick<span class="w"> </span><span class="mi">219</span><span class="w">  </span><span class="mi">40</span><span class="w"> </span><span class="mi">217</span><span class="w"> </span><span class="mi">400</span><span class="w"> </span><span class="mi">204</span><span class="w"> </span><span class="err">…</span><span class="w">  </span><span class="mi">1</span><span class="w">                          </span><span class="err">#</span><span class="w"> </span>brick<span class="w"> </span>references<span class="w"> </span>the<span class="w"> </span>tag
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">element</span><span class="w"> </span>ASDAbsorbingBoundary3D<span class="w"> </span><span class="mi">19</span><span class="w">  </span><span class="mi">265</span><span class="w"> </span><span class="mi">88</span><span class="w"> </span><span class="err">…</span><span class="w">  </span><span class="mf">987428.6</span><span class="w"> </span><span class="mf">0.3</span><span class="w"> </span><span class="mf">2.4</span><span class="w"> </span>F<span class="w">    </span><span class="err">#</span><span class="w"> </span>skin:<span class="w"> </span>raw<span class="w"> </span>G<span class="w"> </span>v<span class="w"> </span>rho<span class="w"> </span>inline
-</span></code></pre></div>
-<p>So the facade reads <code>G = E/(2(1+ν))</code>, <code>ν</code>, <code>ρ</code> off the <code>ElasticIsotropic</code>
-you pass <strong>at construction time</strong> and stores three floats; the material is
-not a dependency and no <code>nDMaterial</code> line is ever written for it. Accepting
-a material object at all is ergonomics — you already have per-layer
-materials around. The practical consequence: your <em>soil</em> materials carry
-<code>rho=0</code> (mass is nodal, §6) while the <em>impedance</em> objects carry the real
-<code>ρ</code> the dashpots need — same <code>E</code>/<code>ν</code>, different <code>ρ</code>, no collision.</p>
-<h2 id="4-inject-the-input-motion">4. Inject the input motion<a class="headerlink" href="#4-inject-the-input-motion" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ricker</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">Ricker</span><span class="p">(</span><span class="n">f_n</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">t_total</span><span class="o">=</span><span class="mf">2.5</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">,</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>                             <span class="n">t_center</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;velocity&quot;</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">0.01</span><span class="p">))</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="n">impedance</span><span class="p">,</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>                               <span class="n">base_series</span><span class="o">=</span><span class="n">ricker</span><span class="p">,</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>                               <span class="n">base_dirs</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,))</span>    <span class="c1"># -fx → vertically propagating S-wave</span>
-</span></code></pre></div>
-<p><code>base_series</code> is the incident motion as a <strong>velocity history</strong>; it attaches
-as <code>-fx</code> / <code>-fy</code> / <code>-fz</code> (per <code>base_dirs</code>) to the <code>B</code>-containing cells
-<em>only</em> — the upstream element consumes base input exclusively on bottom
-boundaries, and the typed primitive rejects a series anywhere else rather
-than let it silently no-op. <code>("x",)</code> or <code>("y",)</code> injects a shear wave;
-<code>("z",)</code> a P-wave (<code>"z"</code> is invalid on a 2D skin).</p>
-<p>This is a <em>compliant base</em>: the same dashpots that inject the wave absorb
-whatever comes back down. The injection rides the element internal-force
-channel (<code>addBaseActions</code>), which is why, in the energy balance, the input
-shows up as <strong>negative internal work</strong> (see §7).</p>
-<h2 id="5-the-staged-lifecycle-hold-absorbing">5. The staged lifecycle: hold → absorbing<a class="headerlink" href="#5-the-staged-lifecycle-hold-absorbing" title="Permanent link">&para;</a></h2>
-<p>The element is staged by design:</p>
+<p><strong>Constraint math (equation route):</strong> per tied DOF <code>d</code>,
+<code>u_d(slave) = Σ wᵢ·u_d(masterᵢ)</code>, emitted as
+<code>equationConstraint slave d 1.0  m₁ d -w₁  m₂ d -w₂ …</code> (the OpenSees
+sum-to-zero form <code>cCoef·cDOF + Σ rCoef·rDOF = 0</code>, <code>Ccr = -rci/cc</code>).</p>
+<h2 id="handler-selection-equation-route">Handler selection (equation route)<a class="headerlink" href="#handler-selection-equation-route" title="Permanent link">&para;</a></h2>
+<p><code>EQ_Constraint</code> is <strong>upstream</strong> OpenSees (Yuli Huang, ~May 2025). It is
+enforced by <code>Lagrange</code> / <code>Penalty</code> / <strong><code>LadrunoProjection</code></strong> (fork) — <strong>not</strong>
+by <code>Transformation</code> or <code>Auto</code> (neither iterates <code>getEQs()</code>; verified in the
+fork C++). The bridge handles this automatically:</p>
 <ul>
-<li><strong>Stage 0 — HOLD</strong> (initial): the skin is penalty-frozen to the soil box.
-  A gravity / initial-state stage equilibrates against rigid lateral
-  support, exactly like the classic fixed-boundary gravity step.</li>
-<li><strong>Stage 1 — ABSORBING</strong>: dashpots + free-field columns active.</li>
+<li><strong>Non-staged:</strong> <code>_maybe_auto_emit_constraint_handler</code> auto-emits
+  <code>Lagrange</code> (implicit) when an equation tie is present, <strong>never</strong>
+  <code>Transformation</code>, and <strong>fails loud</strong> if the user declared
+  <code>Transformation</code> <em>or</em> <code>Auto</code> (INV-4).</li>
+<li><strong>Staged:</strong> <code>_validate_staged_eq_handlers</code> runs in both
+  <code>_emit_stages_flat</code> and <code>_emit_stages_partitioned</code> and <strong>fails loud per
+  stage</strong> whose <code>stage.constraints</code> isn't <code>Lagrange</code>/<code>Penalty</code>/
+  <code>LadrunoProjection</code> (incl. none → default <code>Plain</code>). (Open item 5.)</li>
+<li><strong>Explicit transient:</strong> declare <code>ops.constraints.LadrunoProjection()</code>
+  yourself (Δt-neutral, momentum-conserving). Auto-detecting implicit vs
+  explicit is Open item 1 — until then the auto-emit warns.</li>
 </ul>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">stage</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;dynamic&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">st</span><span class="p">:</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">st</span><span class="o">.</span><span class="n">activate_absorbing</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">skin</span><span class="o">.</span><span class="n">skin_all_pg</span><span class="p">)</span>   <span class="c1"># the flip</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="o">...</span>
+<h2 id="persistence">Persistence<a class="headerlink" href="#persistence" title="Permanent link">&para;</a></h2>
+<p><code>enforce</code> round-trips through <code>model.h5</code> (neutral schema <strong>2.14.0</strong>):
+<code>enforce</code> column on the interpolation lane, <code>sr_enforce</code> (uint8 0/1/2) on
+the surface-coupling lane, both presence-probed (2.13.x files decode as
+<code>"penalty"</code>). <code>CouplingControl</code> already round-trips via the <code>cpl_*</code> /
+<code>sr_cpl_*</code> columns, so <code>penalty_al</code> needed <strong>no</strong> schema work.</p>
+<p><strong>The equation tie is fully recoverable from <code>model.h5</code> — Open item 4
+RESOLVED with no schema bump.</strong> The interpolation lane persists not just
+<code>enforce</code> but the projection <code>weights</code> (and <code>slave_node</code>/<code>master_nodes</code>/
+<code>dofs</code>) — everything <code>_emit_equation_tie</code> needs. So an equation-tied archive
+round-trips via <code>FEMData.from_h5</code> → <code>apeSees(fem).tcl()/py()/run()</code> (the
+forward emit re-runs <code>_emit_one_interpolation</code> → <code>_emit_equation_tie</code>),
+exactly like g.embed / contact / reinforce. The H5 <em>deck</em> emitter now no-ops
+<code>equationConstraint</code> <strong>silently</strong> (mirroring those siblings); the old
+<code>H5EquationConstraintDeviationWarning</code> is <strong>dormant</strong> (retained for
+back-compat). A dedicated <code>/opensees</code> deck-zone record (standalone deck
+replay) stays the shared low-priority follow-on with reinforce/contact/embed.</p>
+<h2 id="where-things-live">Where things live<a class="headerlink" href="#where-things-live" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>File</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enforce=</code> / <code>control=</code> params</td>
+<td><code>core/ConstraintsComposite.py</code> (<code>tie</code>, <code>tied_contact</code>)</td>
+</tr>
+<tr>
+<td>defs + validation</td>
+<td><code>_kernel/defs/constraints.py</code> (<code>TieDef</code>/<code>TiedContactDef</code>, <code>_validate_tie_enforce</code>)</td>
+</tr>
+<tr>
+<td>record field</td>
+<td><code>_kernel/records/_constraints.py</code> (<code>InterpolationRecord.enforce</code> / <code>.control</code>)</td>
+</tr>
+<tr>
+<td>resolver threading</td>
+<td><code>_kernel/resolvers/_constraint_resolver/_resolver.py</code></td>
+</tr>
+<tr>
+<td>emission</td>
+<td><code>opensees/_internal/build.py</code> (<code>_emit_one_interpolation</code>, <code>_emit_equation_tie</code>, <code>_emit_penalty_al_tie</code>)</td>
+</tr>
+<tr>
+<td>Protocol method</td>
+<td><code>opensees/emitter/base.py</code> <code>equationConstraint</code> + all 5 emitters</td>
+</tr>
+<tr>
+<td>handler primitive</td>
+<td><code>opensees/analysis/constraint_handler.py</code> (<code>LadrunoProjection</code>)</td>
+</tr>
+<tr>
+<td>handler guards</td>
+<td><code>opensees/apesees.py</code> (<code>_maybe_auto_emit_constraint_handler</code>, <code>_validate_staged_eq_handlers</code>) — <strong>on class <code>BuiltModel</code>, not <code>apeSees</code></strong></td>
+</tr>
+<tr>
+<td>H5 codec</td>
+<td><code>mesh/_record_h5.py</code> + <code>mesh/_femdata_h5_io.py</code> (<code>enforce</code>/<code>sr_enforce</code>)</td>
+</tr>
+<tr>
+<td>tests</td>
+<td><code>tests/test_equation_tie_emission.py</code>, <code>tests/test_penalty_al_tie_emission.py</code>, <code>tests/test_staged_eq_handler_guard.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="adversarial-review-fixed">Adversarial review — fixed<a class="headerlink" href="#adversarial-review-fixed" title="Permanent link">&para;</a></h2>
+<p>4-lens review (partitioned / persistence / handler-matrix / math-edge):
+zero-weight masters silently dropped the whole tie (OpenSees rejects any
+zero <code>rcoef</code>, <code>EQ_Constraint.cpp:98</code> → filter them); <code>Auto</code> handler
+unguarded; partitioned planner mis-routed EQ (now fail-loud — cross-rank is
+Open item 2); <code>tied_contact</code> "bidirectional" docstring was false; the
+persistence drop above; and a bytes-vs-<code>str</code> decode bug (use <code>_str()</code>).</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p>Run on the <strong>fork</strong> interpreter (it has <code>equationConstraint</code> + the fork
+elements/handler):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$env:PYTHONPATH = &quot;&lt;repo&gt;\src&quot;; $env:LADRUNO_OPENSEES_QUIET = &quot;1&quot;
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>C:\Users\nmora\venv\opensees_venv\Scripts\python.exe -m pytest `
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  tests/test_equation_tie_emission.py `
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  tests/test_penalty_al_tie_emission.py `
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  tests/test_staged_eq_handler_guard.py -q
 </span></code></pre></div>
-<p><code>s.activate_absorbing</code> resolves the PG to element tags and emits a
-self-contained one-shot block —
-<code>parameter</code> / <code>addToParameter … stage</code> / <code>updateParameter 1</code> /
-<code>remove parameter</code> — at the top of that stage. Partitioned decks get the
-right semantics automatically: each rank flips only the elements it owns
-(an id owned elsewhere is silently skipped), while in a sequential deck an
-unresolvable id is a hard <code>BridgeError</code>. Staged decks emit and run as text
-(<code>ops.tcl</code> / <code>ops.py</code>), never live in-process.</p>
-<p>The canonical two-stage pattern is gravity-then-dynamic; for a pure
-plane-wave study a single dynamic stage that flips immediately (as in §1)
-is enough.</p>
-<h2 id="6-the-modeling-recipe-run-verified">6. The modeling recipe (run-verified)<a class="headerlink" href="#6-the-modeling-recipe-run-verified" title="Permanent link">&para;</a></h2>
-<p>Every item below was established by running, not by reading manuals.</p>
-<p><strong>Mass: nodal, soil-only.</strong> Declare tributary mass on the session
-(<code>g.masses.volume(pg, density=γ)</code> per layer) and re-declare it per node on
-the bridge (<code>ops.mass</code>); emit the soil bricks with <code>rho=0</code> materials so
-element mass never double-counts it. <strong>Never put nodal mass on the skin</strong> —
-its lateral cells carry their own free-field mass internally, and extra
-mass detunes the absorption (measured: late-time spurious motion grows from
-~20 % to ~80 % of peak).</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">for</span> <span class="n">mrec</span> <span class="ow">in</span> <span class="n">fem</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">masses</span><span class="p">:</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">ops</span><span class="o">.</span><span class="n">mass</span><span class="p">(</span><span class="n">nodes</span><span class="o">=</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">mrec</span><span class="o">.</span><span class="n">node_id</span><span class="p">)],</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>             <span class="n">values</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">mrec</span><span class="o">.</span><span class="n">mass</span><span class="p">[:</span><span class="mi">3</span><span class="p">]))</span>
+<p><code>test_equation_tie_emission.py</code> includes a <strong>live openseespy static solve</strong>
+proving <code>u(slave)=Σ wᵢ·u(mᵢ)</code> to 1e-9 (sign convention end-to-end on the
+fork build) + an H5 round-trip. The system <code>Python311</code> has numpy/pytest but
+<strong>no</strong> openseespy, so live tests skip there. Static gates (ruff + mypy
+ratchet, baseline 0) cover <code>src/apeGmsh/opensees</code> only.</p>
+<h2 id="tie-force-recovery-shipped-p5-item-2">Tie-force recovery — SHIPPED (P5 item 2)<a class="headerlink" href="#tie-force-recovery-shipped-p5-item-2" title="Permanent link">&para;</a></h2>
+<p>The interface force a non-matching equation tie carries (≈ LS-DYNA
+<code>*DATABASE_NCFORC</code>) is now recoverable two ways. Both reuse the fork OpenSees
+tie force <code>f = M(a_raw − a_proj)</code> (the <code>LadrunoProjection</code> handler's projection
+constraint force, ADR-30 P3/P4, already on <code>ladruno</code>); the apeGmsh side was a
+thin pair of wrappers + one reader-map entry.</p>
+<ul>
+<li><strong>Live query</strong> — <code>apeSees.ladruno_projection_tie_force(node, dof)</code> (1-based
+  <code>dof</code>) returns the tie force from the last projection step of a prior <strong>live</strong>
+  <code>analyze(...)</code>. Delegates to the fork-gated
+  <code>LiveOpsEmitter.ladruno_projection_tie_force</code> (mirrors <code>critical_time_step</code>).
+  <code>BridgeError</code> before any live run; <code>RuntimeError</code> on a stock build. Works
+  implicit <em>and</em> explicit.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ops</span> <span class="o">=</span> <span class="n">apeSees</span><span class="p">(</span><span class="n">fem</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="o">...</span>                                       <span class="c1"># build + LadrunoProjection handler</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">ops</span><span class="o">.</span><span class="n">analyze</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">f</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">ladruno_projection_tie_force</span><span class="p">(</span><span class="n">slave_node</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 </span></code></pre></div>
-<p><strong>Fix the bottom outer node plane when running explicit.</strong> In absorbing
-mode the element penalty-fixes its below-soil outer nodes anyway
-(<code>addKPenaltyStage1</code>); declaring the same constraint as a real <code>ops.fix</code>
-removes those massless, springs-only DOFs from the system, which an
-explicit mass-only-LHS solver cannot tolerate (<code>Diagonal aii = 0</code>).
-Implicit results are unchanged.</p>
-<p><strong>Damping: global mass-proportional Rayleigh.</strong> For explicit studies use
-<code>ops.damping.rayleigh(alpha_m=4πζf_anchor)</code> — βK in any flavour collapses
-the explicit stable step and drags a non-diagonal C onto stock
-central-difference LHSs. Two source-verified facts make the <strong>global</strong> form
-the right one here:</p>
+<ul>
+<li><strong>Recorder readback</strong> — emission already worked via the passthrough
+  <code>ops.recorder.Ladruno(nodal_responses=("constraintTieForce",))</code>; the only gap
+  was reading it back. Closed by one <code>_NODAL_RESULT_NAME_MAP</code> entry
+  (<code>CONSTRAINT_TIE_FORCE</code> → <code>constraint_tie_force</code>,
+  <code>results/readers/_mpco_translation.py</code>) so a <code>.ladruno</code> file is read via
+  <code>results.nodes.get(component="constraint_tie_force_x")</code> (components
+  <code>TFx,TFy,TFz</code>; vec3/node; <strong>explicit-only</strong> — scattered each commit by
+  <code>CentralDifferenceLadruno</code>).</li>
+</ul>
+<p>Tests: <code>tests/test_tie_force_helper.py</code>. The readback-mapping + <code>BridgeError</code>-gate
+legs run anywhere; the live legs (query == exact <code>F·m₂/(m₁+m₂)</code>, wrong-handler
+guard, recorder round-trip via <code>LadrunoReader</code>) need an openseespy <strong>built from
+<code>ladruno</code> ≥ ADR-30 P3/P4</strong> and skip cleanly otherwise (the <code>opensees_venv</code>
+openseespy + the local <code>dist</code> build as of 2026-06-18 predate the command —
+verified absent via <code>hasattr</code> / <code>strings</code>; the commands themselves are confirmed
+on <code>origin/ladruno</code>). Files: <code>opensees/emitter/live.py</code>,
+<code>opensees/apesees.py</code>, <code>results/readers/_mpco_translation.py</code>. Docs:
+<code>guide_constraints.md</code> §"Tie-force recovery". Not done: the declarative canonical
+token (<code>capture(nodes="constraint_tie_force")</code>) — deferred to avoid the shared
+<code>_MPCO_NODE_TOKENS</code> MPCO-leak risk; emission stays the documented passthrough.</p>
+<h2 id="handler-implicitexplicit-auto-detect-shipped-p5-open-item-1">Handler implicit/explicit auto-detect — SHIPPED (P5, Open item 1)<a class="headerlink" href="#handler-implicitexplicit-auto-detect-shipped-p5-open-item-1" title="Permanent link">&para;</a></h2>
+<p><code>BuiltModel._maybe_auto_emit_constraint_handler</code> now keys the EQ-tie handler
+auto-emit off the registered integrator (shared <code>_is_explicit_integrator</code>, the
+same classifier <code>apeSees._check_explicit_solver_compat</code> uses — refactored to one
+source of truth). When an <code>enforce="equation"</code> tie is present and no handler was
+declared: <strong>explicit</strong> integrator → auto-emit fork <strong><code>LadrunoProjection</code></strong>
+(Δt-neutral); <strong>implicit / none</strong> → <strong><code>Lagrange</code></strong> (exact). Declaring a handler
+is the override (respected as before); INV-4 still fail-louds on
+<code>Transformation</code>/<code>Auto</code> + equation tie; a <em>soft</em> warning now fires for
+user-declared <code>Lagrange</code> + explicit integrator (massless multiplier DOFs break
+an explicit mass solve). Files: <code>opensees/apesees.py</code>. Tests:
+<code>tests/test_constraint_emission_phase7b.py</code> (<code>TestEquationTieHandlerAutoDetect</code>).
+No <code>tie_handler=</code> kwarg was needed — the explicit-handler path is the override.</p>
+<h2 id="cross-partition-eq-replication-shipped-p5-open-item-2">Cross-partition EQ replication — SHIPPED (P5, Open item 2)<a class="headerlink" href="#cross-partition-eq-replication-shipped-p5-open-item-2" title="Permanent link">&para;</a></h2>
+<p><code>_plan_rank_constraints</code> (<code>opensees/_internal/build.py</code>) no longer fail-louds on
+an <code>enforce="equation"</code> tie under partitioned emit. It now replicates the tie on
+EVERY rank that owns the slave OR any master (the <code>rigidDiaphragm</code> rule, not the
+single-canonical-host-rank element rule the penalty tie uses): a new
+<code>_RankConstraintPlan.equation_records</code> lane collects such ties per rank, each
+owning rank ghost-declares the foreign slave/masters first (existing
+<code>_add_foreign_or_phantom</code>), and <code>emit_mp_constraints_partitioned</code> emits them via
+<code>_emit_surface_couplings_for_rank</code> → <code>_emit_one_interpolation</code> → <code>_emit_equation_tie</code>
+(no element tag, so replication is tag-stream-neutral; rows byte-identical across
+ranks). Handler side is covered by Open item 1 (auto-emit picks
+<code>LadrunoProjection</code>/<code>Lagrange</code>). Tests:
+<code>tests/opensees/integration/test_emit_partitioned_replicate_on_both.py</code>
+(<code>test_cross_rank_equationConstraint_replicates_on_owning_ranks</code> +
+<code>test_equationConstraint_single_owning_rank_no_spurious_replication</code>).
+Emission logic is unit-verified without MPI; a live OpenSeesMP run is the final
+confirmation when a multi-rank fork build is available.</p>
+<h2 id="remaining-p5-none-are-correctness-gaps">Remaining (P5 — none are correctness gaps)<a class="headerlink" href="#remaining-p5-none-are-correctness-gaps" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Region-scoped Rayleigh (<code>on=…</code>) attaches to <em>elements</em> only — and the
-   soil elements have <code>rho=0</code>, so element-side αM·M is zero. Only the
-   global <code>rayleigh</code> command also reaches the <strong>nodes</strong>, where the mass
-   actually lives.</li>
-<li>The skin is <em>supposed</em> to feel the same α: <code>ASDAbsorbingBoundary3D</code>
-   deliberately applies the domain's Rayleigh α to its lateral free-field
-   columns (<code>addCff</code>; the bottom face is skipped). The free field must
-   match a damped interior, or the truncation mismatch radiates spurious
-   waves.</li>
+<li><strong>DRM integration test</strong> <em>(capstone)</em> — non-matching soil/structure
+   under explicit DRM (ADR 0066); the real use case end-to-end. Needs an
+   openseespy <strong>built from current <code>ladruno</code></strong> (the local build is stale) and a
+   full SSI model.</li>
 </ol>
-<p><strong>Lateral extent can be small.</strong> The free-field columns enforce the 1-D
-site response at the truncation, so a few wavelengths of plan extent
-replace kilometres of domain. Widen it when a structure sits inside.</p>
-<h2 id="7-validating-the-boundary">7. Validating the boundary<a class="headerlink" href="#7-validating-the-boundary" title="Permanent link">&para;</a></h2>
-<p>Quietness is <strong>not</strong> a valid check for stratified profiles — a soft layer
-over a stiff one is a physical resonator that keeps ringing long after the
-pulse (verified: removing the layers drops the late-time surface envelope
-by an order of magnitude, ~16 % → ~1 % of peak). Use these instead:</p>
-<ul>
-<li><strong>Plane-wave coherence</strong> — every free-surface node moves identically
-  (cross-node scatter at machine zero); the free-field boundary is doing
-  its 1-D job.</li>
-<li><strong>Windowed decay</strong> — the surface envelope falls window-over-window after
-  the pulse (and its reflections) have passed.</li>
-<li><strong>Energy balance</strong> — record with <code>ops.recorder.Ladruno(..., energy=True)</code>
-  and read <code>results.energy()</code> (<code>KE/IE/DW/ULW/RES/ERR</code>, fork builds). With
-  base injection through the elements, <code>ULW = 0</code> and the closure reads
-  <code>−IE = KE + DW + RES</code>: the boundary is working when <code>DW</code> climbs onto
-  <code>−IE</code> (≈ 98 % absorbed on the reference runs) and <code>ERR</code> stays well under
-  1 %. Note <code>DW</code> also contains material (Rayleigh) damping work — run a
-  ζ = 0 twin to isolate the dashpots.</li>
-<li><strong>Sequential ↔ partitioned identity</strong> — same physics across 1 vs N ranks
-  to ~1e-15 of peak; partitioning may change wall time, never the answer.</li>
-<li><strong>Know the residual.</strong> A Lysmer-type base is exact only in the continuum
-  limit: expect a small re-reflection of the returning free-surface echo,
-  arriving one extra round trip later (4H/Vs) at a few % of peak amplitude
-  (~5 % measured on the wavelength-rule mesh — consistent with ≈ 98 %
-  energy absorption).</li>
-</ul>
-<h2 id="8-pitfalls">8. Pitfalls<a class="headerlink" href="#8-pitfalls" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Mass on the skin.</strong> The single most damaging mistake — see §6.</li>
-<li><strong><code>btype</code> is validated, not trusted.</strong> Letters outside <code>BLRFK</code> (or
-  outside <code>BLR</code> in 2D), repeated letters, and opposite-face pairs
-  (<code>LR</code>/<code>FK</code>) are construction-time errors — a real box cell can never
-  carry them, and the element would silently mis-size if it could.</li>
-<li><strong>Base series off the bottom.</strong> <code>-fx/-fy/-fz</code> on a non-<code>B</code> cell is
-  rejected at construction (upstream gates them on <code>BND_BOTTOM</code>; at best a
-  silent no-op).</li>
-<li><strong><code>thickness=</code> is 2D-only.</strong> Required for a 2D skin (out-of-plane slab
-  thickness — match your soil quads'), rejected for a 3D one.</li>
-<li><strong>Skewed 2D skins.</strong> <code>ASDAbsorbingBoundary2D</code> self-sorts its nodes and
-  has no distortion handling; the builders keep the skin axis-aligned —
-  don't hand-build skewed quads.</li>
-<li><strong>Region-scoped Rayleigh on <code>rho=0</code> soil damps nothing</strong> — see §6.</li>
-<li><strong>Stock <code>CentralDifference</code> + skin dashpots.</strong> That integrator assembles
-  C into its LHS; the skin's dashpots make C non-diagonal, so the
-  <code>Diagonal</code> solver is invalid for it (the fork's <code>ExplicitBathe</code> /
-  <code>CentralDifferenceLadruno</code> and stock <code>ExplicitDifference</code> are
-  mass-only-LHS and unaffected).</li>
-<li><strong>Thick-skin warning.</strong> Heed <code>WarnAbsorbingSkinAspect</code>; keep the skin
-  near the adjacent soil element size.</li>
-</ul>
-<p>Worked end-to-end examples: the staged-gravity SSI example shipped with
-ADR 0054 (AB-4), and the plane-wave study notebooks in the
-<code>Plain Wave JAA</code> project folder (stratified physics reference, faithful-
-geometry scaling, local integrator/damping rig, single-layer control).</p>
 
 
 

@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/internal_docs/guide_absorbing_boundary/">
+        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/internal_docs/handoff_pr_merge_sequence/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>apeGmsh absorbing boundaries - apeGmsh</title>
+        <title>Handoff — PR merge sequence (B main-green + A contact-stack landing) - apeGmsh</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#apegmsh-absorbing-boundaries" class="md-skip">
+        <a href="#handoff-pr-merge-sequence-b-main-green-a-contact-stack-landing" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              apeGmsh absorbing boundaries
+              Handoff — PR merge sequence (B main-green + A contact-stack landing)
             
           </span>
         </div>
@@ -5038,10 +5038,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#tasks-on-this-page" class="md-nav__link">
+  <a href="#snapshot" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tasks on this page
+        Snapshot
       
     </span>
   </a>
@@ -5049,10 +5049,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#1-the-30-second-picture" class="md-nav__link">
+  <a href="#the-interlock-why-neither-b-pr-is-green-alone" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. The 30-second picture
+        The interlock (why neither B PR is green alone)
       
     </span>
   </a>
@@ -5060,22 +5060,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-build-the-box-gpartsadd_plane_wave_box" class="md-nav__link">
+  <a href="#part-1-make-main-green-merge-740-then-738" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. Build the box: g.parts.add_plane_wave_box
+        Part 1 — make main green (merge #740 then #738)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="2. Build the box: g.parts.add_plane_wave_box">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-2-land-the-contact-stack-after-main-is-green" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 2 — land the contact stack (after main is green)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 2 — land the contact stack (after main is green)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#the-absorbingskinresult" class="md-nav__link">
+  <a href="#recommended-one-fresh-pr-main-supersede-722723" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The AbsorbingSkinResult
+        Recommended: one fresh PR → main, supersede #722/#723
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-retarget-722-rebase-723-preserves-the-stacked-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative: retarget #722 + rebase #723 (preserves the stacked PRs)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-landing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After landing
       
     </span>
   </a>
@@ -5088,38 +5121,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#3-declare-the-skin-opselementabsorbing_boundary" class="md-nav__link">
+  <a href="#open-decisions-need-your-call" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Declare the skin: ops.element.absorbing_boundary
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="3. Declare the skin: ops.element.absorbing_boundary">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-impedance-material-is-never-emitted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The impedance material is never emitted
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-inject-the-input-motion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Inject the input motion
+        Open decisions (need your call)
       
     </span>
   </a>
@@ -5127,43 +5132,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-the-staged-lifecycle-hold-absorbing" class="md-nav__link">
+  <a href="#whats-verified-so-you-can-trust-the-landing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. The staged lifecycle: hold → absorbing
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-the-modeling-recipe-run-verified" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. The modeling recipe (run-verified)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-validating-the-boundary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Validating the boundary
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-pitfalls" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        8. Pitfalls
+        What's verified (so you can trust the landing)
       
     </span>
   </a>
@@ -5190,306 +5162,134 @@
   
 
 
-<h1 id="apegmsh-absorbing-boundaries">apeGmsh absorbing boundaries<a class="headerlink" href="#apegmsh-absorbing-boundaries" title="Permanent link">&para;</a></h1>
-<p>A guide to truncating a soil domain with the <code>ASDAbsorbingBoundary3D</code> / <code>2D</code>
-skin (ADR 0054): building the plane-wave box, declaring the skin on the
-bridge, the staged hold→absorbing lifecycle, and the run-verified modeling
-recipe — mass, damping, base input, and how to <em>validate</em> that the boundary
-is actually working. This document covers the apeGmsh abstraction; see
-<code>guide_opensees.md</code> for the bridge in general and <code>guide_masses.md</code> for the
-tributary-mass channel the recipe leans on.</p>
-<p>All snippets assume the usual pipeline:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeGmsh</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeSees</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.material.nd</span><span class="w"> </span><span class="kn">import</span> <span class="n">ElasticIsotropic</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.time_series.time_series</span><span class="w"> </span><span class="kn">import</span> <span class="n">Ricker</span>
-</span></code></pre></div>
-<h2 id="tasks-on-this-page">Tasks on this page<a class="headerlink" href="#tasks-on-this-page" title="Permanent link">&para;</a></h2>
+<h1 id="handoff-pr-merge-sequence-b-main-green-a-contact-stack-landing">Handoff — PR merge sequence (B main-green + A contact-stack landing)<a class="headerlink" href="#handoff-pr-merge-sequence-b-main-green-a-contact-stack-landing" title="Permanent link">&para;</a></h1>
+<p>Written 2026-06-25. Successor to <code>handoff_contact_stack_and_main_red.md</code>. All
+engineering + verification is <strong>done</strong>; this doc is the <strong>merge/landing
+runbook</strong> + the two open decisions. Nothing here has been pushed/merged — the
+merge mechanics are the maintainer's call (branch protection / topology).</p>
+<h2 id="snapshot">Snapshot<a class="headerlink" href="#snapshot" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="#1-the-30-second-picture">The 30-second picture</a></li>
-<li><a href="#2-build-the-box-gpartsadd_plane_wave_box">Build the box</a> · <a href="#the-absorbingskinresult">What comes back</a></li>
-<li><a href="#3-declare-the-skin-opselementabsorbing_boundary">Declare the skin</a> · <a href="#the-impedance-material-is-never-emitted">Why the impedance material is never emitted</a></li>
-<li><a href="#4-inject-the-input-motion">Inject the input motion</a></li>
-<li><a href="#5-the-staged-lifecycle-hold-absorbing">The staged lifecycle</a></li>
-<li><a href="#6-the-modeling-recipe-run-verified">The modeling recipe</a></li>
-<li><a href="#7-validating-the-boundary">Validate the boundary</a></li>
-<li><a href="#8-pitfalls">Pitfalls</a></li>
+<li><code>main</code> @ <code>26c8953c</code> (#737) — <strong>RED on BOTH axes</strong>: suite (12 stale
+  assertions) + static-gates (15 mypy errors, baseline 0; pre-existing since
+  #726/#727).</li>
+<li><strong>PR #738</strong> <code>fix/main-red-stale-assertions → main</code> — fixes the 12 suite
+  assertions. CI: <strong>lock-tests ✅</strong>, suite ❌ (only the known #730
+  <code>test_live_emitter_restores_real_ops_after_close</code> order-flake), static-gates
+  ❌ (the mypy — fixed by #740, not #738).</li>
+<li><strong>PR #740</strong> <code>fix/main-red-mypy → main</code> — fixes the 15 mypy errors. CI:
+  <strong>static-gates ✅, lock-tests ✅</strong>, suite ❌ (the 12 — fixed by #738, not
+  #740).</li>
+<li><strong><code>fix/contact-merge</code></strong> (local, NOT pushed) — the contact/embed stack. 10
+  commits over <code>main</code> (see <code>git log origin/main..fix/contact-merge</code>):
+  <code>75fbc63f</code> g.embed, <code>552fa911</code> contact gen, <code>14f0f8ea</code> merge main,
+  <code>50dae7b7</code> post-merge fixups, <code>1a66c38f</code> prior handoff, <code>2cd81ee2</code> review
+  round 1, <code>a4ca95b0</code> ADR 0073, <code>533ca191</code> review round 2, <code>50a4767a</code>
+  curved-detector fix, <code>ce12b1c4</code> review round 3 (workflow).</li>
+<li>Stale contact PRs: <strong>#722</strong> <code>feat/contact-generator → feat/g-embed-generator</code>
+  (non-main base!), <strong>#723</strong> <code>feat/contact-extensions → feat/contact-generator</code>
+  (stacked). #721 CLOSED unmerged (its g.embed lives in <code>fix/contact-merge</code>).
+  <strong>#703</strong> (Linux viewer) is unrelated — leave it.</li>
 </ul>
-<h2 id="1-the-30-second-picture">1. The 30-second picture<a class="headerlink" href="#1-the-30-second-picture" title="Permanent link">&para;</a></h2>
-<p>Three calls and one stage verb, each on the layer where it belongs:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># 1 ── SESSION: soil box + absorbing skin in one call</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;site&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">skin</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">parts</span><span class="o">.</span><span class="n">add_plane_wave_box</span><span class="p">(</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>        <span class="n">x</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">y</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="n">z</span><span class="o">=</span><span class="p">[(</span><span class="mf">45.0</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="p">(</span><span class="mf">75.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="mf">80.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">)],</span>   <span class="c1"># layered, TOP → BOTTOM</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">for</span> <span class="n">pg</span><span class="p">,</span> <span class="n">layer</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">skin</span><span class="o">.</span><span class="n">soil_pgs</span><span class="p">,</span> <span class="n">LAYERS</span><span class="p">):</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="n">g</span><span class="o">.</span><span class="n">masses</span><span class="o">.</span><span class="n">volume</span><span class="p">(</span><span class="n">pg</span><span class="p">,</span> <span class="n">density</span><span class="o">=</span><span class="n">layer</span><span class="o">.</span><span class="n">gamma</span><span class="p">)</span>   <span class="c1"># soil only — never the skin</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">generation</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">fem</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">()</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># 2 ── BRIDGE: fan the whole skin from one declaration</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">ops</span> <span class="o">=</span> <span class="n">apeSees</span><span class="p">(</span><span class="n">fem</span><span class="p">)</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">soil_mats</span> <span class="o">=</span> <span class="p">[</span><span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">ElasticIsotropic</span><span class="p">(</span><span class="n">E</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">nu</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">nu</span><span class="p">,</span> <span class="n">rho</span><span class="o">=</span><span class="mf">0.0</span><span class="p">))</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>             <span class="k">for</span> <span class="n">L</span> <span class="ow">in</span> <span class="n">LAYERS</span><span class="p">]</span>                                   <span class="c1"># rho=0: mass is nodal</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="n">impedance</span> <span class="o">=</span> <span class="p">[</span><span class="n">ElasticIsotropic</span><span class="p">(</span><span class="n">E</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">nu</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">nu</span><span class="p">,</span> <span class="n">rho</span><span class="o">=</span><span class="n">L</span><span class="o">.</span><span class="n">gamma</span><span class="p">)</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>             <span class="k">for</span> <span class="n">L</span> <span class="ow">in</span> <span class="n">LAYERS</span><span class="p">]</span>                                   <span class="c1"># never emitted (§3)</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">ricker</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">Ricker</span><span class="p">(</span><span class="n">f_n</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">t_total</span><span class="o">=</span><span class="mf">2.5</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">,</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>                             <span class="n">t_center</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;velocity&quot;</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">0.01</span><span class="p">))</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="k">for</span> <span class="n">mat</span><span class="p">,</span> <span class="n">pg</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">soil_mats</span><span class="p">,</span> <span class="n">skin</span><span class="o">.</span><span class="n">soil_pgs</span><span class="p">):</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">stdBrick</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">pg</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">mat</span><span class="p">)</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="n">impedance</span><span class="p">,</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>                               <span class="n">base_series</span><span class="o">=</span><span class="n">ricker</span><span class="p">,</span> <span class="n">base_dirs</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,))</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="c1"># 3 ── STAGE: flip the skin from HOLD to ABSORBING, then run</span>
-</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">stage</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;dynamic&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">st</span><span class="p">:</span>
-</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">st</span><span class="o">.</span><span class="n">activate_absorbing</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">skin</span><span class="o">.</span><span class="n">skin_all_pg</span><span class="p">)</span>
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    <span class="n">st</span><span class="o">.</span><span class="n">analysis</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="n">st</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">n_increments</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">)</span>
-</span></code></pre></div>
-<p>The skin replaces <em>distance</em>: instead of pushing fixed boundaries kilometres
-away, the lateral cells enforce the free-field motion at the truncation and
-the base is a compliant (dashpot) boundary that injects the incident wave and
-absorbs the outgoing one through the same elements.</p>
-<h2 id="2-build-the-box-gpartsadd_plane_wave_box">2. Build the box: <code>g.parts.add_plane_wave_box</code><a class="headerlink" href="#2-build-the-box-gpartsadd_plane_wave_box" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">skin</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">parts</span><span class="o">.</span><span class="n">add_plane_wave_box</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">x</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>                <span class="c1"># (extent, n_elements) along X</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">y</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">z</span><span class="o">=</span><span class="p">(</span><span class="mf">200.0</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>               <span class="c1"># homogeneous: one (thickness, n) pair …</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="c1"># z=[(45, 8), (75, 4), (80, 4)],  # … or layered, TOP → BOTTOM</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="c1"># skin_thickness=…,          # default: adjacent soil element size; scalar or (tx, ty, tz)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="c1"># center=(x0, y0, z0), names={…},</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">)</span>
-</span></code></pre></div>
-<p>The builder constructs, <strong>in the live session</strong> (no Part/STEP round-trip), an
-axis-aligned structured (transfinite hex) soil box plus a one-element-thick
-absorbing <strong>offset shell</strong> on its five truncation faces — the local <code>+Z</code> top
-is the free surface and is never shelled. Soil + shell are sliced only at
-region breakpoints, giving 18 sub-volumes: one soil region and up to 17 skin
-regions (5 face panels, 4 vertical edges, 4 bottom edges, 4 bottom corners).
-Each skin region is tagged with its <code>btype</code> — the set of truncation faces it
-lies outside of, OR-combined (<code>L</code>=min-X, <code>R</code>=max-X, <code>F</code>=min-Y, <code>K</code>=max-Y,
-<code>B</code>=min-Z; e.g. a bottom corner is <code>"BLF"</code>). A layered <code>z=</code> stratifies the
-soil <em>and</em> the lateral skin, so each layer's boundary can carry its own
-impedance.</p>
-<p>If the skin comes out much thicker than the adjacent soil element (above
-~4:1; STKO ships ~2:1) the builder warns with <code>WarnAbsorbingSkinAspect</code> —
-elongated boundary hexes absorb poorly. Fail-soft: a thick skin is legal,
-just flagged.</p>
-<p>Siblings, same contract:</p>
-<ul>
-<li><code>g.parts.add_absorbing_shell(...)</code> — bring-your-own-box: wraps an existing
-  soil volume you already built.</li>
-<li><code>g.parts.add_plane_wave_box_2d(...)</code> / <code>add_absorbing_shell_2d(...)</code> —
-  plane-strain rectangle in the global X–Y plane (X lateral, Y vertical,
-  free surface on top); skin regions <code>L R B BL BR</code> fan out to
-  <code>ASDAbsorbingBoundary2D</code> quads.</li>
-</ul>
-<h3 id="the-absorbingskinresult">The <code>AbsorbingSkinResult</code><a class="headerlink" href="#the-absorbingskinresult" title="Permanent link">&para;</a></h3>
-<p>The return value is a bag of physical-group names, so nothing downstream
-touches a raw tag:</p>
-<table>
-<thead>
-<tr>
-<th>field</th>
-<th>what it names</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>soil_pg</code> / <code>soil_pgs</code></td>
-<td>the intact interior soil volume (per layer when stratified)</td>
-</tr>
-<tr>
-<td><code>skin_pgs</code></td>
-<td><code>btype → PG</code> for every skin region (<code>{"L": "absorbing_L", "BLF": …}</code>)</td>
-</tr>
-<tr>
-<td><code>skin_pgs_by_layer</code></td>
-<td><code>layer → (btype → PG)</code> for stratified skins</td>
-</tr>
-<tr>
-<td><code>skin_all_pg</code></td>
-<td>roll-up over every skin region — the stage-flip target</td>
-</tr>
-<tr>
-<td><code>bottom_pgs</code></td>
-<td>the <code>B</code>-containing PGs — where the base input attaches</td>
-</tr>
-<tr>
-<td><code>free_surface_pg</code></td>
-<td>dim-2 PG of the soil top face (tie structures here)</td>
-</tr>
-<tr>
-<td><code>axes</code>, <code>n_layers</code>, <code>ndm</code></td>
-<td>sizing descriptors and the 2D/3D dispatch flag</td>
-</tr>
-</tbody>
-</table>
-<h2 id="3-declare-the-skin-opselementabsorbing_boundary">3. Declare the skin: <code>ops.element.absorbing_boundary</code><a class="headerlink" href="#3-declare-the-skin-opselementabsorbing_boundary" title="Permanent link">&para;</a></h2>
-<p>One facade call registers one element declaration per <code>btype</code> PG; the
-bridge's fan-out then writes one <code>element ASDAbsorbingBoundary3D</code> line per
-hex cell with the shared properties:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># homogeneous skin — a single material (or raw G=, v=, rho=)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">imped</span><span class="p">)</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># stratified skin — one material per layer, TOP → BOTTOM</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="p">[</span><span class="n">m_top</span><span class="p">,</span> <span class="n">m_mid</span><span class="p">,</span> <span class="n">m_bot</span><span class="p">])</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># 2D skin — thickness is REQUIRED (out-of-plane plane-strain slab; match your quads&#39;)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin2d</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">imped</span><span class="p">,</span> <span class="n">thickness</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-</span></code></pre></div>
-<p>With <code>materials=</code> the length must equal <code>skin.n_layers</code>; each layer's lateral
-cells get that layer's properties and the base skin takes the <strong>bottom</strong>
-layer's. The raw per-PG primitive
-(<code>ops.element.ASDAbsorbingBoundary3D(pg=…, G=…, v=…, rho=…, btype=…)</code>) is the
-escape hatch when you built the skin PGs yourself.</p>
-<h3 id="the-impedance-material-is-never-emitted">The impedance material is never emitted<a class="headerlink" href="#the-impedance-material-is-never-emitted" title="Permanent link">&para;</a></h3>
-<p>The upstream element command has <strong>no material-tag slot</strong> — it takes raw
-<code>G v rho</code> doubles:</p>
-<div class="language-tcl highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">nDMaterial</span><span class="w"> </span>ElasticIsotropic<span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="mf">2567314.3</span><span class="w"> </span><span class="mf">0.3</span><span class="w"> </span><span class="mf">0.0</span><span class="w">                    </span><span class="err">#</span><span class="w"> </span>soil:<span class="w"> </span>registered,<span class="w"> </span>has<span class="w"> </span>a<span class="w"> </span>tag
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nv">element</span><span class="w"> </span>stdBrick<span class="w"> </span><span class="mi">219</span><span class="w">  </span><span class="mi">40</span><span class="w"> </span><span class="mi">217</span><span class="w"> </span><span class="mi">400</span><span class="w"> </span><span class="mi">204</span><span class="w"> </span><span class="err">…</span><span class="w">  </span><span class="mi">1</span><span class="w">                          </span><span class="err">#</span><span class="w"> </span>brick<span class="w"> </span>references<span class="w"> </span>the<span class="w"> </span>tag
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">element</span><span class="w"> </span>ASDAbsorbingBoundary3D<span class="w"> </span><span class="mi">19</span><span class="w">  </span><span class="mi">265</span><span class="w"> </span><span class="mi">88</span><span class="w"> </span><span class="err">…</span><span class="w">  </span><span class="mf">987428.6</span><span class="w"> </span><span class="mf">0.3</span><span class="w"> </span><span class="mf">2.4</span><span class="w"> </span>F<span class="w">    </span><span class="err">#</span><span class="w"> </span>skin:<span class="w"> </span>raw<span class="w"> </span>G<span class="w"> </span>v<span class="w"> </span>rho<span class="w"> </span>inline
-</span></code></pre></div>
-<p>So the facade reads <code>G = E/(2(1+ν))</code>, <code>ν</code>, <code>ρ</code> off the <code>ElasticIsotropic</code>
-you pass <strong>at construction time</strong> and stores three floats; the material is
-not a dependency and no <code>nDMaterial</code> line is ever written for it. Accepting
-a material object at all is ergonomics — you already have per-layer
-materials around. The practical consequence: your <em>soil</em> materials carry
-<code>rho=0</code> (mass is nodal, §6) while the <em>impedance</em> objects carry the real
-<code>ρ</code> the dashpots need — same <code>E</code>/<code>ν</code>, different <code>ρ</code>, no collision.</p>
-<h2 id="4-inject-the-input-motion">4. Inject the input motion<a class="headerlink" href="#4-inject-the-input-motion" title="Permanent link">&para;</a></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ricker</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">Ricker</span><span class="p">(</span><span class="n">f_n</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">t_total</span><span class="o">=</span><span class="mf">2.5</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">0.005</span><span class="p">,</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>                             <span class="n">t_center</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;velocity&quot;</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">0.01</span><span class="p">))</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">ops</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">absorbing_boundary</span><span class="p">(</span><span class="n">skin</span><span class="o">=</span><span class="n">skin</span><span class="p">,</span> <span class="n">materials</span><span class="o">=</span><span class="n">impedance</span><span class="p">,</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>                               <span class="n">base_series</span><span class="o">=</span><span class="n">ricker</span><span class="p">,</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>                               <span class="n">base_dirs</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,))</span>    <span class="c1"># -fx → vertically propagating S-wave</span>
-</span></code></pre></div>
-<p><code>base_series</code> is the incident motion as a <strong>velocity history</strong>; it attaches
-as <code>-fx</code> / <code>-fy</code> / <code>-fz</code> (per <code>base_dirs</code>) to the <code>B</code>-containing cells
-<em>only</em> — the upstream element consumes base input exclusively on bottom
-boundaries, and the typed primitive rejects a series anywhere else rather
-than let it silently no-op. <code>("x",)</code> or <code>("y",)</code> injects a shear wave;
-<code>("z",)</code> a P-wave (<code>"z"</code> is invalid on a 2D skin).</p>
-<p>This is a <em>compliant base</em>: the same dashpots that inject the wave absorb
-whatever comes back down. The injection rides the element internal-force
-channel (<code>addBaseActions</code>), which is why, in the energy balance, the input
-shows up as <strong>negative internal work</strong> (see §7).</p>
-<h2 id="5-the-staged-lifecycle-hold-absorbing">5. The staged lifecycle: hold → absorbing<a class="headerlink" href="#5-the-staged-lifecycle-hold-absorbing" title="Permanent link">&para;</a></h2>
-<p>The element is staged by design:</p>
-<ul>
-<li><strong>Stage 0 — HOLD</strong> (initial): the skin is penalty-frozen to the soil box.
-  A gravity / initial-state stage equilibrates against rigid lateral
-  support, exactly like the classic fixed-boundary gravity step.</li>
-<li><strong>Stage 1 — ABSORBING</strong>: dashpots + free-field columns active.</li>
-</ul>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">stage</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;dynamic&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">st</span><span class="p">:</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">st</span><span class="o">.</span><span class="n">activate_absorbing</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="n">skin</span><span class="o">.</span><span class="n">skin_all_pg</span><span class="p">)</span>   <span class="c1"># the flip</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="o">...</span>
-</span></code></pre></div>
-<p><code>s.activate_absorbing</code> resolves the PG to element tags and emits a
-self-contained one-shot block —
-<code>parameter</code> / <code>addToParameter … stage</code> / <code>updateParameter 1</code> /
-<code>remove parameter</code> — at the top of that stage. Partitioned decks get the
-right semantics automatically: each rank flips only the elements it owns
-(an id owned elsewhere is silently skipped), while in a sequential deck an
-unresolvable id is a hard <code>BridgeError</code>. Staged decks emit and run as text
-(<code>ops.tcl</code> / <code>ops.py</code>), never live in-process.</p>
-<p>The canonical two-stage pattern is gravity-then-dynamic; for a pure
-plane-wave study a single dynamic stage that flips immediately (as in §1)
-is enough.</p>
-<h2 id="6-the-modeling-recipe-run-verified">6. The modeling recipe (run-verified)<a class="headerlink" href="#6-the-modeling-recipe-run-verified" title="Permanent link">&para;</a></h2>
-<p>Every item below was established by running, not by reading manuals.</p>
-<p><strong>Mass: nodal, soil-only.</strong> Declare tributary mass on the session
-(<code>g.masses.volume(pg, density=γ)</code> per layer) and re-declare it per node on
-the bridge (<code>ops.mass</code>); emit the soil bricks with <code>rho=0</code> materials so
-element mass never double-counts it. <strong>Never put nodal mass on the skin</strong> —
-its lateral cells carry their own free-field mass internally, and extra
-mass detunes the absorption (measured: late-time spurious motion grows from
-~20 % to ~80 % of peak).</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">for</span> <span class="n">mrec</span> <span class="ow">in</span> <span class="n">fem</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">masses</span><span class="p">:</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">ops</span><span class="o">.</span><span class="n">mass</span><span class="p">(</span><span class="n">nodes</span><span class="o">=</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">mrec</span><span class="o">.</span><span class="n">node_id</span><span class="p">)],</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>             <span class="n">values</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">mrec</span><span class="o">.</span><span class="n">mass</span><span class="p">[:</span><span class="mi">3</span><span class="p">]))</span>
-</span></code></pre></div>
-<p><strong>Fix the bottom outer node plane when running explicit.</strong> In absorbing
-mode the element penalty-fixes its below-soil outer nodes anyway
-(<code>addKPenaltyStage1</code>); declaring the same constraint as a real <code>ops.fix</code>
-removes those massless, springs-only DOFs from the system, which an
-explicit mass-only-LHS solver cannot tolerate (<code>Diagonal aii = 0</code>).
-Implicit results are unchanged.</p>
-<p><strong>Damping: global mass-proportional Rayleigh.</strong> For explicit studies use
-<code>ops.damping.rayleigh(alpha_m=4πζf_anchor)</code> — βK in any flavour collapses
-the explicit stable step and drags a non-diagonal C onto stock
-central-difference LHSs. Two source-verified facts make the <strong>global</strong> form
-the right one here:</p>
+<h2 id="the-interlock-why-neither-b-pr-is-green-alone">The interlock (why neither B PR is green alone)<a class="headerlink" href="#the-interlock-why-neither-b-pr-is-green-alone" title="Permanent link">&para;</a></h2>
+<p>Both #738 and #740 branch off a <strong>doubly-red</strong> <code>main</code>, and each fixes only ONE
+axis — so each PR's CI is red on the axis the <em>other</em> fixes. They touch
+<strong>disjoint files</strong> (#738 = <code>tests/*</code>, #740 = <code>src/*</code>), so they merge cleanly in
+any order. <code>main</code> only goes green after BOTH land. The repo already merged
+past red static-gates for #726/#727, so admin-merge-past-one-red-axis is an
+established pattern here.</p>
+<h2 id="part-1-make-main-green-merge-740-then-738">Part 1 — make <code>main</code> green (merge #740 then #738)<a class="headerlink" href="#part-1-make-main-green-merge-740-then-738" title="Permanent link">&para;</a></h2>
+<p>Order is interchangeable (disjoint files); this order makes the <strong>second</strong> PR
+fully green so only the first is an admin-merge-past-red.</p>
 <ol>
-<li>Region-scoped Rayleigh (<code>on=…</code>) attaches to <em>elements</em> only — and the
-   soil elements have <code>rho=0</code>, so element-side αM·M is zero. Only the
-   global <code>rayleigh</code> command also reaches the <strong>nodes</strong>, where the mass
-   actually lives.</li>
-<li>The skin is <em>supposed</em> to feel the same α: <code>ASDAbsorbingBoundary3D</code>
-   deliberately applies the domain's Rayleigh α to its lateral free-field
-   columns (<code>addCff</code>; the bottom face is skipped). The free field must
-   match a damped interior, or the truncation mismatch radiates spurious
-   waves.</li>
+<li><strong>Merge #740 first</strong> (squash). Its only red is the suite-12, which #738
+   fixes; static-gates + lock-tests are green. After merge, <code>main</code> =
+   #737 + mypy-clean (<code>src/apeGmsh/opensees</code> mypy 0); suite still red (12).
+   <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gh pr merge 740 --squash --delete-branch
+</span></code></pre></div></li>
+<li><strong>Rebase #738 onto the new <code>main</code>, re-push</strong> so its CI re-runs against a
+   mypy-clean base:
+   <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git fetch origin
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>git checkout fix/main-red-stale-assertions
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>git rebase origin/main
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>git push --force-with-lease
+</span></code></pre></div>
+   #738 should now be <strong>fully green</strong> except possibly the #730 order-flake in
+   the suite job (documented, transient). If it fires, re-run just that job:
+   <code>gh run rerun --job &lt;suite-job-id&gt;</code> (or admin-merge — the flake is known and
+   unrelated). Then:
+   <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>gh pr merge 738 --squash --delete-branch
+</span></code></pre></div></li>
+<li><code>main</code> is now <strong>green on both axes</strong>. Confirm: <code>gh run list --branch main
+   --limit 1</code>.</li>
 </ol>
-<p><strong>Lateral extent can be small.</strong> The free-field columns enforce the 1-D
-site response at the truncation, so a few wavelengths of plan extent
-replace kilometres of domain. Widen it when a structure sits inside.</p>
-<h2 id="7-validating-the-boundary">7. Validating the boundary<a class="headerlink" href="#7-validating-the-boundary" title="Permanent link">&para;</a></h2>
-<p>Quietness is <strong>not</strong> a valid check for stratified profiles — a soft layer
-over a stiff one is a physical resonator that keeps ringing long after the
-pulse (verified: removing the layers drops the late-time surface envelope
-by an order of magnitude, ~16 % → ~1 % of peak). Use these instead:</p>
+<p>(If branch protection allows admin override, you can instead just squash-merge
+both in either order and let the post-merge <code>main</code> CI confirm green — the
+disjoint files guarantee no conflict.)</p>
+<h2 id="part-2-land-the-contact-stack-after-main-is-green">Part 2 — land the contact stack (after <code>main</code> is green)<a class="headerlink" href="#part-2-land-the-contact-stack-after-main-is-green" title="Permanent link">&para;</a></h2>
+<p><code>fix/contact-merge</code> currently <strong>inherits</strong> the pre-B <code>main</code> (it merged main at
+<code>14f0f8ea</code>, before the B fixes existed), so it still carries the 12 stale
+assertions + 15 mypy errors. It must pick up the B fixes before it can be
+green. Its OWN contact/embed changes are fully verified (3 review rounds; ruff
+0-new, mypy 0-new, all contact/embed/H5 tests pass).</p>
+<h3 id="recommended-one-fresh-pr-main-supersede-722723">Recommended: one fresh PR → <code>main</code>, supersede #722/#723<a class="headerlink" href="#recommended-one-fresh-pr-main-supersede-722723" title="Permanent link">&para;</a></h3>
+<p>Simplest — avoids untangling #722's non-main base + #723's stacking, and gives
+one clean review of the whole stack:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>git checkout fix/contact-merge
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>git merge origin/main           # pull in B&#39;s fixes (disjoint from contact work)
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a># resolve nothing expected (B = tests/* + material/live src; contact = its own)
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>git push -u origin fix/contact-merge
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>gh pr create --base main --head fix/contact-merge \
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  --title &quot;feat(opensees): g.constraints.contact + g.embed (NTS/mortar contact + node-to-host embed)&quot; \
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  --body &quot;&lt;summarize: #722+#723 content, ADR 0073, 3 adversarial-review rounds&gt;&quot;
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a># then close the stale stacked PRs as superseded:
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>gh pr close 722 --comment &quot;Superseded by the consolidated contact-stack PR (rebased onto main, adversarial-review-hardened, ADR 0073).&quot;
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>gh pr close 723 --comment &quot;Superseded — its -soft/-visc/-consistanttan/-geomtan extensions are deferred in ADR 0073; reopen when implemented.&quot;
+</span></code></pre></div>
+<p>NOTE on #723: it adds <code>-soft</code>/<code>-visc</code>/<code>-consistanttan</code>/<code>-geomtan</code>, which ADR
+0073 explicitly <strong>defers</strong> (core-first scope). <code>fix/contact-merge</code> does NOT
+include them. Closing #723 as superseded means those flags are dropped for now
+— reopen/re-port when that work is scheduled. If you want them in this landing,
+say so and they need their own review pass (they were never adversarially
+reviewed here).</p>
+<h3 id="alternative-retarget-722-rebase-723-preserves-the-stacked-prs">Alternative: retarget #722 + rebase #723 (preserves the stacked PRs)<a class="headerlink" href="#alternative-retarget-722-rebase-723-preserves-the-stacked-prs" title="Permanent link">&para;</a></h3>
+<p>Per the original handoff. More fiddly: retarget #722 base
+<code>feat/g-embed-generator → main</code>, force-push <code>fix/contact-merge</code>'s content onto
+<code>feat/contact-generator</code>, then rebase #723 onto it. Only worth it if you want
+to keep the two-PR review structure and land #723's extensions now.</p>
+<h3 id="after-landing">After landing<a class="headerlink" href="#after-landing" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Plane-wave coherence</strong> — every free-surface node moves identically
-  (cross-node scatter at machine zero); the free-field boundary is doing
-  its 1-D job.</li>
-<li><strong>Windowed decay</strong> — the surface envelope falls window-over-window after
-  the pulse (and its reflections) have passed.</li>
-<li><strong>Energy balance</strong> — record with <code>ops.recorder.Ladruno(..., energy=True)</code>
-  and read <code>results.energy()</code> (<code>KE/IE/DW/ULW/RES/ERR</code>, fork builds). With
-  base injection through the elements, <code>ULW = 0</code> and the closure reads
-  <code>−IE = KE + DW + RES</code>: the boundary is working when <code>DW</code> climbs onto
-  <code>−IE</code> (≈ 98 % absorbed on the reference runs) and <code>ERR</code> stays well under
-  1 %. Note <code>DW</code> also contains material (Rayleigh) damping work — run a
-  ζ = 0 twin to isolate the dashpots.</li>
-<li><strong>Sequential ↔ partitioned identity</strong> — same physics across 1 vs N ranks
-  to ~1e-15 of peak; partitioning may change wall time, never the answer.</li>
-<li><strong>Know the residual.</strong> A Lysmer-type base is exact only in the continuum
-  limit: expect a small re-reflection of the returning free-surface echo,
-  arriving one extra round trip later (4H/Vs) at a few % of peak amplitude
-  (~5 % measured on the wavelength-rule mesh — consistent with ≈ 98 %
-  energy absorption).</li>
+<li>Verify the full suite on the merged <code>main</code> (contact tests are non-live /
+  emit-only; the 8 fork-live tests need the <code>opensees_env</code> fork build).</li>
+<li>The <code>g.constraints.mortar()</code> <code>NotImplementedError</code> now points users at
+  <code>contact(formulation="mortar", tie=True, outward=...)</code> — see decision 2.</li>
 </ul>
-<h2 id="8-pitfalls">8. Pitfalls<a class="headerlink" href="#8-pitfalls" title="Permanent link">&para;</a></h2>
+<h2 id="open-decisions-need-your-call">Open decisions (need your call)<a class="headerlink" href="#open-decisions-need-your-call" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>#723 extensions</strong> (<code>-soft</code>/<code>-visc</code>/<code>-consistanttan</code>/<code>-geomtan</code>): drop for
+   now (close #723, deferred per ADR 0073) vs port + review into this landing.</li>
+<li><strong><code>mortar()</code> delegation</strong>: leave the <code>NotImplementedError</code> pointing at the
+   fork-backed <code>contact(formulation="mortar", tie=True)</code> (current), vs actually
+   <strong>delegate</strong> <code>g.constraints.mortar()</code> to it — a breaking return-type +
+   semantics change (Lagrange-multiplier tie vs ALM penalty contact-tie), so it
+   needs its own decision + review, not a silent swap.</li>
+</ol>
+<h2 id="whats-verified-so-you-can-trust-the-landing">What's verified (so you can trust the landing)<a class="headerlink" href="#whats-verified-so-you-can-trust-the-landing" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Mass on the skin.</strong> The single most damaging mistake — see §6.</li>
-<li><strong><code>btype</code> is validated, not trusted.</strong> Letters outside <code>BLRFK</code> (or
-  outside <code>BLR</code> in 2D), repeated letters, and opposite-face pairs
-  (<code>LR</code>/<code>FK</code>) are construction-time errors — a real box cell can never
-  carry them, and the element would silently mis-size if it could.</li>
-<li><strong>Base series off the bottom.</strong> <code>-fx/-fy/-fz</code> on a non-<code>B</code> cell is
-  rejected at construction (upstream gates them on <code>BND_BOTTOM</code>; at best a
-  silent no-op).</li>
-<li><strong><code>thickness=</code> is 2D-only.</strong> Required for a 2D skin (out-of-plane slab
-  thickness — match your soil quads'), rejected for a 3D one.</li>
-<li><strong>Skewed 2D skins.</strong> <code>ASDAbsorbingBoundary2D</code> self-sorts its nodes and
-  has no distortion handling; the builders keep the skin axis-aligned —
-  don't hand-build skewed quads.</li>
-<li><strong>Region-scoped Rayleigh on <code>rho=0</code> soil damps nothing</strong> — see §6.</li>
-<li><strong>Stock <code>CentralDifference</code> + skin dashpots.</strong> That integrator assembles
-  C into its LHS; the skin's dashpots make C non-diagonal, so the
-  <code>Diagonal</code> solver is invalid for it (the fork's <code>ExplicitBathe</code> /
-  <code>CentralDifferenceLadruno</code> and stock <code>ExplicitDifference</code> are
-  mass-only-LHS and unaffected).</li>
-<li><strong>Thick-skin warning.</strong> Heed <code>WarnAbsorbingSkinAspect</code>; keep the skin
-  near the adjacent soil element size.</li>
+<li>Contact stack survived an ad-hoc 3-agent review <strong>and</strong> a 30-agent
+  adversarial-review <strong>workflow</strong> (6 dimensions, double-verified findings).
+  12 findings → <strong>9 unanimous-real, all fixed</strong> (rounds 1–3 on
+  <code>fix/contact-merge</code>); 2 correctly refuted.</li>
+<li>Highlights fixed: silent-drop under partitioned emit; NTS bare-<code>kn</code>+<code>-outward</code>
+  parser abort; higher-order nps stride; per-facet outward (no harmful
+  auto-derive); contact+equation / contact+MP fail-loud (penalty correctly
+  excluded); <code>tie=True</code> needs explicit outward (else gate-H2 zero-force);
+  NaN/inf penalty rejection; quad9 curved-host false positive; H5
+  deferred-contact handler consistency; range validation (numpy/bool/auto/
+  finite/integer/zero-sentinels).</li>
+<li>Static gates on <code>fix/contact-merge</code>: ruff +0, mypy +0 over its base. Once
+  rebased on the green <code>main</code>, both gates are clean (the +15 mypy is B's #740).</li>
+<li>ADR 0073 documents the API + every design decision.</li>
 </ul>
-<p>Worked end-to-end examples: the staged-gravity SSI example shipped with
-ADR 0054 (AB-4), and the plane-wave study notebooks in the
-<code>Plain Wave JAA</code> project folder (stratified physics reference, faithful-
-geometry scaling, local integrator/damping rig, single-layer control).</p>
 
 
 
