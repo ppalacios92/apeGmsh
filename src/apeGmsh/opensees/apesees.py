@@ -162,6 +162,7 @@ if TYPE_CHECKING:
     from apeGmsh.results.capture.spec import DomainCaptureSpec
     from apeGmsh.hpc import Cluster, Job
 
+    from .analysis.complex_eigen import ComplexEigenResult
     from .analysis.eigen import EigenResult
     from .analysis.modal import (
         FrequencyResponseResult,
@@ -6657,6 +6658,93 @@ class apeSees:
             _live=live_emitter,
         )
 
+    def complex_eigen(
+        self,
+        num_modes: int,
+        *,
+        solver: str = "-genBandArpack",
+        tol: float | None = None,
+        closed_form: bool = False,
+    ) -> "ComplexEigenResult":
+        """Complex / state-space modal analysis via the live emitter.
+
+        **Fork-only** (Ladruno ADR-46, ``complexEigen``): true per-mode
+        damping ratios ζ_k, damped frequencies ω_d,k, and phased mode
+        shapes for **non-classically damped** models (localized
+        dashpots, bearings, radiation damping).  Builds + emits a fresh
+        live domain, runs the real ``eigen`` (the projection basis),
+        then ``complexEigen`` and parses the flat 7-per-mode return
+        into a :class:`ComplexEigenResult`.
+
+        The default route projects the model's **actual** M and C
+        (element ``getDamp()``/``getMass()`` + nodal mass/``alphaM``) —
+        exactly the C a transient analysis feels.  ``closed_form=True``
+        uses the fast global-Rayleigh diagonal closed form instead
+        (refuses ``betaKinit``/``betaKcomm``; blind to scoped
+        Rayleigh).
+
+        Contract traps (fork guide): damping that does not flow through
+        ``getDamp()`` is invisible (``modalDamping``, HHT-α numerical
+        damping, elements whose ``-doRayleigh`` defaults OFF — the
+        ``Truss``/``zeroLength`` families); the projection spans only
+        the retained ``num_modes`` real modes; complex mode shapes are
+        recorded via Node-recorder ``raw=("complexEigenRe<k>",)`` /
+        ``Im<k>`` tokens, not carried on this result.
+
+        Parameters
+        ----------
+        num_modes
+            Real modes to extract as the projection basis (retain
+            enough to cover the band of interest;
+            ``-fullGenLapack`` on tiny models).
+        tol
+            Optional residual tolerance (fork default 1e-8).
+        closed_form
+            Use the closed-form Rayleigh route (Route A).
+        """
+        context = "apeSees.complex_eigen"
+        self._modal_prereqs_and_guards(num_modes, context=context)
+        # Fork guide trap #4: the eigenvector distribution to
+        # MP-constrained slave DOFs needs a distributing constraint
+        # handler — ``constraints Plain`` + MP constraints yields wrong
+        # complex shapes. The bridge-driven eigen path defaults to
+        # Transformation when no handler is declared; warn when the
+        # user declared Plain.
+        from .analysis.constraint_handler import Plain as _PlainHandler
+
+        if any(isinstance(p, _PlainHandler) for p in self._primitives):
+            import warnings
+
+            warnings.warn(
+                f"{context}: 'constraints Plain' is declared — on a "
+                "model with MP constraints (rigid links, equalDOF, "
+                "embedded, ...) complexEigen mode shapes need a "
+                "distributing handler (Transformation).",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        from .analysis.complex_eigen import ComplexEigenResult
+        from .emitter.live import LiveOpsEmitter
+
+        args: list[int | float | str] = []
+        if tol is not None:
+            if tol <= 0.0:
+                raise ValueError(
+                    f"{context}: tol must be > 0, got {tol}."
+                )
+            args.extend(("-tol", float(tol)))
+        if closed_form:
+            args.append("-closedForm")
+
+        bm = self.build()
+        self._assert_fork_if_required()
+        live_emitter = LiveOpsEmitter(wipe=True)
+        bm.emit(live_emitter)
+        live_emitter.eigen(num_modes, solver=solver)
+        values = live_emitter.complex_eigen(*args)
+        return ComplexEigenResult.from_flat(values)
+
     def _modal_prereqs_and_guards(
         self, num_modes: int, *, context: str,
     ) -> None:
@@ -6822,8 +6910,9 @@ class apeSees:
             Global excitation direction (1-based).
         periods, accels
             The design spectrum ``Sa(Tn)`` as parallel lists.
-            ``periods`` must be positive and strictly increasing (the
-            OpenSees list contract).
+            ``periods`` must be non-negative and strictly increasing;
+            a leading ``T = 0`` PGA anchor is legal (the fork clamps
+            ``T <= Tn[0]`` to ``Sa[0]``).
         combine
             ``"SRSS"`` | ``"CQC"`` | ``"ABS"`` | ``"TenPercent"``.
             CQC and TenPercent weight closely-spaced modes; CQC
@@ -6863,12 +6952,13 @@ class apeSees:
                 f"non-empty lists, got {len(tn)} periods / {len(sa)} "
                 "accels."
             )
-        if any(t <= 0.0 for t in tn) or any(
+        if any(t < 0.0 for t in tn) or any(
             b <= a for a, b in zip(tn, tn[1:])
         ):
             raise ValueError(
-                f"{context}: periods must be positive and strictly "
-                "increasing (the OpenSees -Tn contract)."
+                f"{context}: periods must be non-negative and strictly "
+                "increasing (the fork refuses negative Tn; a leading "
+                "T=0 PGA anchor is legal)."
             )
         if combine == "CQC" and damp is None and modal_damp is None:
             raise ValueError(
@@ -6942,6 +7032,17 @@ class apeSees:
                     f"{context}: series= belongs to the load= channel."
                 )
             ts = self._resolve(base_accel, base=TimeSeries)
+            # _resolve only kind-checks name-string refs; object
+            # handles pass through untouched — and per-kind 1-based tag
+            # counters mean a wrong-kind handle's tag numerically
+            # collides with a real primitive of the expected kind
+            # (adversarial-review hardening).
+            if not isinstance(ts, TimeSeries):
+                raise TypeError(
+                    f"{context}: base_accel= needs an ops.timeSeries.* "
+                    f"handle (or registered name), got "
+                    f"{type(ts).__name__}."
+                )
             ts_tag = self.tag_for(ts)
             if ts_tag is None:
                 raise BridgeError(
@@ -6969,6 +7070,12 @@ class apeSees:
                     "timeSeries is ignored by the fork)."
                 )
             s = self._resolve(series, base=TimeSeries)
+            if not isinstance(s, TimeSeries):
+                raise TypeError(
+                    f"{context}: series= needs an ops.timeSeries.* "
+                    f"handle (or registered name), got "
+                    f"{type(s).__name__}."
+                )
             s_tag = self.tag_for(s)
             if s_tag is None:
                 raise BridgeError(
@@ -6999,6 +7106,14 @@ class apeSees:
         moment-tensor sources for the friendlier error.
         """
         pat = self._resolve(load, base=plain_cls)
+        # Object handles bypass _resolve's kind check — refuse a
+        # wrong-kind handle before its tag collides with a real
+        # pattern tag (adversarial-review hardening).
+        if not isinstance(pat, plain_cls):
+            raise TypeError(
+                f"{context}: load= needs an ops.pattern.Plain handle "
+                f"(or registered name), got {type(pat).__name__}."
+            )
         pat_tag = self.tag_for(pat)
         if pat_tag is None:
             raise BridgeError(
@@ -7169,6 +7284,11 @@ class apeSees:
 
         context = "apeSees.random_response"
         ts = self._resolve(input_psd, base=TimeSeries)
+        if not isinstance(ts, TimeSeries):
+            raise TypeError(
+                f"{context}: input_psd= needs an ops.timeSeries.* "
+                f"handle (or registered name), got {type(ts).__name__}."
+            )
         psd_tag = self.tag_for(ts)
         if psd_tag is None:
             raise BridgeError(
