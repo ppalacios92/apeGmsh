@@ -12,6 +12,30 @@
      guarded by tests/test_changelog_structure.py.
      Workflow + rationale: internal_docs/changelog_workflow.md -->
 
+### ADDED — section-properties analyzer S6: Qt section inspector (ADR 0078)
+
+- `sec.viewer(blocking=True)` — standalone Qt + matplotlib inspector panel
+  (`sections/_inspector.py`), deliberately **not** part of the ADR 0014/0042/0056
+  viewer family (no `model.h5`, no SceneLayer/render seam, no dispatcher). Left:
+  the meshed section with glyph overlays (centroid / shear centre / principal
+  axes / PG colors), switching to stress contours when a component is picked.
+  Right: tabbed read-only property tables (Geometric / Warping / Plastic as
+  available; composite sections gain an `e_ref` input driving a transformed
+  column) + six load spinboxes (`N, Vx, Vy, Mxx, Myy, Mzz`) and a component
+  picker that **re-blend the precomputed unit stress fields live — no solve ever
+  runs on the UI thread** (every analysis runs in the launch path, before window
+  construction).
+- Contract mirrors `results.viewer`: **notebooks must pass `blocking=False`**
+  (`%gui qt` for a responsive window), Qt-absent → `ImportError` with install
+  guidance, `QT_QPA_PLATFORM=offscreen` on Windows → `RuntimeError` from the
+  launch path (ViewerWindow guard parity). Every capability stays reachable
+  headless (`summary()`, `plot_section()`, `stress(...).plot()`).
+- Stress recovery unavailable (`disconnected="sum"`) → load inputs disabled with
+  guidance; the geometry/property views still work.
+- Tests: import/offscreen guards, blend-equals-`stress()` identity through the
+  panel path, no-solve-on-UI-thread (patched-solver counter), composite `e_ref`
+  column values, plastic-tab presence, offscreen screenshot smoke — no blocking
+  event loop in any test.
 ### CHANGED — ADR 0077 parallel modal analysis flipped to Accepted; PyMP backend parked
 
 ADR 0077 moves **Proposed → Accepted** (2026-07-17): P0–P4 are implemented and live-verified (PRs #800 / #806 / #807 — Tier-0 serial gather, replicated distributed-FEAST `modal_deck`, eigenvalue + mode-shape harvest, `to_native` viewer binding). The remaining P5 cluster e2e is recorded as **deployment-gated, not a design gate** — the chain rides the unchanged deck-agnostic ADR 0060 path (`Cluster.submit(binary=…)` → `Job.fetch` → `ParallelModalResult.from_job`) and waits only on the fork `-feast` build reaching the cluster. Unlock 2a (the PyMP `.py` backend, `modal_deck(target="pymp")`) is **parked on demand** with its rationale corrected in place: PyMP is itself a fork artifact (the deployed pyd predates FEAST), so the route buys nothing wherever the classic-Tcl exes can be deployed. Docs-only.
