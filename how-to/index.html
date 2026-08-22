@@ -1019,6 +1019,8 @@
       
         
       
+        
+      
     
     
     
@@ -1076,6 +1078,34 @@
     
   
     Compute section properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="author-a-section-document/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Author a section document
   
 
     
@@ -1168,6 +1198,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1245,6 +1279,34 @@
   
   
     <li class="md-nav__item">
+      <a href="render-a-still/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render a deformed shape or contour
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="results-mpco/" class="md-nav__link">
         
   
@@ -1281,6 +1343,34 @@
     
   
     Choose a results strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="studio-habitat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drive Studio / MCP habitat
   
 
     
@@ -1876,6 +1966,8 @@
       
         
       
+        
+      
     
     
     
@@ -1961,6 +2053,34 @@
     
   
     The OpenSees bridge
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/backend-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backend capabilities
   
 
     
@@ -2779,6 +2899,8 @@
       
         
       
+        
+      
     
     
     
@@ -3176,6 +3298,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../api/results-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../api/selection/" class="md-nav__link">
         
   
@@ -3449,6 +3599,7 @@ task, not just the ones with a tidy page yet.</p>
 <h2 id="solve-the-opensees-bridge">Solve (the OpenSees bridge)<a class="headerlink" href="#solve-the-opensees-bridge" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong><a href="section-properties/">Compute section properties for a custom section</a></strong> — mesh a flat face, run <code>SectionProperties</code> (geometric / warping / plastic / stress), and bind it to the bridge with <code>ComputedSection</code>.</li>
+<li><strong><a href="author-a-section-document/">Author a section document</a></strong> — build a section as saveable, re-editable JSON (<code>SectionDocument</code>), open it in the Qt builder, run moment–curvature, and hand it to a frame model.</li>
 <li><strong><a href="../concepts/opensees-bridge/">Run a static analysis</a></strong> — drive a gravity/lateral static solve through <code>apeSees(fem)</code>.</li>
 <li><strong><a href="../examples/modal-analysis/">Run a modal (eigenvalue) analysis</a></strong> — set up mass, call <code>ops.eigen</code>, and pull periods and mode shapes.</li>
 <li><strong><a href="../concepts/opensees-bridge/">Run a pushover</a></strong> — displacement-controlled nonlinear static analysis to a target drift.</li>
@@ -3458,9 +3609,12 @@ task, not just the ones with a tidy page yet.</p>
 <h2 id="results">Results<a class="headerlink" href="#results" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong><a href="read-results/">Read a node's displacement and reactions</a></strong> — pull nodal results back by physical-group name.</li>
-<li><strong><a href="../concepts/results/">Plot a deformed shape or contour</a></strong> — render results with the notebook-safe <code>show_web</code> viewer.</li>
+<li><strong><a href="render-a-still/">Plot a deformed shape or contour</a></strong> — fill a slot, set the pose, <code>render()</code> a still off <code>results.session()</code> with no Qt.</li>
+<li><strong><a href="../api/results-session/">Arrange panes, slots and time in code</a></strong> — the <code>ResultsSession</code> document <code>results.viewer()</code> opens: panes, the seven-slot catalog, legends, snapshots.</li>
+<li><strong><a href="../concepts/results/">View results in a notebook</a></strong> — the kernel-safe <code>show_web</code> viewer.</li>
 <li><strong><a href="results-mpco/">Get results via MPCO (STKO)</a></strong> — record to <code>.mpco</code> and read with <code>Results.from_mpco(model_h5=...)</code>.</li>
 <li><strong><a href="choose-results-strategy/">Choose how to get results</a></strong> — the run × read decision: in-process vs export, and <code>from_native</code> / <code>from_recorders</code> / <code>from_mpco</code>.</li>
+<li><strong><a href="studio-habitat/">Drive Studio / MCP habitat</a></strong> — spawn MCP + Qt host, project root, file ownership, poll contract, cold start.</li>
 </ul>
 <hr />
 <p><em>Next: <a href="import-step/">Import &amp; heal a STEP file</a>.</em></p>

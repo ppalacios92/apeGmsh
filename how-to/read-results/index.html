@@ -16,7 +16,7 @@
         <link rel="prev" href="../checkpoint-resume/">
       
       
-        <link rel="next" href="../results-mpco/">
+        <link rel="next" href="../render-a-still/">
       
       
         
@@ -1019,6 +1019,8 @@
       
         
       
+        
+      
     
     
     
@@ -1076,6 +1078,34 @@
     
   
     Compute section properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../author-a-section-document/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Author a section document
   
 
     
@@ -1163,6 +1193,10 @@
   
     
     
+      
+        
+      
+        
       
         
       
@@ -1327,6 +1361,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../render-a-still/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render a deformed shape or contour
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../results-mpco/" class="md-nav__link">
         
   
@@ -1363,6 +1425,34 @@
     
   
     Choose a results strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../studio-habitat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drive Studio / MCP habitat
   
 
     
@@ -1958,6 +2048,8 @@
       
         
       
+        
+      
     
     
     
@@ -2043,6 +2135,34 @@
     
   
     The OpenSees bridge
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/backend-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backend capabilities
   
 
     
@@ -2861,6 +2981,8 @@
       
         
       
+        
+      
     
     
     
@@ -3258,6 +3380,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../api/results-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../api/selection/" class="md-nav__link">
         
   
@@ -3493,20 +3643,20 @@ and <code>.time</code>.</p>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Every Results constructor REQUIRES the read-side broker (model= /</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># model_h5=); omitting it raises TypeError (ADR 0020 INV-1). Pass fem=</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># too so pg=/label= name-resolution works against your session mesh.</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">model</span> <span class="o">=</span> <span class="n">OpenSeesModel</span><span class="o">.</span><span class="n">from_h5</span><span class="p">(</span><span class="s2">&quot;model.h5&quot;</span><span class="p">)</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">results</span> <span class="o">=</span> <span class="n">Results</span><span class="o">.</span><span class="n">from_native</span><span class="p">(</span><span class="s2">&quot;run.h5&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">fem</span><span class="o">=</span><span class="n">fem</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">model</span> <span class="o">=</span> <span class="n">OpenSeesModel</span><span class="o">.</span><span class="n">from_h5</span><span class="p">(</span><span class="s2">"model.h5"</span><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">results</span> <span class="o">=</span> <span class="n">Results</span><span class="o">.</span><span class="n">from_native</span><span class="p">(</span><span class="s2">"run.h5"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">fem</span><span class="o">=</span><span class="n">fem</span><span class="p">)</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># --- Displacement: u_y history at every node in PG &quot;Top&quot; ---</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">disp</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">&quot;Top&quot;</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="s2">&quot;displacement_y&quot;</span><span class="p">)</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">disp</span><span class="o">.</span><span class="n">values</span>        <span class="c1"># ndarray (T, N) — one column per node in &quot;Top&quot;</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># --- Displacement: u_y history at every node in PG "Top" ---</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">disp</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"Top"</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="s2">"displacement_y"</span><span class="p">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">disp</span><span class="o">.</span><span class="n">values</span>        <span class="c1"># ndarray (T, N) — one column per node in "Top"</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">disp</span><span class="o">.</span><span class="n">node_ids</span>      <span class="c1"># the matching node IDs, same column order</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">disp</span><span class="o">.</span><span class="n">time</span>          <span class="c1"># (T,) time/pseudo-time axis</span>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">u_y_final</span> <span class="o">=</span> <span class="n">disp</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>          <span class="c1"># last step, all nodes -&gt; (N,)</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="n">u_y_node0</span> <span class="o">=</span> <span class="n">disp</span><span class="o">.</span><span class="n">values</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span>        <span class="c1"># full history at the first node -&gt; (T,)</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="c1"># --- Reaction: total base reaction in y, summed over PG &quot;Base&quot; ---</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">react</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">&quot;Base&quot;</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="s2">&quot;reaction_force_y&quot;</span><span class="p">)</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="c1"># --- Reaction: total base reaction in y, summed over PG "Base" ---</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">react</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"Base"</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="s2">"reaction_force_y"</span><span class="p">)</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">Ry</span> <span class="o">=</span> <span class="n">react</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>          <span class="c1"># last-step sum over the base nodes</span>
 </span></code></pre></div>
 <p><code>nodes.get(...)</code> is keyword-only: <code>pg=</code> / <code>label=</code> / <code>selection=</code> / <code>ids=</code>
@@ -3545,8 +3695,9 @@ apeGmsh vocabulary: <code>displacement_x/y/z</code>, <code>reaction_force_x/y/z<
   — the five execution strategies that produce the file you read here,
   and how <code>reaction_force</code> is declared on each.</li>
 <li><strong>Visual:</strong> for a kernel-safe view of the same results in a notebook,
-  use <code>results.show_web()</code> (trame web viewer); avoid the default blocking
-  <code>results.viewer()</code>, which crashes the Jupyter kernel.</li>
+  use <code>results.show_web()</code> (trame web viewer). <code>results.viewer()</code>
+  defaults to <code>blocking=None</code> (auto); an explicit <code>blocking=True</code>
+  still crashes the Jupyter kernel.</li>
 <li><strong>API:</strong> <a href="../../api/results/"><code>apeGmsh.results.Results</code></a> — composite
   methods, the slab dataclasses, and <code>from_native</code> / <code>from_mpco</code> /
   <code>from_recorders</code> signatures.</li>
