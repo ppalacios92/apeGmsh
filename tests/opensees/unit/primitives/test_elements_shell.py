@@ -361,6 +361,20 @@ class TestASDShellQ4Emit:
             )
         ]
 
+    def test_emit_with_noeas(self) -> None:
+        s = _section()
+        ele = ASDShellQ4(pg="Plate", section=s, noeas=True, drilling_nl=True)
+        e = _prepare_emitter(s, sec_tag=8, nodes=(41, 42, 43, 44))
+        ele._emit(e, tag=20)
+        assert e.calls == [
+            (
+                "element",
+                ("ASDShellQ4", 20, 41, 42, 43, 44, 8,
+                 "-noeas", "-drillingNL"),
+                {},
+            )
+        ]
+
     def test_emit_with_local_cs(self) -> None:
         s = _section()
         ele = ASDShellQ4(pg="Plate", section=s, local_cs=(0, 1, 0))
