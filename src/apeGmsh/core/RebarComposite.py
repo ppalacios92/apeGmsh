@@ -1155,10 +1155,20 @@ class RebarComposite:
                 "so a chain-phase session already carries them"
             ),
         )
+        # A partitioned mesh moves each bar's cells into partition entities
+        # whose parent is the original curve; read those too.
+        children: dict[int, list[int]] = {}
+        if gmsh.model.getNumberOfPartitions() > 0:
+            for _, ent in gmsh.model.getEntities(1):
+                p_dim, p_tag = gmsh.model.getParent(1, ent)
+                if p_dim == 1:
+                    children.setdefault(int(p_tag), []).append(int(ent))
         out: list[RebarElementRecord] = []
         for m in self._emit_members:
             segments: list[tuple[int, int]] = []
-            for tag in m.line_tags:
+            curves = [int(t) for t in m.line_tags]
+            curves += [c for t in curves for c in children.get(t, [])]
+            for tag in curves:
                 etypes, _, enodes = gmsh.model.mesh.getElements(
                     dim=1, tag=int(tag))
                 for etype, nodes in zip(etypes, enodes):
@@ -1309,10 +1319,6 @@ class RebarComposite:
                     f"be a physical group (e.g. g.physical.add_volume(...)); a "
                     f"bare geometry label is not resolvable by g.reinforce."
                 )
-            warnings.warn(
-                "g.rebar.place: embedded coupling uses LadrunoEmbeddedRebar, "
-                "which is single-process today; partitioned/MPI models must "
-                "use coupling='conformal'.", stacklevel=3)
 
         # Centroid for "centroid"/"in"/"out" hook turn directions — the host
         # volume's centre of mass (hooks bend toward the section core).
