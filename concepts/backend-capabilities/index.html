@@ -2251,60 +2251,10 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Materials">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-minimum-useful-build-and-how-to-check-it" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The minimum useful build, and how to check it
-      
-    </span>
-  </a>
-  
 </li>
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#recorders" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recorders
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#install-extras" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install extras
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related
-      
-    </span>
-  </a>
   
 </li>
       
@@ -3152,8 +3102,6 @@
       
         
       
-        
-      
     
     
     
@@ -3206,34 +3154,6 @@
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../api-flows/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    API Flow Atlas
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
               
             
               
@@ -3830,60 +3750,10 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Materials">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-minimum-useful-build-and-how-to-check-it" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The minimum useful build, and how to check it
-      
-    </span>
-  </a>
-  
 </li>
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#recorders" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recorders
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#install-extras" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install extras
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related
-      
-    </span>
-  </a>
   
 </li>
       
@@ -3965,6 +3835,15 @@ is unavailable, nothing more.</p>
 variable at the folder holding <code>opensees.pyd</code> <strong>before</strong> the first emit:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">set</span><span class="w"> </span><span class="nv">APEGMSH_OPENSEES_BIN</span><span class="o">=</span>C:<span class="se">\p</span>ath<span class="se">\t</span>o<span class="se">\L</span>adruno<span class="se">\d</span>ist<span class="se">\b</span>in
 </span></code></pre></div>
+<p>When your own code talks to the model the bridge built, such as a custom
+analysis loop after <code>ops.run()</code> or a query after <code>ops.analyze()</code>, take the
+module from the same resolver rather than importing one by name:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.emitter.live</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_ops</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">opspy</span> <span class="o">=</span> <span class="n">get_ops</span><span class="p">()</span>     <span class="c1"># the module, and so the domain, the bridge drives</span>
+</span></code></pre></div>
+<p>Beside a fork build, <code>import openseespy.opensees</code> binds a second module
+with its own, empty domain, and every query answers from that one.</p>
 <div class="admonition warning">
 <p class="admonition-title">The fork is a source build</p>
 <p>The Ladruno fork lives at
@@ -3988,7 +3867,7 @@ so it is worth knowing which you are looking at.</p>
 <tr>
 <td><strong>Gated by apeGmsh</strong></td>
 <td><code>RuntimeError</code> naming the fork, what still works, and the stock alternative</td>
-<td>Elements, integrators, equation ties, contact, FEAST, profiler, the modal family</td>
+<td>Elements, integrators, the <code>LadrunoProjection</code> handler, contact, FEAST, profiler, the modal family</td>
 </tr>
 <tr>
 <td><strong>Rejected by the engine</strong></td>
@@ -3998,9 +3877,12 @@ so it is worth knowing which you are looking at.</p>
 </tbody>
 </table>
 <p>The first class exists because those commands are the ones stock OpenSees
-would otherwise <em>accept</em> — <code>equationConstraint</code> and the fork integrators
-are real symbols on a stock build, and an ungated call returns a converged
-wrong answer instead of an error. The gates convert that into a refusal.</p>
+would otherwise <em>accept</em>. The fork integrators, for example, are unknown to
+stock, yet <code>integrator ExplicitBathe</code> is accepted silently and the analysis
+steps on with the previous integrator — a converged wrong answer instead of
+an error. The gates convert that into a refusal.</p>
+<p>A few stock behaviours are refused for the same reason even though nothing
+in them is fork-only. See <a href="#stock-engine-defects">Stock engine defects</a>.</p>
 <h2 id="the-fork-only-surface">The fork-only surface<a class="headerlink" href="#the-fork-only-surface" title="Permanent link">&para;</a></h2>
 <h3 id="elements">Elements<a class="headerlink" href="#elements" title="Permanent link">&para;</a></h3>
 <!-- capability-map:elements -->
@@ -4034,16 +3916,18 @@ was armed — an older build is refused, not run as stock <code>LoadControl</cod
 are unaffected and run on any build.</p>
 <h3 id="constraints-and-coupling">Constraints and coupling<a class="headerlink" href="#constraints-and-coupling" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong><code>enforce="equation"</code> ties.</strong> <code>g.constraints.tie(...)</code> and
-  <code>Assembly.couple(...)</code> with <code>enforce="equation"</code> emit
-  <code>equationConstraint</code> (EQ_Constraint, ADR 0068). Fork-only <strong>for the live
-  run</strong>. On stock, use <code>enforce="penalty"</code> with a tuned <code>stiffness</code> — see
-  <a href="../../how-to/tie-meshes/">Tie non-matching meshes</a>.</li>
-<li><strong><code>ops.equation_constraint(...)</code></strong> — a hand-written <code>equationConstraint</code> row
-  (<code>constrained=(node, dof)</code>, <code>retained=[(node, dof, coef), ...]</code>). Same
-  rules as an equation tie: fork-only for the live run, <code>Lagrange</code> /
-  <code>LadrunoProjection</code> auto-emitted, <code>Transformation</code> refused, serial only, and
-  not archived by <code>ops.h5(...)</code>.</li>
+<li><strong><code>enforce="equation"</code> ties are <em>not</em> fork-only.</strong> <code>g.constraints.tie(...)</code>
+  and <code>Assembly.couple(...)</code> with <code>enforce="equation"</code> emit
+  <code>equationConstraint</code> (EQ_Constraint, ADR 0068), which stock has had since
+  OpenSees 3.8.0 (openseespy ≥ 3.8.0; on Linux that needs Python ≥ 3.12). On
+  stock the rows are enforced exactly, and the in-process run works for
+  <strong>one tied model per process</strong> — see
+  <a href="#stock-engine-defects">Stock engine defects</a>. The same holds for
+  <strong><code>ops.equation_constraint(...)</code></strong>, a hand-written row
+  (<code>constrained=(node, dof)</code>, <code>retained=[(node, dof, coef), ...]</code>): <code>Lagrange</code>
+  / <code>LadrunoProjection</code> auto-emitted, <code>Transformation</code> refused, serial only,
+  and not archived by <code>ops.h5(...)</code>. What <em>is</em> fork-only is the explicit
+  path: under an explicit integrator the bridge picks <code>LadrunoProjection</code>.</li>
 <li><strong>Contact.</strong> <code>g.constraints.contact(...)</code> → <code>contactSurface</code> / <code>contact</code>, and
   <code>g.constraints.contact_plane(...)</code> → <code>contactPlane</code> (rigid analytical plane).
   Both lanes work in 2D as well as 3D, and both are <strong>serial only</strong> — parallel
@@ -4074,6 +3958,16 @@ build refuses the material (<code>unknown option</code>) rather than ignoring th
 same <code>1334d1e24</code> commit changed the defaults (bilinear tension law, <code>Gc</code> read
 as a compressive fracture energy), so a deck that sets none of them means
 different things on either side of it; pin <code>tension_law</code> when that matters.</p>
+<p><code>LadrunoRCConcrete</code> / <code>LadrunoRCFiniteStrain</code>'s <code>beta_c=</code> and <code>cracked_nu=</code>
+(<code>-betaC</code> / <code>-crackedNu</code>) are <strong>not on any build of the fork's <code>ladruno</code>
+branch yet</strong>. Fork PR #873 was closed unmerged, and fork PR #877 re-lands
+them. Unlike <code>LadrunoConcrete3D</code>, this parser ignores an unknown option, so a
+build without them runs the deck with the flags discarded. The in-process run
+therefore refuses them. <code>ops.tcl(...)</code> / <code>ops.py(...)</code> emit them with a
+<code>LadrunoRCBuildWarning</code>. The floor is <code>LADRUNO_RC_C2_MIN_BUILD</code>, which stays
+<code>None</code> until #877 merges. The <code>vc</code> tension-stiffening coefficient that
+<code>tens_stiff_c=None</code> leaves to the build is <strong>500</strong> on the <code>ladruno</code> branch.</p>
+<h1 id="877-changes-it-to-200-so-pass-tens_stiff_c-explicitly-to-pin-the-curve">877 changes it to 200, so pass <code>tens_stiff_c</code> explicitly to pin the curve.<a class="headerlink" href="#877-changes-it-to-200-so-pass-tens_stiff_c-explicitly-to-pin-the-curve" title="Permanent link">&para;</a></h1>
 <p>The vanilla <code>DruckerPrager</code> runs on any build, but its tension-cutoff
 return map is only correct from fork build <code>61b3efa04</code> on (fork ADR-95).
 An older engine parses the same deck and answers differently — quadratic
@@ -4111,11 +4005,11 @@ the build stamp instead.</p>
 engine parses the identical deck. What it gets wrong is the answer, so
 there is nothing to refuse at construction. Two ways to find out where
 you stand:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees._element_capabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">probe_ladruno_branch</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.emitter.live</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_backend_build</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">get_backend_build</span><span class="p">()</span>                      <span class="c1"># the exact commit, or None off-fork</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">probe_ladruno_branch</span><span class="p">(</span><span class="n">ops_module</span><span class="p">,</span> <span class="n">e_tag</span><span class="p">)</span>  <span class="c1"># False on a pre-61b3efa04 engine</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees._element_capabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">probe_ladruno_branch</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.emitter.live</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_backend_build</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">get_backend_build</span><span class="p">()</span>                      <span class="c1"># the exact commit, or None off-fork</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">probe_ladruno_branch</span><span class="p">(</span><span class="n">ops_module</span><span class="p">,</span> <span class="n">e_tag</span><span class="p">)</span>  <span class="c1"># False on a pre-61b3efa04 engine</span>
 </span></code></pre></div>
 <p>The probe must be aimed at an element of a class that forwards
 <code>material &lt;gp&gt; &lt;token&gt;</code> to its NDMaterial — <code>LadrunoBrick</code>,
@@ -4128,7 +4022,7 @@ eight names (<code>dp_branch</code>, <code>dp_gamma_cone</code>, <code>dp_gamma_
 <code>dp_det_a_min</code>) and offers two censuses over it — <code>corner_census()</code> for
 <code>dp_branch == 3</code>, and the material-agnostic <code>tension_census()</code> for
 <code>mean_stress &gt;= 0</code>. See
-<a href="https://github.com/nmorabowen/apeGmsh/blob/main/src/apeGmsh/opensees/architecture/decisions/0108-ladruno-branch-read-back.md">ADR 0108</a>.</p>
+<a href="https://github.com/nmorabowen/apeGmsh/blob/main/architecture/decisions/0108-ladruno-branch-read-back.md">ADR 0108</a>.</p>
 <h3 id="recorders">Recorders<a class="headerlink" href="#recorders" title="Permanent link">&para;</a></h3>
 <p><code>recorder ladruno</code> (the HDF5 <code>.ladruno</code> recorder) and <code>recorder Monitor</code>
 (live SWMR telemetry). Every other recorder — including the plain text
@@ -4138,6 +4032,28 @@ build.</p>
 feature: the fork splits them into <code>material &lt;k&gt; &lt;token&gt;</code> per Gauss point.
 The bare spelling records nothing, so <code>ops.recorder.Ladruno</code> / <code>MPCO</code>
 refuse it and name the prefixed form.</p>
+<h2 id="stock-engine-defects">Stock engine defects<a class="headerlink" href="#stock-engine-defects" title="Permanent link">&para;</a></h2>
+<p>Two stock OpenSees behaviours give a converged wrong answer with no warning,
+so the in-process run refuses them on a stock build. Both are fixed on the
+fork; deck emission is unaffected.</p>
+<p><strong><code>TenNodeTetrahedron</code> is 6× too soft.</strong> Upstream's element applies the
+tetrahedral 1/6 volume factor twice, so its stiffness, mass, body force and
+reactions are all exactly 6× too small. That holds for every stock release
+through openseespy 3.8.0, and for upstream master as of 2026-09-25. The
+fork fixed it in PR #520. On stock, <code>ops.element.TenNodeTetrahedron</code> raises
+in the live run; mesh tet4 (<code>FourNodeTetrahedron</code>) or hexahedra instead. A
+fork build without the <code>ladrunoBuild</code> stamp (older than 2026-08-10) may
+predate the fix, so it runs with a <code>Tet10UnverifiedBuildWarning</code>.</p>
+<p><strong><code>wipe()</code> keeps equation-tie rows.</strong> Upstream <code>Domain::clearAll()</code> clears
+nodes, elements, SP/MP constraints and patterns, but not <code>equationConstraint</code>
+rows, and no stock command removes one. So the rows of one model survive
+<code>wipe()</code> into the next, and the next model enforces them. In one measured
+case the second model converged to twice the right stiffness; a model that
+lacks a stale row's node aborts the process. The first tied model in a
+process is exact. After it, the live emitter refuses to start another model
+in that process on a stock build. Restart the process (or the kernel), or
+run tied decks with <code>ops.tcl(run=True)</code> / <code>ops.py(run=True)</code>, which start
+a fresh one. The fork clears the rows (fork PR #312).</p>
 <h2 id="install-extras">Install extras<a class="headerlink" href="#install-extras" title="Permanent link">&para;</a></h2>
 <p>Everything above assumes the right extras are installed. <code>apeGmsh</code> itself
 pulls only <code>gmsh</code>, <code>h5py</code>, <code>numpy</code> and <code>pandas</code>.</p>
@@ -4185,7 +4101,7 @@ pulls only <code>gmsh</code>, <code>h5py</code>, <code>numpy</code> and <code>pa
 </table>
 <p><code>all</code> covers everything that installs cleanly everywhere, Studio
 included:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"apeGmsh[all]"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"apeGmsh[all]"</span>
 </span></code></pre></div>
 <p><code>scripts/make-venv.bat</code> builds a venv this way under <code>C:\venv\&lt;name&gt;</code>.</p>
 <div class="admonition note">
@@ -4200,7 +4116,7 @@ by name when you need them.</p>
 through <code>mcp</code> a small server stack (<code>uvicorn</code>, <code>starlette</code>,
 <code>pydantic</code>, <code>opentelemetry-api</code>). Narrow it when you do not need all
 of that:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"apeGmsh[viewer,opensees]"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"apeGmsh[viewer,opensees]"</span>
 </span></code></pre></div>
 <p>Before 2026-08 <code>all</code> also omitted <code>mcp</code>, installing the Studio package
 without the SDK to start it. On an older release, add <code>"mcp&gt;=1.2"</code>
