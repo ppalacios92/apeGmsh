@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/how-to/compose-modules/">
+        <link rel="canonical" href="https://nmorabowen.github.io/apeGmsh/how-to/assemble-saved-models/">
       
       
         <link rel="prev" href="../save-reload/">
@@ -27,7 +27,7 @@
     
     
       
-        <title>Compose modules - apeGmsh</title>
+        <title>Assemble saved models - apeGmsh</title>
       
     
     
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#compose-modules-into-one-model" class="md-skip">
+        <a href="#assemble-saved-models" class="md-skip">
           Skip to content
         </a>
       
@@ -117,7 +117,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Compose modules
+              Assemble saved models
             
           </span>
         </div>
@@ -784,7 +784,7 @@
   <span class="md-ellipsis">
     
   
-    Compose modules
+    Assemble saved models
   
 
     
@@ -802,7 +802,7 @@
   <span class="md-ellipsis">
     
   
-    Compose modules
+    Assemble saved models
   
 
     
@@ -836,30 +836,13 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The recipe">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#inspect-without-merging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inspect without merging
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
-  <a href="#namespacing-labelpg" class="md-nav__link">
+  <a href="#instances-and-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Namespacing — '{label}.{pg}'
+        Instances and names
       
     </span>
   </a>
@@ -867,10 +850,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes-gotchas" class="md-nav__link">
+  <a href="#ties-and-couplings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes / gotchas
+        Ties and couplings
       
     </span>
   </a>
@@ -878,10 +861,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#declarative-alternative-assembly-couple" class="md-nav__link">
+  <a href="#what-an-instance-carries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Declarative alternative — Assembly + couple
+        What an instance carries
       
     </span>
   </a>
@@ -889,10 +872,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#parts-with-independent-meshes-mixed-element-types-and-orders" class="md-nav__link">
+  <a href="#decks-and-ranks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Parts with independent meshes — mixed element types and orders
+        Decks and ranks
       
     </span>
   </a>
@@ -900,10 +883,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#the-archive" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See also
+        The archive
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-refuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What refuses
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coming-from-gcompose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coming from g.compose
       
     </span>
   </a>
@@ -3661,30 +3666,13 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The recipe">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#inspect-without-merging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inspect without merging
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
-  <a href="#namespacing-labelpg" class="md-nav__link">
+  <a href="#instances-and-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Namespacing — '{label}.{pg}'
+        Instances and names
       
     </span>
   </a>
@@ -3692,10 +3680,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes-gotchas" class="md-nav__link">
+  <a href="#ties-and-couplings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes / gotchas
+        Ties and couplings
       
     </span>
   </a>
@@ -3703,10 +3691,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#declarative-alternative-assembly-couple" class="md-nav__link">
+  <a href="#what-an-instance-carries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Declarative alternative — Assembly + couple
+        What an instance carries
       
     </span>
   </a>
@@ -3714,10 +3702,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#parts-with-independent-meshes-mixed-element-types-and-orders" class="md-nav__link">
+  <a href="#decks-and-ranks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Parts with independent meshes — mixed element types and orders
+        Decks and ranks
       
     </span>
   </a>
@@ -3725,10 +3713,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#the-archive" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See also
+        The archive
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-refuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What refuses
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coming-from-gcompose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coming from g.compose
       
     </span>
   </a>
@@ -3755,181 +3765,218 @@
   
 
 
-<h1 id="compose-modules-into-one-model">Compose modules into one model<a class="headerlink" href="#compose-modules-into-one-model" title="Permanent link">&para;</a></h1>
-<p>Stitch independently-built, <strong>saved</strong> <code>model.h5</code> parts into one larger FEM by
-tag-offsetting and namespacing each module — no re-meshing, no re-running
-geometry. Reach for this when you want to build a big assembly out of small,
-reusable parts that each live in their own session and file.</p>
+<h1 id="assemble-saved-models">Assemble saved models<a class="headerlink" href="#assemble-saved-models" title="Permanent link">&para;</a></h1>
+<p>This page shows how to build one OpenSees model out of saved <code>model.h5</code>
+files with <code>Assembly</code>: place each file as a named instance, join the
+instances with ties and couplings, declare the analysis on one bridge,
+write the deck and the archive, and give each instance its own MPI rank.
+It assumes you can already save a model with its materials and elements
+(<a href="../save-reload/">Save &amp; reload a model</a>).</p>
 <h2 id="the-recipe">The recipe<a class="headerlink" href="#the-recipe" title="Permanent link">&para;</a></h2>
-<p>Build each part once and <code>g.save(...)</code> it. Then reload one part as the <strong>host</strong>
-in <em>chain phase</em> with <code>apeGmsh.from_h5(...)</code> (this skips the gmsh build entirely),
-graft the rest in with <code>g.compose(...)</code>, bridge the interfaces with chain-phase
-constraints, and save or emit the result.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeGmsh</span>
+<p>The example saves one steel block, places it twice, and stacks the two
+copies. The upper copy is turned half a turn about the vertical axis and
+lifted onto the lower one; a tie joins the two faces that meet, and a
+reference node above the stack carries the load through a rigid cap. With
+Poisson's ratio zero the stack is two springs of <code>EA/H</code> in series, so the
+cap must settle by <code>P·2H/(E·A)</code>.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">math</span><span class="w"> </span><span class="kn">import</span> <span class="n">pi</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Host stays in "chain phase": FEM loaded straight from the neutral zone, no gmsh.</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">g</span> <span class="o">=</span> <span class="n">apeGmsh</span><span class="o">.</span><span class="n">from_h5</span><span class="p">(</span><span class="s2">"column.h5"</span><span class="p">)</span>          <span class="c1"># host PGs keep their BARE names: "top", ...</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Graft saved modules in. `label` namespaces every PG/label the module brings.</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">g</span><span class="o">.</span><span class="n">compose</span><span class="p">(</span><span class="s2">"beam.h5"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"beam"</span><span class="p">,</span> <span class="n">translate</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">))</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">g</span><span class="o">.</span><span class="n">compose</span><span class="p">(</span><span class="s2">"beam.h5"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"beam2"</span><span class="p">,</span> <span class="n">anchor</span><span class="o">=</span><span class="s2">"mount_pad"</span><span class="p">)</span>   <span class="c1"># `anchor` is translate sugar</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Bridge the interface. Host port is bare; composed-module port is "{label}.{pg}".</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">g</span><span class="o">.</span><span class="n">constraints</span><span class="o">.</span><span class="n">tied_contact</span><span class="p">(</span><span class="n">master_label</span><span class="o">=</span><span class="s2">"top"</span><span class="p">,</span> <span class="n">slave_label</span><span class="o">=</span><span class="s2">"beam.end"</span><span class="p">)</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">g</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">"frame.h5"</span><span class="p">)</span>                        <span class="c1"># durable assembly...</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1"># from apeGmsh import apeSees</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># apeSees(g._fem).tcl("frame.tcl")        # ...or emit a solver deck</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">openseespy.opensees</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">osp</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeGmsh</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.assembly</span><span class="w"> </span><span class="kn">import</span> <span class="n">Assembly</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeSees</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">E</span><span class="p">,</span> <span class="n">SIDE</span><span class="p">,</span> <span class="n">H</span> <span class="o">=</span> <span class="mf">200_000.0</span><span class="p">,</span> <span class="mf">200.0</span><span class="p">,</span> <span class="mf">400.0</span>          <span class="c1"># MPa, mm, mm</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># 1. One model, saved once: mesh, groups, material and elements.</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">"block"</span><span class="p">,</span> <span class="n">save_to</span><span class="o">=</span><span class="s2">"block_mesh.h5"</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">g</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">geometry</span><span class="o">.</span><span class="n">add_box</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">SIDE</span><span class="p">,</span> <span class="n">SIDE</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"body"</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">g</span><span class="o">.</span><span class="n">physical</span><span class="o">.</span><span class="n">add_volume</span><span class="p">(</span><span class="s2">"body"</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"Vol"</span><span class="p">)</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">faces</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">faces</span><span class="o">.</span><span class="n">in_box</span><span class="p">((</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="n">SIDE</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">SIDE</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">to_physical</span><span class="p">(</span><span class="s2">"bot"</span><span class="p">)</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">faces</span><span class="o">.</span><span class="n">in_box</span><span class="p">((</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">H</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="n">SIDE</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">SIDE</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">H</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">to_physical</span><span class="p">(</span><span class="s2">"top"</span><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">recipe</span><span class="o">.</span><span class="n">structured</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="mf">100.0</span><span class="p">,</span> <span class="n">fallback</span><span class="o">=</span><span class="s2">"strict"</span><span class="p">)</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">fem</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>   <span class="c1"># dim=None: ties need faces</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">block</span> <span class="o">=</span> <span class="n">apeSees</span><span class="p">(</span><span class="n">fem</span><span class="p">)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">block</span><span class="o">.</span><span class="n">model</span><span class="p">(</span><span class="n">ndm</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">ndf</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">steel</span> <span class="o">=</span> <span class="n">block</span><span class="o">.</span><span class="n">nDMaterial</span><span class="o">.</span><span class="n">ElasticIsotropic</span><span class="p">(</span><span class="n">E</span><span class="o">=</span><span class="n">E</span><span class="p">,</span> <span class="n">nu</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"steel"</span><span class="p">)</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">block</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">stdBrick</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"Vol"</span><span class="p">,</span> <span class="n">material</span><span class="o">=</span><span class="n">steel</span><span class="p">)</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">block</span><span class="o">.</span><span class="n">h5</span><span class="p">(</span><span class="s2">"block.h5"</span><span class="p">)</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="c1"># 2. Two instances of the file, tied, with a reference node on a rigid cap.</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">asm</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    <span class="n">Assembly</span><span class="p">(</span><span class="s2">"stack"</span><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="o">.</span><span class="n">instance</span><span class="p">(</span><span class="s2">"lower"</span><span class="p">,</span> <span class="s2">"block.h5"</span><span class="p">)</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="o">.</span><span class="n">instance</span><span class="p">(</span><span class="s2">"upper"</span><span class="p">,</span> <span class="s2">"block.h5"</span><span class="p">,</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>              <span class="n">rotate</span><span class="o">=</span><span class="p">((</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">),</span> <span class="n">pi</span><span class="p">),</span> <span class="n">translate</span><span class="o">=</span><span class="p">(</span><span class="n">SIDE</span><span class="p">,</span> <span class="n">SIDE</span><span class="p">,</span> <span class="n">H</span><span class="p">))</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="o">.</span><span class="n">tie</span><span class="p">(</span><span class="s2">"lower.top"</span><span class="p">,</span> <span class="s2">"upper.bot"</span><span class="p">,</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">"equation"</span><span class="p">,</span> <span class="n">dofs</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="o">.</span><span class="n">node</span><span class="p">(</span><span class="s2">"cap"</span><span class="p">,</span> <span class="p">(</span><span class="n">SIDE</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">SIDE</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">H</span><span class="p">))</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="o">.</span><span class="n">rigid_link</span><span class="p">(</span><span class="s2">"cap"</span><span class="p">,</span> <span class="s2">"upper.top"</span><span class="p">,</span> <span class="n">link_type</span><span class="o">=</span><span class="s2">"rod"</span><span class="p">)</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="p">)</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="c1"># 3. One bridge. Supports, loads and the analysis are declared here.</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="n">ops</span> <span class="o">=</span> <span class="n">asm</span><span class="o">.</span><span class="n">bridge</span><span class="p">(</span><span class="n">ndm</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">ndf</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="p">(</span><span class="n">cap</span><span class="p">,)</span> <span class="o">=</span> <span class="n">ops</span><span class="o">.</span><span class="n">fem</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="s2">"cap"</span><span class="p">)</span><span class="o">.</span><span class="n">ids</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="n">P</span> <span class="o">=</span> <span class="mf">10_000.0</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="n">ops</span><span class="o">.</span><span class="n">fix</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"lower.bot"</span><span class="p">,</span> <span class="n">dofs</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">pattern</span><span class="o">.</span><span class="n">Plain</span><span class="p">(</span><span class="n">series</span><span class="o">=</span><span class="n">ops</span><span class="o">.</span><span class="n">timeSeries</span><span class="o">.</span><span class="n">Linear</span><span class="p">())</span> <span class="k">as</span> <span class="n">pat</span><span class="p">:</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    <span class="n">pat</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">node</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">cap</span><span class="p">),</span> <span class="n">forces</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="o">-</span><span class="n">P</span><span class="p">))</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a><span class="n">ops</span><span class="o">.</span><span class="n">constraints</span><span class="o">.</span><span class="n">Lagrange</span><span class="p">()</span>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="n">ops</span><span class="o">.</span><span class="n">numberer</span><span class="o">.</span><span class="n">Plain</span><span class="p">()</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="n">ops</span><span class="o">.</span><span class="n">system</span><span class="o">.</span><span class="n">FullGeneral</span><span class="p">()</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="n">ops</span><span class="o">.</span><span class="n">test</span><span class="o">.</span><span class="n">NormUnbalance</span><span class="p">(</span><span class="n">tol</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">max_iter</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a><span class="n">ops</span><span class="o">.</span><span class="n">algorithm</span><span class="o">.</span><span class="n">Linear</span><span class="p">()</span>
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="n">ops</span><span class="o">.</span><span class="n">integrator</span><span class="o">.</span><span class="n">LoadControl</span><span class="p">(</span><span class="n">dlam</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="n">ops</span><span class="o">.</span><span class="n">analysis</span><span class="o">.</span><span class="n">Static</span><span class="p">()</span>
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a><span class="n">ops</span><span class="o">.</span><span class="n">tcl</span><span class="p">(</span><span class="s2">"stack.tcl"</span><span class="p">)</span>                     <span class="c1"># serial: no instance has a rank</span>
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="n">ops</span><span class="o">.</span><span class="n">tcl</span><span class="p">(</span><span class="s2">"stack_flat.tcl"</span><span class="p">,</span> <span class="n">flat</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>     <span class="c1"># the same deck</span>
+</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a><span class="n">asm</span><span class="o">.</span><span class="n">h5</span><span class="p">(</span><span class="s2">"stack.h5"</span><span class="p">)</span>                       <span class="c1"># the bridge's model.h5 + /assembly</span>
+</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a><span class="c1"># 4. The archive lists what was declared.</span>
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a><span class="n">again</span> <span class="o">=</span> <span class="n">Assembly</span><span class="o">.</span><span class="n">from_h5</span><span class="p">(</span><span class="s2">"stack.h5"</span><span class="p">)</span>
+</span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a><span class="k">assert</span> <span class="p">[</span><span class="n">i</span><span class="o">.</span><span class="n">label</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">again</span><span class="o">.</span><span class="n">instances</span><span class="p">]</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"lower"</span><span class="p">,</span> <span class="s2">"upper"</span><span class="p">]</span>
+</span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a><span class="k">assert</span> <span class="p">[</span><span class="n">n</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">again</span><span class="o">.</span><span class="n">nodes</span><span class="p">]</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"cap"</span><span class="p">]</span>
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a><span class="k">assert</span> <span class="p">[</span><span class="n">t</span><span class="o">.</span><span class="n">master</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">again</span><span class="o">.</span><span class="n">ties</span><span class="p">]</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"lower.top"</span><span class="p">,</span> <span class="s2">"cap"</span><span class="p">]</span>
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a><span class="nb">print</span><span class="p">(</span><span class="s2">"reloaded:"</span><span class="p">,</span> <span class="p">[</span><span class="n">i</span><span class="o">.</span><span class="n">label</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">again</span><span class="o">.</span><span class="n">instances</span><span class="p">],</span>
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>      <span class="p">[</span><span class="n">t</span><span class="o">.</span><span class="n">master</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">again</span><span class="o">.</span><span class="n">ties</span><span class="p">])</span>
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>
+</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a><span class="c1"># 5. Solve, and check against the closed form.</span>
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="n">ops</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="n">ops</span><span class="o">.</span><span class="n">analyze</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a><span class="n">u</span> <span class="o">=</span> <span class="n">osp</span><span class="o">.</span><span class="n">nodeDisp</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">cap</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
+</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="n">exact</span> <span class="o">=</span> <span class="o">-</span><span class="n">P</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">H</span> <span class="o">/</span> <span class="p">(</span><span class="n">E</span> <span class="o">*</span> <span class="n">SIDE</span> <span class="o">*</span> <span class="n">SIDE</span><span class="p">)</span>
+</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"cap settles </span><span class="si">{</span><span class="n">u</span><span class="si">:</span><span class="s2">.6e</span><span class="si">}</span><span class="s2"> mm, closed form </span><span class="si">{</span><span class="n">exact</span><span class="si">:</span><span class="s2">.6e</span><span class="si">}</span><span class="s2"> mm"</span><span class="p">)</span>
+</span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a><span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">u</span> <span class="o">-</span> <span class="n">exact</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mf">1e-9</span> <span class="o">*</span> <span class="nb">abs</span><span class="p">(</span><span class="n">exact</span><span class="p">)</span>
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a>
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="c1"># 6. One rank per instance, for OpenSeesMP.</span>
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="n">ranked</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a>    <span class="n">Assembly</span><span class="p">(</span><span class="s2">"stack_mp"</span><span class="p">)</span>
+</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a>    <span class="o">.</span><span class="n">instance</span><span class="p">(</span><span class="s2">"lower"</span><span class="p">,</span> <span class="s2">"block.h5"</span><span class="p">,</span> <span class="n">partition_rank</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a>    <span class="o">.</span><span class="n">instance</span><span class="p">(</span><span class="s2">"upper"</span><span class="p">,</span> <span class="s2">"block.h5"</span><span class="p">,</span> <span class="n">partition_rank</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-78"><a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a>              <span class="n">rotate</span><span class="o">=</span><span class="p">((</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">),</span> <span class="n">pi</span><span class="p">),</span> <span class="n">translate</span><span class="o">=</span><span class="p">(</span><span class="n">SIDE</span><span class="p">,</span> <span class="n">SIDE</span><span class="p">,</span> <span class="n">H</span><span class="p">))</span>
+</span><span id="__span-0-79"><a id="__codelineno-0-79" name="__codelineno-0-79" href="#__codelineno-0-79"></a>    <span class="o">.</span><span class="n">tie</span><span class="p">(</span><span class="s2">"lower.top"</span><span class="p">,</span> <span class="s2">"upper.bot"</span><span class="p">,</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">"equation"</span><span class="p">,</span> <span class="n">dofs</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+</span><span id="__span-0-80"><a id="__codelineno-0-80" name="__codelineno-0-80" href="#__codelineno-0-80"></a><span class="p">)</span>
+</span><span id="__span-0-81"><a id="__codelineno-0-81" name="__codelineno-0-81" href="#__codelineno-0-81"></a><span class="n">ranked</span><span class="o">.</span><span class="n">bridge</span><span class="p">(</span><span class="n">ndm</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">ndf</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">tcl</span><span class="p">(</span><span class="s2">"stack_mp.tcl"</span><span class="p">)</span>
+</span><span id="__span-0-82"><a id="__codelineno-0-82" name="__codelineno-0-82" href="#__codelineno-0-82"></a><span class="n">deck</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"stack_mp.tcl"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+</span><span id="__span-0-83"><a id="__codelineno-0-83" name="__codelineno-0-83" href="#__codelineno-0-83"></a><span class="nb">print</span><span class="p">(</span><span class="s2">"getPID blocks:"</span><span class="p">,</span> <span class="n">deck</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s2">"if {[getPID] =="</span><span class="p">))</span>
+</span><span id="__span-0-84"><a id="__codelineno-0-84" name="__codelineno-0-84" href="#__codelineno-0-84"></a><span class="n">serial</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"stack.tcl"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+</span><span id="__span-0-85"><a id="__codelineno-0-85" name="__codelineno-0-85" href="#__codelineno-0-85"></a><span class="k">assert</span> <span class="s2">"getPID"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">serial</span>
+</span><span id="__span-0-86"><a id="__codelineno-0-86" name="__codelineno-0-86" href="#__codelineno-0-86"></a><span class="k">assert</span> <span class="n">serial</span> <span class="o">==</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"stack_flat.tcl"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+</span><span id="__span-0-87"><a id="__codelineno-0-87" name="__codelineno-0-87" href="#__codelineno-0-87"></a><span class="nb">print</span><span class="p">(</span><span class="s2">"serial deck:"</span><span class="p">,</span> <span class="n">serial</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s2">"element stdBrick"</span><span class="p">),</span> <span class="s2">"bricks, no getPID"</span><span class="p">)</span>
 </span></code></pre></div>
-<p><code>g.compose(source, *, label, translate=(0,0,0), rotate=None, anchor=None,
-partition_rank=None, properties=None, max_compose_depth=None,
-compose_size_per_module=None)</code> returns a <code>ComposedModule</code> handle.</p>
-<h3 id="inspect-without-merging">Inspect without merging<a class="headerlink" href="#inspect-without-merging" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">compose_inspect</span><span class="p">(</span><span class="s2">"beam.h5"</span><span class="p">)</span>   <span class="c1"># metadata-only read — does NOT merge or mutate</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">info</span><span class="p">[</span><span class="s2">"pg_inventory"</span><span class="p">]</span>                  <span class="c1"># sorted PG names the module would bring in</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">info</span><span class="p">[</span><span class="s2">"neutral_schema_version"</span><span class="p">]</span>        <span class="c1"># e.g. "2.10.0"</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">g</span><span class="o">.</span><span class="n">compose_list</span><span class="p">()</span>   <span class="c1"># tuple[ComposedModule, ...] — modules composed into this session</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">g</span><span class="o">.</span><span class="n">compose_tree</span><span class="p">()</span>   <span class="c1"># tuple[ComposeTreeNode, ...] — nested-compose hierarchy</span>
+<p>Step 5 solves in-process with the exact tie, which needs a build with
+<code>equationConstraint</code>: openseespy &gt;= 3.8.0 (one tied model per process) or
+the Ladruno fork (<a href="../../concepts/backend-capabilities/">Backend capabilities</a>).
+Older openseespy refuses <code>enforce="equation"</code> at that step. Run on the
+Ladruno fork, the script prints:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>reloaded: ['lower', 'upper'] ['lower.top', 'cap']
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>cap settles -1.000000e-03 mm, closed form -1.000000e-03 mm
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>getPID blocks: 2
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>serial deck: 32 bricks, no getPID
 </span></code></pre></div>
-<h2 id="namespacing-labelpg">Namespacing — <code>'{label}.{pg}'</code><a class="headerlink" href="#namespacing-labelpg" title="Permanent link">&para;</a></h2>
-<p>The <code>from_h5</code> host keeps every PG/label <strong>bare</strong>. Every composed module's PGs and
-labels are prefixed with its <code>label</code> and a dot: a part PG <code>top</code> composed under
-<code>label="beam"</code> becomes <code>beam.top</code>. When you wire interface constraints or query the
-assembled FEM, reference the <strong>bare</strong> name for the host and the <strong>namespaced</strong>
-name for composed modules.</p>
-<h2 id="notes-gotchas">Notes / gotchas<a class="headerlink" href="#notes-gotchas" title="Permanent link">&para;</a></h2>
+<p>The settlement matches <code>P·2H/(E·A) = 1.0e-3 mm</code> to round-off, which is
+what an exact tie on matching faces and a rigid cap must give.</p>
+<h2 id="instances-and-names">Instances and names<a class="headerlink" href="#instances-and-names" title="Permanent link">&para;</a></h2>
+<p><code>instance(label, source)</code> places a file. Every name the file owns comes in
+as <code>{label}.{name}</code>, so the block's <code>top</code> group is <code>lower.top</code> in one
+instance and <code>upper.top</code> in the other, and its <code>steel</code> material becomes two
+materials, <code>lower.steel</code> and <code>upper.steel</code>. There is no host: every
+instance is namespaced the same way, and the file is read once however
+many times you place it. <code>rotate=((ax, ay, az), theta)</code> turns the instance
+about the origin by <code>theta</code> radians, and <code>translate=</code> moves it after the
+rotation. A label must be non-empty and free of <code>.</code>, <code>/</code> and whitespace,
+and may not start or end with <code>_</code>; instance labels, reference nodes and tie
+names share one namespace, so a repeated name raises <code>AssemblyError</code>.</p>
+<h2 id="ties-and-couplings">Ties and couplings<a class="headerlink" href="#ties-and-couplings" title="Permanent link">&para;</a></h2>
+<p>Every port is <code>"{instance}.{group or label}"</code>. <code>tie(master, slave)</code>
+resolves exactly as <code>g.constraints.tie</code> does on a non-matching interface;
+<code>enforce="equation"</code> is exact and needs the Lagrange handler. The other
+verbs follow the session's constraint vocabulary: <code>equal_dof</code> for
+co-located nodes, <code>rigid_link</code> and <code>rigid_diaphragm</code> for rigid bodies,
+<code>embedded</code> for nodes of one instance inside the elements of another, and
+<code>couple(target, kind="kinematic" | "distributing", reference=)</code> for RBE2
+and RBE3, which emit Ladruno-fork elements that stock OpenSees refuses.
+<code>node(name, coords)</code> declares a reference node owned by the assembly; it
+is a port of <code>equal_dof</code>, <code>rigid_link</code> and <code>rigid_diaphragm</code> and the
+<code>reference</code> of <code>couple</code>, and you read it back by label, as step 3 does.
+<code>rigid_diaphragm</code> needs 6 DOFs on its nodes in 3-D, which is why a brick
+model like this one uses a <code>rigid_link</code> rod. A tie or coupling whose ports
+exist but couple nothing raises at <code>bridge()</code>.</p>
+<h2 id="what-an-instance-carries">What an instance carries<a class="headerlink" href="#what-an-instance-carries" title="Permanent link">&para;</a></h2>
+<p>Model content travels with the instance; analysis content belongs to the
+assembly. The mesh, groups, labels, intra-instance constraints (ties,
+embeds, interfaces and contacts the source declared inside itself) and the
+rebar stream travel, and from the source's solver zone so do its
+materials, sections, transforms, beam integrations, dampings attached
+through an element's <code>damp=</code> and its element specs. The source's fixes,
+masses, load patterns, recorders, stages and analysis stay behind: declare
+them on the bridge, as step 3 does.</p>
+<h2 id="decks-and-ranks">Decks and ranks<a class="headerlink" href="#decks-and-ranks" title="Permanent link">&para;</a></h2>
+<p>An assembly whose instances carry no <code>partition_rank</code> is serial: <code>tcl()</code>
+writes one unpartitioned deck, identical to <code>tcl(flat=True)</code>. Give every
+instance <code>partition_rank=k</code>, one instance per rank and ranks running
+<code>0 .. n-1</code>, and <code>tcl()</code> writes one <code>getPID</code> block per rank. Reference
+nodes live on rank 0 and are declared on every other rank a coupling
+needs them, and each tie across instances is written on every rank that
+owns one of its nodes, with the same tags. Without your own numberer and
+system, the partitioned deck picks <code>ParallelPlain</code> and <code>Mumps</code> at run time,
+with serial fallbacks, and says so in a warning.</p>
+<h2 id="the-archive">The archive<a class="headerlink" href="#the-archive" title="Permanent link">&para;</a></h2>
+<p><code>asm.h5(path)</code> writes exactly the <code>model.h5</code> the bridge's own <code>ops.h5</code>
+writes, plus an <code>/assembly</code> zone that lists the instances and ties.
+Every reader opens it unchanged, and <code>OpenSeesModel.from_h5</code> rebuilds the
+model from it. <code>Assembly.from_h5(path)</code> reads only the listing: it never
+re-reads the instance files, and the assembly it returns cannot
+<code>bridge()</code> or <code>h5()</code> again. Declare supports, loads and the analysis
+before <code>h5()</code>, and call <code>bridge()</code> again if you declare another instance
+or tie after it, or <code>h5()</code> raises.</p>
+<h2 id="what-refuses">What refuses<a class="headerlink" href="#what-refuses" title="Permanent link">&para;</a></h2>
+<p>Each of these raises <code>AssemblyError</code>, at the declaring call or at
+<code>bridge()</code>, so no partial model comes back:</p>
 <ul>
-<li><strong><code>label</code> is strict (fails loud with <code>ComposeLabelError</code>):</strong> non-empty, no <code>.</code>,
-  no <code>/</code>, no whitespace, and may not start or end with <code>_</code>.</li>
-<li><strong><code>anchor</code> and a non-zero <code>translate</code> are mutually exclusive</strong> —
-  <code>ComposeAnchorError</code>. Use one or the other.</li>
-<li><strong>Chain phase has no gmsh.</strong> <code>g.compose / g.constraints.* / g.save</code> work;
-  <code>g.model.geometry.*</code> and <code>g.mesh.generation.*</code> raise. Build geometry in the
-  part's own session <em>before</em> saving.</li>
-<li><strong><code>tied_contact</code> needs dim=2 element groups.</strong> If the saved module has none, the
-  chain-phase router raises a hard <code>ValueError</code> telling you to re-extract the source
-  with <code>dim=None</code> before saving. (The other failure modes are loud too: a
-  misspelled label raises <code>KeyError</code>, a tie whose slave nodes all miss the
-  projection tolerance raises <code>ValueError</code>, and a verb the chain-phase router
-  cannot apply — <code>g.displacements.*</code>, distributed loads and masses, <code>contact</code>,
-  <code>g.embed</code>, <code>g.reinforce</code> — raises <code>ChainPhaseError</code>: declare those in the
-  part's own session before saving.)</li>
-<li><strong>Loads and masses follow the same contract</strong> after composing: loads
-  declared via <code>g.loads.*</code> are opt-in — import each case into a pattern with
-  <code>p.from_model("&lt;case&gt;")</code> — and masses and support fixities are re-declared on
-  the bridge. Because loads do not auto-emit, there is no double-count trap.</li>
-<li><strong>Nested compose caps at depth 3</strong> (<code>max_compose_depth=</code>); beyond it raises
-  <code>ComposeDepthExceededError</code>.</li>
+<li><code>contact</code> and <code>interface</code> across instances. They are not assembly
+  couplings; declare them inside the source model, where they travel.</li>
+<li>Element rows whose arguments vary inside one physical group. Each group
+  rehydrates as one element spec; the per-row selector is not built yet
+  (<a href="https://github.com/nmorabowen/apeGmsh/issues/1542">#1542</a>).</li>
+<li>A damping attached by region, globally or in a stage. Attach it with an
+  element's <code>damp=</code> in the source, or declare it on the bridge.</li>
+<li>A material, section, transform, integration or element type the
+  assembly does not rehydrate yet. The error lists the supported ones.</li>
+<li>A source whose own modules carry a partition rank, such as a ranked
+  assembly archive, checked at <code>instance()</code> and again at <code>bridge()</code>, and a
+  <code>partition_rank</code> on an instance whose source is itself an assembly
+  archive.</li>
 </ul>
-<h2 id="declarative-alternative-assembly-couple">Declarative alternative — <code>Assembly</code> + <code>couple</code><a class="headerlink" href="#declarative-alternative-assembly-couple" title="Permanent link">&para;</a></h2>
-<p>For spatially coupling several saved modules, a higher-level declarative builder
-ships from a <strong>sub-path</strong> (<code>apeGmsh.Assembly</code> is deliberately not exposed —
-the top-level session <em>is</em> the assembly):</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.assembly</span><span class="w"> </span><span class="kn">import</span> <span class="n">Assembly</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">g</span> <span class="o">=</span> <span class="p">(</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">Assembly</span><span class="p">(</span><span class="s2">"frame"</span><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">"col"</span><span class="p">,</span> <span class="s2">"column.h5"</span><span class="p">)</span>                              <span class="c1"># first add = HOST (bare PGs)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">"beam"</span><span class="p">,</span> <span class="s2">"beam.h5"</span><span class="p">,</span> <span class="n">translate</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">))</span>    <span class="c1"># composed under label "beam"</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="o">.</span><span class="n">couple</span><span class="p">(</span><span class="s2">"col"</span><span class="p">,</span> <span class="s2">"beam"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"equal_dof"</span><span class="p">,</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="n">ports</span><span class="o">=</span><span class="p">(</span><span class="s2">"top"</span><span class="p">,</span> <span class="s2">"end"</span><span class="p">),</span> <span class="n">dofs</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>         <span class="c1"># name BARE per-part PGs</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="o">.</span><span class="n">materialize</span><span class="p">()</span>                                        <span class="c1"># -&gt; composed apeGmsh session</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">)</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">g</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">"frame.h5"</span><span class="p">)</span>
-</span></code></pre></div>
-<p><code>couple(kind=...)</code> supports <code>equal_dof</code>, <code>tied_contact</code>, and <code>tie</code>. It's a thin
-wrapper over <code>from_h5</code> + <code>compose</code> + <code>g.constraints.*</code>, and fails loud
-(<code>AssemblyError</code>) if a couple names an unknown part or ties nothing — which is
-exactly the guard you want, because a chain-phase constraint against a
-misspelled PG name is otherwise a silent no-op.</p>
-<h2 id="parts-with-independent-meshes-mixed-element-types-and-orders">Parts with independent meshes — mixed element types and orders<a class="headerlink" href="#parts-with-independent-meshes-mixed-element-types-and-orders" title="Permanent link">&para;</a></h2>
-<p>This seam is not just a convenience — for one class of model it is the <em>only</em>
-route. <code>set_order</code> is global within a gmsh session, so a single-session
-assembly (<code>Part</code> + <code>g.parts.add</code> + one <code>generate()</code>) can never mix element
-orders: hex20 ribs next to hex8 covers is impossible in one mesh pass. When
-parts need different element types, sizes, or orders, author <strong>each part as its
-own session</strong>, mesh it there, save it, and compose the snapshots. (A <code>Part</code>
-object is the wrong unit for this — it is a geometry template and cannot mesh;
-see <a href="../../concepts/parts-and-assembly/">Parts &amp; assembly</a>.)</p>
-<p>Three rules keep this route out of trouble:</p>
+<h2 id="coming-from-gcompose">Coming from <code>g.compose</code><a class="headerlink" href="#coming-from-gcompose" title="Permanent link">&para;</a></h2>
+<p><code>g.compose</code>, <code>FEMData.compose</code>, <code>apeGmsh.compose</code> and the <code>Assembly</code>
+verbs <code>add</code>, <code>couple(part_a, part_b, kind=, ports=)</code> and <code>materialize</code>
+were the first version of this feature. They were removed without a
+deprecation period (<a href="https://github.com/nmorabowen/apeGmsh/blob/main/architecture/decisions/0117-assembly-compose-v2.md">ADR 0117
+D7</a>).
+To move a model across:</p>
 <ul>
-<li><strong>Extract each part with <code>get_fem_data(dim=None)</code>, not <code>dim=3</code>.</strong> The tie
-  resolver needs the dim-2 element groups; without them it refuses the
-  constraint and tells you to re-extract.</li>
-<li><strong><code>enforce="equation"</code> when you need it exact.</strong> It enforces every tie row
-  to round-off, and needs the Lagrange handler and an unsymmetric system. It
-  runs in-process on any build with <code>equationConstraint</code>: stock openseespy
-  ≥ 3.8.0 (one tied model per process) or the fork
-  (<a href="../../concepts/backend-capabilities/">Backend capabilities</a>). Measured on
-  a two-block series column with an exact answer, stock and fork agree to
-  nine digits. What is left against the closed form is the collocation
-  tie's own error, a few tenths of a percent on an unstructured interface;
-  <code>method="mortar"</code> (below) removes it. Keep <code>TenNodeTetrahedron</code> off stock
-  builds: it is 6× too soft there, and the live run refuses it.
-  The
-  default penalty route now sizes its stiffness from the host material
-  (<code>stiffness="auto"</code>) and converges to the same answer within the mesh's
-  own discretization error — the old fixed <code>1e18</code> default, which did not
-  converge at all in these units, is gone (a number you pass yourself is
-  still unit-sensitive; <code>1e10</code> reads ~1.3 % soft here).</li>
-<li><strong>Order-mismatched interfaces want <code>method="mortar"</code>.</strong> When the two
-  sides differ in element <em>order</em> (hex20 faces on hex8 faces), the default
-  collocation tie over-constrains the quadratic side. Add
-  <code>method="mortar"</code> to the tie (or to the <code>Assembly</code> couple) — the
-  integral-mortar weights let each side keep its own interpolation. See
-  <a href="../tie-meshes/">Tie non-matching meshes</a> for the requirements.</li>
-<li><strong>Assert your PGs survived.</strong> Use <code>Assembly</code> (its zero-record guard raises),
-  or after hand composing check the assembled <code>fem.physical</code> names before
-  trusting any tie.</li>
-</ul>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh</span><span class="w"> </span><span class="kn">import</span> <span class="n">apeGmsh</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.assembly</span><span class="w"> </span><span class="kn">import</span> <span class="n">Assembly</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># ── one full session per part: its own mesh, its own order ─────────</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">"ribs"</span><span class="p">,</span> <span class="n">save_to</span><span class="o">=</span><span class="s2">"part_ribs.h5"</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="o">...</span>                                             <span class="c1"># geometry + surface/volume PGs</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">recipe</span><span class="o">.</span><span class="n">structured</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="mf">4.0</span><span class="p">,</span> <span class="n">fallback</span><span class="o">=</span><span class="s2">"strict"</span><span class="p">)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">generation</span><span class="o">.</span><span class="n">set_order</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">bubble</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>    <span class="c1"># hex20 — THIS part only</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>           <span class="c1"># dim=None: ties need dim-2 groups</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">"cover"</span><span class="p">,</span> <span class="n">save_to</span><span class="o">=</span><span class="s2">"part_cover.h5"</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="o">...</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">recipe</span><span class="o">.</span><span class="n">structured</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="mf">20.0</span><span class="p">,</span> <span class="n">fallback</span><span class="o">=</span><span class="s2">"strict"</span><span class="p">)</span>   <span class="c1"># hex8 — order 1</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="k">with</span> <span class="n">apeGmsh</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">"plate"</span><span class="p">,</span> <span class="n">save_to</span><span class="o">=</span><span class="s2">"part_plate.h5"</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    <span class="o">...</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">recipe</span><span class="o">.</span><span class="n">unstructured</span><span class="p">(</span><span class="n">max_size</span><span class="o">=</span><span class="mf">15.0</span><span class="p">)</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">generation</span><span class="o">.</span><span class="n">set_order</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">bubble</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>    <span class="c1"># tet10</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>    <span class="n">g</span><span class="o">.</span><span class="n">mesh</span><span class="o">.</span><span class="n">queries</span><span class="o">.</span><span class="n">get_fem_data</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="c1"># ── assemble: host + composed modules + calibrated ties ────────────</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="n">g</span> <span class="o">=</span> <span class="p">(</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>    <span class="n">Assembly</span><span class="p">(</span><span class="s2">"fuse"</span><span class="p">)</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>    <span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">"cover"</span><span class="p">,</span> <span class="s2">"part_cover.h5"</span><span class="p">)</span>                  <span class="c1"># first add = HOST (bare PGs)</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>    <span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">"rb"</span><span class="p">,</span> <span class="s2">"part_ribs.h5"</span><span class="p">)</span>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>    <span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">"pl"</span><span class="p">,</span> <span class="s2">"part_plate.h5"</span><span class="p">)</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>    <span class="o">.</span><span class="n">couple</span><span class="p">(</span><span class="s2">"cover"</span><span class="p">,</span> <span class="s2">"rb"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"tie"</span><span class="p">,</span> <span class="n">ports</span><span class="o">=</span><span class="p">(</span><span class="s2">"WeldFace"</span><span class="p">,</span> <span class="s2">"WeldRoot"</span><span class="p">),</span>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>            <span class="n">dofs</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">"equation"</span><span class="p">)</span>     <span class="c1"># exact; needs Lagrange handler</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>    <span class="o">.</span><span class="n">couple</span><span class="p">(</span><span class="s2">"pl"</span><span class="p">,</span> <span class="s2">"rb"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"tie"</span><span class="p">,</span> <span class="n">ports</span><span class="o">=</span><span class="p">(</span><span class="s2">"WeldPx"</span><span class="p">,</span> <span class="s2">"WeldInnerPx"</span><span class="p">),</span>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>            <span class="n">dofs</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">enforce</span><span class="o">=</span><span class="s2">"equation"</span><span class="p">)</span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>    <span class="o">.</span><span class="n">materialize</span><span class="p">()</span>                                  <span class="c1"># AssemblyError if a tie lands empty</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a><span class="p">)</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a><span class="n">g</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">"fuse.h5"</span><span class="p">)</span>
-</span></code></pre></div>
-<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Concept:</strong> <a href="../../concepts/parts-and-assembly/">Parts &amp; assembly</a> — the
-  multi-part mental model behind compose and the <code>Assembly</code> builder.</li>
-<li><strong>Concept:</strong> <a href="../../concepts/fem-broker/">FEM broker</a> — the
-  <code>save</code> / <code>from_h5</code> neutral-zone round-trip that compose builds on.</li>
-<li><strong>Example:</strong> <a href="../../examples/multipart-assembly/">Multi-part assembly</a>
-  — the in-session <code>g.parts.add</code> precursor; the
-  <a href="https://github.com/nmorabowen/apeGmsh/tree/main/examples">GitHub examples gallery</a>
-  has the cross-session compose runs.</li>
-<li><strong>API:</strong> <code>apeGmsh.from_h5</code>, <code>g.compose</code> / <code>g.compose_inspect</code> / <code>g.compose_list</code>
-  / <code>g.compose_tree</code>, and <code>apeGmsh.assembly.Assembly</code>.</li>
+<li><strong>Save the host, then instance it.</strong> There is no live host session:
+  write the host as a file with <code>apeSees(fem).model(...)</code> and <code>.h5()</code>, and
+  <code>instance("host", "host.h5")</code>. Its groups become <code>host.&lt;name&gt;</code>, like
+  every other instance's.</li>
+<li><code>add(label, source, ...)</code> becomes <code>instance(label, source, ...)</code>; a
+  rotation <code>(x, y, z, theta)</code> becomes <code>((x, y, z), theta)</code>.</li>
+<li><code>couple(kind="tie" | "equal_dof", ports=...)</code> becomes <code>tie</code> or
+  <code>equal_dof</code> on dotted ports, <code>"{instance}.{group}"</code>.</li>
+<li><code>materialize()</code> becomes <code>bridge(ndm=, ndf=)</code>, which returns the
+  <code>apeSees</code> bridge; <code>asm.h5(path)</code> writes the archive.</li>
+<li><strong>Supports, masses and loads are restated on the bridge.</strong> A composed
+  v1 session carried the module's <code>g.constraints.bc</code>, <code>g.masses</code> and load
+  cases into its deck; the bridge emits them only when asked:
+  <code>ops.fix_from_model()</code>, <code>ops.mass_from_model()</code> and, inside a pattern,
+  <code>p.from_model(case)</code> (or <code>ops.fix</code> / <code>ops.mass</code> / <code>p.load</code> on dotted
+  groups). The build warns (<code>UnconsumedModelDefinitionWarning</code>) when the
+  model defines supports or masses the deck leaves out, so nothing is
+  dropped silently.</li>
 </ul>
 <hr />
 <p><em>Next: <a href="../gravity/">Apply gravity / self-weight</a>.</em></p>
