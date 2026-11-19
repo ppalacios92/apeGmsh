@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -31,10 +31,10 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
       
       
 
@@ -2240,6 +2240,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Analysis and solvers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fork-build-c83ee812e-2026-10-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork build c83ee812e (2026-10-22)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3739,6 +3756,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Analysis and solvers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fork-build-c83ee812e-2026-10-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork build c83ee812e (2026-10-22)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3801,7 +3835,7 @@ environment you are actually in.</p>
 <tr>
 <td><strong>1</strong></td>
 <td>stock <code>openseespy</code></td>
-<td>In-process solving: <code>ops.run()</code>, <code>ops.analyze()</code>, <code>ops.eigen()</code>, domain capture</td>
+<td>In-process solving: <code>ops.run()</code>, <code>ops.analyze()</code>, <code>ops.eigen()</code>, recording a run with <code>emit_default</code></td>
 </tr>
 <tr>
 <td><strong>2</strong></td>
@@ -3848,19 +3882,26 @@ with its own, empty domain, and every query answers from that one.</p>
 also says what it can do: the commands its engine registers and the option
 tokens each fail-closed parser accepts. <code>get_backend_info()</code> reads it, so
 <code>info.supports_option("LadrunoRCConcrete", "-implexControl")</code> answers
-<code>True</code> or <code>False</code>. An older build, a schema version other than 0, or a
-schema that disagrees with <code>ladrunoBuild()</code> reads as <em>unknown
-capabilities</em>, and the same query answers <code>None</code>. An unknown answer is
-never <code>False</code>, and it never changes whether the build counts as the fork.
-Command answers speak only for the in-process engine, not for a Tcl
-binary that a subprocess runs.</p>
+<code>True</code> or <code>False</code>. apeGmsh reads schema versions 0 and 1. Version 1 is
+version 0 plus a <code>capabilities</code> list of the behaviours the build promises,
+read on <code>info.schema.capabilities</code>; every other key keeps its version 0
+meaning. A version 0 schema (older fork builds) reads with an empty
+<code>capabilities</code> set. An older build with no <code>ladrunoSchema()</code>, a schema
+version other than 0 or 1, a schema whose keys are not exactly that
+version's, or a schema that disagrees with <code>ladrunoBuild()</code> reads as
+<em>unknown capabilities</em>, and the same query answers <code>None</code>. An unknown
+answer is never <code>False</code>, and it never changes whether the build counts as
+the fork. Command answers speak only for the in-process engine, not for a
+Tcl binary that a subprocess runs.</p>
 <div class="admonition warning">
-<p class="admonition-title">The fork is a source build</p>
+<p class="admonition-title">The fork is mostly a source build</p>
 <p>The Ladruno fork lives at
 <a href="https://github.com/nmorabowen/OpenSees">nmorabowen/OpenSees</a> and
-publishes no wheels or binary releases. Tier 2 currently means
-compiling OpenSees yourself. If you are evaluating apeGmsh, plan on
-tiers 0 and 1 and treat tier 2 as opt-in.</p>
+publishes no wheels. The build that apeGmsh's nightly <code>live-fork</code> lane
+tests, the one <code>FORK_PIN</code> names, is a Linux release tarball built for
+Python 3.11 and linked against MKL. For any other platform, such as
+Windows, tier 2 still means compiling OpenSees yourself. If you are
+evaluating apeGmsh, plan on tiers 0 and 1 and treat tier 2 as opt-in.</p>
 </div>
 <h2 id="how-a-missing-capability-fails">How a missing capability fails<a class="headerlink" href="#how-a-missing-capability-fails" title="Permanent link">&para;</a></h2>
 <p>Nothing in tier 2 fails <em>silently</em> — but the two classes read differently,
@@ -3877,7 +3918,7 @@ so it is worth knowing which you are looking at.</p>
 <tr>
 <td><strong>Gated by apeGmsh</strong></td>
 <td><code>RuntimeError</code> naming the fork, what still works, and the stock alternative</td>
-<td>Elements, integrators, the <code>LadrunoProjection</code> handler, contact, FEAST, profiler, the modal family</td>
+<td>Elements, integrators, the <code>LadrunoProjection</code> handler, contact, FEAST, profiler, the modal family, the <code>mpm</code> family (live route, every build)</td>
 </tr>
 <tr>
 <td><strong>Rejected by the engine</strong></td>
@@ -3898,15 +3939,24 @@ in them is fork-only. See <a href="#stock-engine-defects">Stock engine defects</
 <!-- capability-map:elements -->
 <p><code>BezierTet10</code>, <code>BezierTri6</code>, <code>LadrunoBrick</code>, <code>LadrunoBrick20</code>,
 <code>LadrunoCST</code>, <code>LadrunoDispBeamColumn</code>, <code>LadrunoDistributingCoupling</code>,
-<code>LadrunoEmbeddedNode</code>, <code>LadrunoEmbeddedRebar</code>, <code>LadrunoIMKBeam</code>,
-<code>LadrunoKinematicCoupling</code>, <code>LadrunoLST</code>, <code>LadrunoMembrane</code>, <code>LadrunoQuad</code>,
-<code>LadrunoRigidBody</code>, <code>LadrunoUP</code></p>
+<code>LadrunoEmbeddedNode</code>, <code>LadrunoEmbeddedRebar</code>, <code>LadrunoForceBeamColumn</code>,
+<code>LadrunoIMKBeam</code>, <code>LadrunoKinematicCoupling</code>, <code>LadrunoLST</code>,
+<code>LadrunoMembrane</code>, <code>LadrunoQuad</code>, <code>LadrunoRigidBody</code>, <code>LadrunoUP</code></p>
 <!-- /capability-map:elements -->
 
 <p>Reached through <code>ops.element.*</code>, and also indirectly:
 <code>g.reinforce</code> (embedded rebar), <code>g.embed</code> (embedded node), and
 <code>g.constraints.kinematic_coupling</code> / <code>distributing_coupling</code> (RBE2 / RBE3)
 all emit elements from this list.</p>
+<p><code>LadrunoMembrane</code>'s <code>diaphragm_nodes=</code> (<code>-diaphragmNodes</code>) and <code>f11=</code> /
+<code>f22=</code> / <code>f12=</code> (<code>-f11</code> / <code>-f22</code> / <code>-f12</code>) need fork build <code>c83ee812e</code> or
+later. From that build on, every node of the panel (outer loop, holes,
+supports and diaphragm nodes) gets in-plane stiffness. An older build
+condenses the diaphragm onto the outer loop only. The diaphragm passes the
+constant-strain patch test from fork build <code>b6d3e3d2</code> on; on <code>c83ee812e</code> its
+in-plane stiffness reads about a quarter low. So the live route and every
+emitted deck refuse these options on a build not measured to carry
+<code>b6d3e3d2</code>.</p>
 <h3 id="integrators">Integrators<a class="headerlink" href="#integrators" title="Permanent link">&para;</a></h3>
 <!-- capability-map:integrators -->
 <p><code>CentralDifferenceLadruno</code>, <code>CentralDifferenceSMS</code>, <code>ExplicitBathe</code>,
@@ -3960,6 +4010,38 @@ are unaffected and run on any build.</p>
 <li><strong><code>ops.profiler</code> / <code>analyze(profile=...)</code></strong>, and
   <code>ops.critical_time_step()</code> / <code>ops.analyze_explicit(...)</code>.</li>
 <li><strong><code>system Pardiso</code></strong> — threaded MKL sparse-direct.</li>
+</ul>
+<h4 id="fork-build-c83ee812e-2026-10-22">Fork build <code>c83ee812e</code> (2026-10-22)<a class="headerlink" href="#fork-build-c83ee812e-2026-10-22" title="Permanent link">&para;</a></h4>
+<p>These need fork build <code>c83ee812e</code> or later. <code>FORK_PIN</code>
+(<code>ladruno-v20261023</code>) carries it. An older build does not refuse what it
+cannot do: some features give a different answer, and one ends the
+process. No command marks these features, so apeGmsh checks the build by
+its <code>ladrunoBuild</code> sha, against the builds measured to carry <code>c83ee812e</code>.
+It refuses stock OpenSees and every other build, including an unmeasured
+newer one.</p>
+<ul>
+<li><strong><code>ASDShellQ4</code> / <code>ASDShellT3</code> <code>p_delta=True</code></strong> (<code>-pDelta</code>) adds the
+  initial-stress stiffness of the current membrane forces, for gravity, then
+  <code>loadConst</code>, then <code>eigen</code>. It cannot be combined with <code>corotational=True</code>.
+  Stock OpenSees and older fork builds accept the token and run without the
+  stiffness. So the in-process run refuses <code>p_delta=True</code> on them, and a
+  Tcl or Python deck that carries <code>-pDelta</code> stops at its start.</li>
+<li><strong><code>ElasticTimoshenkoBeam</code> (3-D)</strong> honours a <code>PDelta</code> or <code>Corotational</code>
+  transformation and answers <code>basicForce</code> (<code>N, Mz1, Mz2, My1, My2, T</code>).
+  Older builds ignore the transformation's geometric terms.</li>
+<li><strong><code>response_spectrum_analysis(..., scale=s)</code></strong> multiplies <code>Sa</code> by <code>s</code>.
+  apeGmsh scales the <code>-Sa</code> values itself and does not emit the fork's
+  <code>-scale</code>, which older builds parse and ignore. The result is the same on
+  every build.</li>
+<li><strong><code>eigen_feast(..., trace_stop=True)</code></strong> (<code>-traceStop</code>) selects MKL's trace
+  stopping criterion. The default stops on the relative residual and returns
+  the same eigenpairs. An older build refuses <code>-traceStop</code> as an unknown
+  option.</li>
+<li><strong><code>EigenResult.modal_properties()</code></strong> runs <code>modalProperties</code> on the band
+  that <code>eigen_feast</code> solved. On an older build, <code>modalProperties</code> after
+  <code>eigen -feast</code> ends the process, so apeGmsh refuses the call before it
+  reaches the build. <code>apeSees.modal_properties(num_modes)</code> runs its own
+  ARPACK solve and works on any build.</li>
 </ul>
 <h3 id="materials">Materials<a class="headerlink" href="#materials" title="Permanent link">&para;</a></h3>
 <p><code>LadrunoBondSlip</code>, <code>LadrunoCohesiveHinge</code>, <code>LadrunoCohesiveHingeBiaxial</code>,
@@ -4045,6 +4127,102 @@ build.</p>
 feature: the fork splits them into <code>material &lt;k&gt; &lt;token&gt;</code> per Gauss point.
 The bare spelling records nothing, so <code>ops.recorder.Ladruno</code> / <code>MPCO</code>
 refuse it and name the prefixed form.</p>
+<h3 id="mpm-the-mpm-engine">MPM (the <code>mpm</code> engine)<a class="headerlink" href="#mpm-the-mpm-engine" title="Permanent link">&para;</a></h3>
+<p>The fork's Material Point Method engine is driven by <code>ops.mpm.*</code>, one
+member per <code>mpm</code> sub-command
+(<a href="https://github.com/nmorabowen/apeGmsh/blob/main/architecture/decisions/0134-mpm-particles.md">ADR 0134</a>).
+It needs a fork release that carries <code>mpm</code> (<code>ladruno-v20261114</code>, build
+<code>f0b9a1df6</code>, or later).</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>Fork line</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ops.mpm.grid(origin=, h=, cells=, basis=)</code></td>
+<td><code>mpm grid &lt;tag&gt; -origin .. -h .. -cells .. [-basis ..]</code></td>
+<td>one per model; its tag is written above every <code>pattern</code> tag and every other member's tag, and <code>ops.tag_for(grid)</code> returns it</td>
+</tr>
+<tr>
+<td><code>ops.mpm.body(pg, material=, density=, ppc=, name=)</code></td>
+<td>none: the body is seeded into the particle set</td>
+<td>lattice seeding of the physical group's <code>tri3</code> / <code>quad4</code> / <code>tet4</code> / <code>hex8</code> elements; every body shares one <code>ppc</code></td>
+</tr>
+<tr>
+<td><code>ops.mpm.fix(face, components)</code></td>
+<td><code>mpm fix &lt;face&gt; &lt;components&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.wall(face, mu)</code></td>
+<td><code>mpm wall &lt;face&gt; &lt;mu&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.gravity(*g)</code></td>
+<td><code>mpm gravity &lt;g..&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.timeSeries(series)</code></td>
+<td><code>mpm timeSeries &lt;tsTag&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.damping(alpha)</code></td>
+<td><code>mpm damping local &lt;alpha&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.flip(alpha)</code></td>
+<td><code>mpm flip &lt;alpha&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.massCutoff(c)</code></td>
+<td><code>mpm massCutoff &lt;c&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.safety(s)</code></td>
+<td><code>mpm safety &lt;s&gt;</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ops.mpm.units(L, F, T, system=)</code></td>
+<td><code>mpm units &lt;L&gt; &lt;F&gt; &lt;T&gt; [-system ..]</code></td>
+<td>without it the particle set takes the bridge's <code>units=</code>; each symbol, and <code>system</code>, is one word</td>
+</tr>
+<tr>
+<td><code>ops.mpm.output(path, ...)</code></td>
+<td><code>mpm output &lt;path&gt; ...</code></td>
+<td>the particle results, a <code>.ladruno</code> file</td>
+</tr>
+<tr>
+<td><code>ops.mpm.analyze(steps, dt)</code></td>
+<td><code>mpm analyze &lt;n&gt; &lt;dt&gt;</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>MPM is <strong>deck-only</strong>. <code>ops.tcl(path)</code> and <code>ops.py(path)</code> seed the bodies
+and write <code>&lt;deck stem&gt;.particles.h5</code> beside the deck, and the deck reads it
+from its own folder. The two are written together or not at all, and an
+existing particle set is replaced only when an apeGmsh emit wrote it. A
+deck with no <code>mpm</code> member written over an MPM deck removes the apeGmsh set
+that deck read, once the new deck is written in its place, so a viewer never
+pairs it with a stale set. Any other file of that stem (a set a sibling deck
+such as <code>case.tcl</code> reads while <code>case.py</code> is written, or a file no apeGmsh
+emit wrote) is kept, and the emit warns (<code>StaleParticleSetWarning</code>) naming
+it. The live route (<code>ops.run()</code>, <code>ops.analyze()</code>, every in-process procedure)
+refuses a model with an <code>mpm</code> member on every build, before the domain is
+touched, and so do a partitioned or per-rank emit and a staged model
+(staged MPM is not in this version). A fork v1 run also needs every FE node fixed: fix the seeding mesh's nodes
+with <code>ops.fix</code>.</p>
 <h2 id="stock-engine-defects">Stock engine defects<a class="headerlink" href="#stock-engine-defects" title="Permanent link">&para;</a></h2>
 <p>Two stock OpenSees behaviours give a converged wrong answer with no warning,
 so the in-process run refuses them on a stock build. Both are fixed on the
@@ -4197,10 +4375,10 @@ by hand.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

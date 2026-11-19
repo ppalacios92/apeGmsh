@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -31,10 +31,10 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
       
       
 
@@ -3742,12 +3742,13 @@ data came from MPCO.</p>
   Closing the file collides with the sync client and aborts the kernel (leaving
   a stale open-for-write flag). Write to a local temp path; copy afterward if
   you must.</li>
-<li><strong>MPCO needs an STKO-built openseespy.</strong> Vanilla <code>openseespy</code> distributions
-  don't ship the MPCO recorder; <code>emit_mpco.__enter__</code> raises a <code>RuntimeError</code>
-  with a remediation pointer. If you don't have STKO's bundled Python, use
-  native domain <strong>capture</strong> (<code>ops_bridge.domain_capture(...)</code> →
-  <code>Results.from_native</code>) for the same fibers/layers/modal coverage without
-  MPCO.</li>
+<li><strong>MPCO needs a build that has it.</strong> Vanilla <code>openseespy</code> distributions
+  don't ship the MPCO recorder (STKO's bundled Python and the Ladruno fork
+  do); <code>emit_mpco.__enter__</code> raises a <code>RuntimeError</code> with a remediation
+  pointer. Without one, record with <code>spec.emit_default(...)</code>: on pip
+  openseespy it falls back to classic <code>.out</code> recorders, which cover nodes,
+  element forces, gauss points, line stations and fibres, but not layers.
+  Modes come from <code>ops.eigen(n).results()</code> on any build.</li>
 <li><strong>Loads are opt-in.</strong> <code>g.loads.*</code> cases do not auto-emit; import each into a
   pattern with <code>p.from_model("&lt;case&gt;")</code>. Because nothing auto-emits, there is no
   double-count trap.</li>
@@ -3757,10 +3758,14 @@ data came from MPCO.</p>
   keep one copy, and reactions and unbalanced forces are summed, because
   each rank stores only its own elements' share.
   Pass <code>merge_partitions=False</code> to read only the named partition.</li>
-<li><strong>MPCO vs native capture:</strong> use MPCO for STKO interoperability and parallel
-  runs; use <code>ops_bridge.domain_capture(...)</code> when you control a plain
-  openseespy build and want apeGmsh's native HDF5 (same read API, broadest
-  coverage, no STKO build).</li>
+<li><strong>MPCO vs the default route:</strong> use MPCO for STKO interoperability and
+  parallel runs; use <code>spec.emit_default(...)</code> for one in-process script
+  across builds: the fork's <code>.ladruno</code>, or pip's <code>.out</code> files, all read
+  with the same API. On a stock build with MPCO the default route converts
+  the <code>.mpco</code> to <code>.ladruno</code> when the program declares its stages with
+  <code>ops.stage(...)</code>, and refuses an unstaged program by name; it never
+  reads the <code>.mpco</code> with <code>from_mpco</code>. Run such a program as a deck emitted
+  with <code>analyze_steps</code> and read it with <code>read_deck_mpco</code>.</li>
 </ul>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
@@ -3828,10 +3833,10 @@ data came from MPCO.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

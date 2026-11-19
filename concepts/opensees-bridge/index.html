@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -31,10 +31,10 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
       
       
 
@@ -2170,6 +2170,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#frame-members-and-joint-offsets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frame members and joint offsets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stages" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3686,6 +3697,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#frame-members-and-joint-offsets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frame members and joint offsets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stages" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3855,6 +3877,45 @@ deck restates none of them, emit warns (<code>UnconsumedModelDefinitionWarning</
 rather than writing an unsupported, massless model in silence.
 Everything the session declared — imported or not — still persists into
 <code>model.h5</code> for the viewer and <code>Results</code>.</p>
+<h2 id="frame-members-and-joint-offsets">Frame members and joint offsets<a class="headerlink" href="#frame-members-and-joint-offsets" title="Permanent link">&para;</a></h2>
+<p>A beam's <code>geomTransf</code> can carry rigid joint offsets: <code>jnt_offset=((dXi, dYi,
+dZi), (dXj, dYj, dZj))</code> gives the global vector from each node to its element
+end, or an <code>InsertionPoint</code> rule gives an ETABS cardinal point, joint offsets
+and end-length rigid zones. The offsets are emitted as <code>-jntOffset</code>. A 3-D
+<code>Corotational</code> refuses them, because OpenSees zeroes them there.</p>
+<p>ETABS puts a frame object's offsets at the object's two ends, and in apeGmsh
+that frame object is the <strong>gmsh curve</strong>. The mesh alone cannot tell one curve
+meshed into several elements from a girder of several members, so <code>FEMData</code>
+records, per element, the gmsh entity it was meshed on:
+<code>fem.elements.entity</code> holds the tags per element type, and
+<code>fem.elements.source_entity(eids, dim=1)</code> returns <code>(module_label, entity)</code>,
+the key that names a curve in a composed model (the same tag in two
+<code>Assembly</code> instances is two curves). The stream is in <code>model.h5</code> from neutral
+schema 2.36.</p>
+<p>An offset that is the same transverse shift at both ends reads the same on
+every element, so it stays per element. An end-sensitive offset (an end
+length, an axial component, unequal ends) is split over each curve: the
+curve's first element takes the i-offset, its last the j-offset, and each
+interior node takes only the transverse part. A curve meshed into n elements
+behaves as one element with the same offsets. Elements that frame into the
+curve do not split it; to put a joint at mid-span, split the curve.</p>
+<p>These cases refuse. Each message names the curve, except the 3-D one, which
+names the transform only, and the last, which names the elements and the node:</p>
+<ul>
+<li>end-sensitive offsets on a curve that is not straight;</li>
+<li>a transform that covers only part of a curve and would put an end zone or
+  axial offset at a node interior to the curve (transverse-only interior nodes
+  pass);</li>
+<li>a curve whose elements run both ways, or a closed curve;</li>
+<li>end lengths along the curve with different transverse offsets at its two
+  ends (the offset axis would kink);</li>
+<li>an end element no longer than the end offsets on it (no flexible length);</li>
+<li>elements of one curve with different <code>vecxz</code>;</li>
+<li>in 3-D, a split with neither <code>vecxz=</code> nor <code>orientation=</code> on the transform;</li>
+<li>a snapshot with no source curves (a <code>model.h5</code> older than 2.36, or a FEM not
+  extracted from gmsh), wherever two of the transform's elements meet without
+  a clear corner of 30 to 150 degrees.</li>
+</ul>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>Real analyses rarely happen in one shot: gravity first, then pushover; excavate,
 then install the lining, then shake. The bridge models this directly with
@@ -3966,15 +4027,27 @@ declares classic OpenSees recorders that emit with the deck. The <code>Node</cod
 <code>Element</code> recorders take <code>precision=N</code>, the significant digits written per
 value (OpenSees writes 6 unless told otherwise); left out, no flag is emitted
 and the deck is unchanged, and anything but a positive <code>int</code> raises. For
-in-process runs, a capture spec names what to record — by physical group, of
-course — and writes results next to the model:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">spec</span> <span class="o">=</span> <span class="n">DomainCaptureSpec</span><span class="p">(</span><span class="n">opensees</span><span class="o">=</span><span class="n">ops</span><span class="p">)</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">spec</span><span class="o">.</span><span class="n">nodes</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"Tip"</span><span class="p">,</span> <span class="n">components</span><span class="o">=</span><span class="p">[</span><span class="s2">"displacement"</span><span class="p">])</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">with</span> <span class="n">ops</span><span class="o">.</span><span class="n">domain_capture</span><span class="p">(</span><span class="n">spec</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"run.h5"</span><span class="p">)</span> <span class="k">as</span> <span class="n">cap</span><span class="p">:</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">cap</span><span class="o">.</span><span class="n">begin_stage</span><span class="p">(</span><span class="s2">"tip_load"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"static"</span><span class="p">)</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">ops</span><span class="o">.</span><span class="n">analyze</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">cap</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">t</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">cap</span><span class="o">.</span><span class="n">end_stage</span><span class="p">()</span>
+in-process runs, a recorder spec names what to record, as node or element
+ids that a physical group resolves to, and <code>emit_default</code> records it on the
+route the OpenSees build supports: <code>.ladruno</code> on the Ladruno fork, <code>.mpco</code> on
+a stock build with the MPCO recorder, classic <code>.out</code> files on pip
+openseespy:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.opensees.emitter.live</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_ops</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">apeGmsh.results.spec</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedRecorderRecord</span><span class="p">,</span> <span class="n">ResolvedRecorderSpec</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">spec</span> <span class="o">=</span> <span class="n">ResolvedRecorderSpec</span><span class="p">(</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">fem_snapshot_id</span><span class="o">=</span><span class="n">fem</span><span class="o">.</span><span class="n">snapshot_id</span><span class="p">,</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">records</span><span class="o">=</span><span class="p">(</span><span class="n">ResolvedRecorderRecord</span><span class="p">(</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>        <span class="n">category</span><span class="o">=</span><span class="s2">"nodes"</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"tip"</span><span class="p">,</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>        <span class="n">components</span><span class="o">=</span><span class="p">(</span><span class="s2">"displacement_x"</span><span class="p">,</span> <span class="s2">"displacement_y"</span><span class="p">),</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        <span class="n">dt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_steps</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">node_ids</span><span class="o">=</span><span class="n">fem</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">pg</span><span class="o">=</span><span class="s2">"Tip"</span><span class="p">)</span><span class="o">.</span><span class="n">ids</span><span class="p">,</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="p">),),</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="p">)</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">ops</span><span class="o">.</span><span class="n">h5</span><span class="p">(</span><span class="s2">"model.h5"</span><span class="p">)</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">ops</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>                      <span class="c1"># build the domain without analysing</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="k">with</span> <span class="n">spec</span><span class="o">.</span><span class="n">emit_default</span><span class="p">(</span><span class="s2">"run"</span><span class="p">,</span> <span class="n">model_h5</span><span class="o">=</span><span class="s2">"model.h5"</span><span class="p">)</span> <span class="k">as</span> <span class="n">run</span><span class="p">:</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    <span class="n">get_ops</span><span class="p">()</span><span class="o">.</span><span class="n">analyze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>       <span class="c1"># step the module the bridge built</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="n">results</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">results</span><span class="p">()</span>
 </span></code></pre></div>
 <p>A live run keeps its recorder files open until something closes them. When the
 same script goes on to read those files, or to open an <code>.mpco</code> with
@@ -4056,10 +4129,10 @@ need them.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>
